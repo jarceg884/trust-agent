@@ -85,7 +85,11 @@ async function handle(
   ctx: { params: Promise<{ path: string[] }> },
 ) {
   const { path: segments } = await ctx.params;
-  const path = `/api/${segments.map(encodeURIComponent).join("/")}`;
+  // El frontend pasa paths completos ("/api/audit/events") y los smokes pasan
+  // paths relativos ("/me"). Normalizar: si el primer segmento ya es "api",
+  // no lo duplicar (bug real: /api/api/* → 404 en todas las páginas de datos).
+  const segs = segments[0] === "api" ? segments.slice(1) : segments;
+  const path = `/api/${segs.map(encodeURIComponent).join("/")}`;
   const search = new URL(request.url).search;
 
   const session = await getSessionToken();
