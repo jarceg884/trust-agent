@@ -1,0 +1,201 @@
+# Trust Agent — empaquetado local single-node (constitution VII).
+#
+# Levanta la plataforma completa para validación local:
+#   db (PostgreSQL 17) · idp (Keycloak 26.2) · migrate (Alembic, one-shot)
+#   api (control plane FastAPI :8000) · jobs-worker · spend-worker
+#   litellm-double (:39989, doble DECLARADO D-GOV-15) · console (Next.js :3100)
+#
+# NOTA de red: api / workers / migrate / console / litellm-double corren con
+# `network_mode: host` (Linux). Motivo: los tokens OIDC llevan issuer
+# `http://127.0.0.1:8080/realms/<org>` (la URL que ve el navegador) y el API
+# verifica la firma contra JWKS en ESA MISMA URL — con red bridge el
+# contenedor no podría resolver 127.0.0.1:8080 del host y habría que
+# bifurcar URLs de issuer (frágil). Host networking mantiene una sola
+# verdad: los puertos canónicos del runbook (55432/8080/8000/39989/3100).
+#
+# Uso:
+#   cp .env.example .env  (y rellena los secretos)
+#   docker compose build
+#   docker compose up -d
+#   docker compose ps                       # todos en healthy/running
+#   curl -s http://127.0.0.1:8000/healthz   # {"status":"ok","database":"up"}
+#
+# Por qué cada pieza:
+#   db            → postgres:17 pineado (runbook db/README.md), roles vía
+#                   db/scripts/bootstrap.sql (trust_app sin BYPASSRLS /
+#                   trust_migrator dueño), DB trust_agent creada por init.
+#   migrate       → one-shot: `alembic upgrade head` por la vía canónica
+#                   (db/migrations, D-CP-11). El API espera a que termine.
+#   idp           → Keycloak 26.2 start-dev; el provisioning crea el realm
+#                   por tenant vía Admin REST (D-ONB-13), no hace falta
+#                   import de realm.
+#   litellm-double→ doble HTTP DECLARADO de la Admin API (D-GOV-15,
+#                   platform/tests/litellm_fake.py). Para un proxy LiteLLM
+#                   real: levántalo aparte y cambia TRUST_LITELLM_BASE_URL /
+#                   TRUST_LITELLM_MASTER_KEY del servicio api+spend-worker.
+#   jobs-worker   → cola de jobs en PostgreSQL (invites de usuarios, spec 012).
+#   spend-worker  → ingest de spend + enforcement de corte (spec 005).
+
+name: trust-agent
+
+x-api-env: &api-env
+  # La app SIEMPRE conecta como trust_app (sin BYPASSRLS, sujeto a RLS).
+  TRUST_DATABASE_URL: postgresql+psycopg://trust_app:trust_app_dev@127.0.0.1:55432/trust_agent
+  # Conexión de claim del worker (rol trust_migrator, SOLO cola SKIP LOCKED).
+  TRUST_DATABASE_MIGRATOR_URL: postgresql+psycopg://trust_migrator:trust_migrator_dev@127.0.0.1:55432/trust_agent
+  # OIDC: issuer base aceptado == el Keycloak publicado en 127.0.0.1:8080.
+  TRUST_IDP_BASE_URLS: http://127.0.0.1:8080
+  TRUST_OIDC_AUDIENCE: trust-agent-web
+  # Redirect URIs registradas en el cliente público por tenant al aprovisionar:
+  # console (:3100) y desktop/e2e (:9090).
+  TRUST_OIDC_REDIRECT_URIS: http://127.0.0.1:3100/auth/callback,http://127.0.0.1:9090/auth/callback
+  # Secretos fail-closed (sin ellos create_app() rechaza el arranque).
+  TRUST_DEVICE_TOKEN_SECRET: ${TRUST_DEVICE_TOKEN_SECRET}
+  TRUST_VAULT_KEK_B64: ${TRUST_VAULT_KEK_B64}
+  # Plano de control de modelos: doble declarado en 39989 (D-GOV-15).
+  # Vacío ⇒ fail-closed (503 en keys/spend/enforcement).
+  TRUST_LITELLM_BASE_URL: http://127.0.0.1:39989
+  TRUST_LITELLM_MASTER_KEY: sk-master-test
+  # Operaciones del proveedor (spec 004): token bearer + Admin REST del IdP.
+  TRUST_PROVIDER_TOKEN: ${TRUST_PROVIDER_TOKEN}
+  TRUST_KEYCLOAK_ADMIN_URL: http://127.0.0.1:8080
+  TRUST_KEYCLOAK_ADMIN_USER: ${KC_ADMIN_USER:-admin}
+  TRUST_KEYCLOAK_ADMIN_PASSWORD: ${KC_ADMIN_PASSWORD}
+  # Local corre sobre http://127.0.0.1 ⇒ Secure cookies off SOLO en local.
+  TRUST_COOKIE_SECURE: "false"
+
+services:
+  db:
+    image: postgres:17
+    container_name: trust-agent-db
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-trustlocal}
+      POSTGRES_DB: trust_agent
+    ports:
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - trust_db_data:/var/lib/postgresql/data
+      # Roles canónicos (idempotente): trust_app / trust_migrator.
+      - ./db/scripts/bootstrap.sql:/docker-entrypoint-initdb.d/01-roles.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d trust_agent -q"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  idp:
+    image: quay.io/keycloak/keycloak:26.2
+    container_name: trust-agent-idp
+    command: ["start-dev", "--http-port=8080"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KC_ADMIN_USER:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_ADMIN_PASSWORD}
+      KC_HEALTH_ENABLED: "true"
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - kc_data:/opt/keycloak/data
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/8080 && printf 'GET /realms/master/.well-known/openid-configuration HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && grep -q ' 200 ' <&3"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 40s
+    restart: unless-stopped
+
+  migrate:
+    build:
+      context: .
+      dockerfile: platform/Dockerfile
+    image: trust-agent/platform:local
+    container_name: trust-agent-migrate
+    network_mode: host
+    environment:
+      DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD:-trustlocal}@127.0.0.1:55432/trust_agent
+    command: ["alembic", "-c", "alembic.ini", "upgrade", "head"]
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    image: trust-agent/platform:local
+    container_name: trust-agent-api
+    network_mode: host
+    environment: *api-env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      idp:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3).status == 200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    restart: unless-stopped
+
+  jobs-worker:
+    image: trust-agent/platform:local
+    container_name: trust-agent-jobs-worker
+    network_mode: host
+    environment: *api-env
+    command: ["python", "-m", "app.jobs.worker"]
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  spend-worker:
+    image: trust-agent/platform:local
+    container_name: trust-agent-spend-worker
+    network_mode: host
+    environment: *api-env
+    command: ["python", "-m", "app.governance.spend_worker"]
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  litellm-double:
+    image: trust-agent/platform:local
+    container_name: trust-agent-litellm-double
+    network_mode: host
+    command: ["python", "scripts/run_litellm_double.py", "--port", "39989"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 39989), timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  console:
+    build:
+      context: ./platform/console
+    image: trust-agent/console:local
+    container_name: trust-agent-console
+    network_mode: host
+    environment:
+      TRUST_API_BASE_URL: http://127.0.0.1:8000
+      TRUST_IDP_BASE_URL: http://127.0.0.1:8080
+      TRUST_OIDC_CLIENT_ID: trust-agent-web
+      TRUST_CONSOLE_REDIRECT_URI: http://127.0.0.1:3100/auth/callback
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3100/login').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 15s
+    restart: unless-stopped
+
+volumes:
+  trust_db_data:
+  kc_data:
