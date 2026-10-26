@@ -9,6 +9,7 @@ from ..db import get_engine, get_migrator_engine
 from ..errors import not_found, permission_denied
 from .healthcheck import healthcheck
 from .keycloak_admin import KeycloakAdminClient
+from .provider_service import list_tenants, set_tenant_status
 from .provision import (
     ProvisionRequest,
     find_tenant_by_slug,
@@ -69,6 +70,45 @@ def provision_tenant(
     )
     return JSONResponse(
         status_code=201 if result["created"] else 200, content=result
+    )
+
+
+@router.get("")
+def list_all_tenants(
+    principal: Principal = Depends(get_provider_principal),
+):
+    """Lista de tenants con stats (spec 014 REQ-PC-001, D-PC-04).
+
+    Filas vía migrator (cross-tenant, solo el proveedor); stats por tenant
+    leídos como trust_app dentro del scope de cada uno.
+    """
+    _require_provision_permission(principal)
+    return list_tenants(get_engine(), get_migrator_engine())
+
+
+@router.post("/{slug}/suspend")
+def suspend_tenant(
+    slug: str, principal: Principal = Depends(get_provider_principal)
+):
+    """Suspende un tenant (spec 014 REQ-PC-002, D-PC-05).
+
+    Transaccional + auditado (tenant.suspended, actor provider); idempotente.
+    El core niega cada request del tenant con 403 tenant_suspended.
+    """
+    _require_provision_permission(principal)
+    return set_tenant_status(
+        get_engine(), get_migrator_engine(), slug, "suspended"
+    )
+
+
+@router.post("/{slug}/reactivate")
+def reactivate_tenant(
+    slug: str, principal: Principal = Depends(get_provider_principal)
+):
+    """Reactiva un tenant suspendido (spec 014 REQ-PC-003, D-PC-05)."""
+    _require_provision_permission(principal)
+    return set_tenant_status(
+        get_engine(), get_migrator_engine(), slug, "active"
     )
 
 

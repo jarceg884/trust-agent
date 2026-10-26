@@ -1,0 +1,42 @@
+/* Tema dark del mockup Desktop (upload_lcw3pa1_.png):
+   fondo #0e1318, paneles #1a1f25, acento #f91128, texto #e7ecf2. */
+@import "tailwindcss";
+
+@theme inline {
+  --color-background: #0e1318;
+  --color-surface: #131920;
+  --color-panel: #1a1f25;
+  --color-panel-hover: #20262e;
+  --color-border-subtle: #232a33;
+  --color-foreground: #e7ecf2;
+  --color-muted: #8b98a8;
+  --color-accent: #f91128;
+  --color-accent-soft: rgba(249, 17, 40, 0.12);
+  --color-success: #3fb972;
+  --color-warning: #e0a52e;
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+html,
+body {
+  background: var(--color-background);
+  color: var(--color-foreground);
+}
+
+::selection {
+  background: var(--color-accent-soft);
+}
+
+/* Focus visible accesible en toda la app */
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Scrollbars discretos acordes al tema */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #2a323d transparent;
+}

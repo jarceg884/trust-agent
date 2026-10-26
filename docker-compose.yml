@@ -52,10 +52,14 @@ x-api-env: &api-env
   # Secretos fail-closed (sin ellos create_app() rechaza el arranque).
   TRUST_DEVICE_TOKEN_SECRET: ${TRUST_DEVICE_TOKEN_SECRET}
   TRUST_VAULT_KEK_B64: ${TRUST_VAULT_KEK_B64}
-  # Plano de control de modelos: doble declarado en 39989 (D-GOV-15).
+  # Plano de control de modelos. Default: doble declarado en 39989 (D-GOV-15,
+  # tests/demo). Para un proxy LiteLLM REAL basta fijar en .env
+  # TRUST_LITELLM_BASE_URL / TRUST_LITELLM_MASTER_KEY (re-validación
+  # t_c4766c4d: proxy real en :4000 con venv propio en litellm-real/ y
+  # PostgreSQL dedicado trust-agent-litellm-db :55433).
   # Vacío ⇒ fail-closed (503 en keys/spend/enforcement).
-  TRUST_LITELLM_BASE_URL: http://127.0.0.1:39989
-  TRUST_LITELLM_MASTER_KEY: sk-master-test
+  TRUST_LITELLM_BASE_URL: ${TRUST_LITELLM_BASE_URL:-http://127.0.0.1:39989}
+  TRUST_LITELLM_MASTER_KEY: ${TRUST_LITELLM_MASTER_KEY:-sk-master-test}
   # Operaciones del proveedor (spec 004): token bearer + Admin REST del IdP.
   TRUST_PROVIDER_TOKEN: ${TRUST_PROVIDER_TOKEN}
   TRUST_KEYCLOAK_ADMIN_URL: http://127.0.0.1:8080
@@ -190,6 +194,58 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3100/login').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 15s
+    restart: unless-stopped
+
+  # Provider Console (spec 014): panel del proveedor — provisioning,
+  # suspensión/reactivación y salud de tenants (:3200). Auth por provider
+  # token en cookie httpOnly (D-PC-02), BFF proxy con Authorization header.
+  provider-console:
+    build:
+      context: ./platform/provider-console
+    image: trust-agent/provider-console:local
+    container_name: trust-agent-provider-console
+    network_mode: host
+    environment:
+      TRUST_API_BASE_URL: http://127.0.0.1:8000
+      TRUST_ADMIN_CONSOLE_URL: http://127.0.0.1:3100
+      # Target del Hermes download link por tenant (D-PC-09): el desktop
+      # white-label :9090 con `?org=<slug>`; cuando el puente Hermes real
+      # (spec 022) aterrice, se apunta al bundle del app completa.
+      TRUST_DESKTOP_APP_URL: http://127.0.0.1:9090
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3200/login').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 15s
+    restart: unless-stopped
+
+  # Desktop client white-label (spec 010): login OIDC/PKCE por org +
+  # enrolamiento de dispositivo (:9090). Corre durable para que el
+  # "Hermes download link" del Provider Console tenga target real.
+  desktop-client:
+    build:
+      context: ./platform/desktop-client
+    image: trust-agent/desktop-client:local
+    container_name: trust-agent-desktop-client
+    network_mode: host
+    environment:
+      TRUST_API_BASE_URL: http://127.0.0.1:8000
+      TRUST_IDP_BASE_URL: http://127.0.0.1:8080
+      TRUST_OIDC_CLIENT_ID: trust-agent-web
+      TRUST_DESKTOP_REDIRECT_URI: http://127.0.0.1:9090/auth/callback
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:9090/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 10s
       timeout: 5s
       retries: 30

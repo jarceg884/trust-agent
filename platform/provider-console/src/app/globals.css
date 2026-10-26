@@ -1,0 +1,68 @@
+/* Tema claro enterprise del mockup Admin (upload_iaadt_lh.png):
+   fondo #f8f9fb, superficies #ffffff, acento rojo #c90104 (spec 009 D-AC-04). */
+@import "tailwindcss";
+
+@theme inline {
+  --color-background: #f8f9fb;
+  --color-surface: #ffffff;
+  --color-surface-alt: #f2f4f7;
+  --color-border-subtle: #e5e8ee;
+  --color-foreground: #111827;
+  --color-muted: #6b7280;
+  --color-faint: #9ca3af;
+  --color-accent: #c90104;
+  --color-accent-hover: #a80103;
+  --color-accent-soft: rgba(201, 1, 4, 0.08);
+  --color-accent-border: rgba(201, 1, 4, 0.25);
+  --color-success: #15803d;
+  --color-success-soft: rgba(21, 128, 61, 0.1);
+  --color-warning: #b45309;
+  --color-warning-soft: rgba(180, 83, 9, 0.1);
+  --color-danger: #b91c1c;
+  --color-danger-soft: rgba(185, 28, 28, 0.08);
+  --color-info: #1d4ed8;
+  --color-info-soft: rgba(29, 78, 216, 0.08);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+html,
+body {
+  background: var(--color-background);
+  color: var(--color-foreground);
+}
+
+::selection {
+  background: var(--color-accent-soft);
+}
+
+/* Focus visible accesible en toda la app (REQ-AC-031) */
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Scrollbars discretos */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #d4d9e0 transparent;
+}
+
+/* Skeleton shimmer para estados de carga */
+@keyframes ta-shimmer {
+  0% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+.ta-skeleton {
+  animation: ta-shimmer 1.4s ease-in-out infinite;
+  background: var(--color-surface-alt);
+  border-radius: 6px;
+}
