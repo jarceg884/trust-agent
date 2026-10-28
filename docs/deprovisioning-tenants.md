@@ -94,16 +94,28 @@ históricos (`delete-corp`, `explicit-plan-corp`) también eliminados.
 Miller confirmó que NINGUNO de los 9 candidatos era suyo — empieza
 limpio y creará su tenant desde cero. Borrados los 9 (`arce-demo`,
 `demo-org`, `globex-industries`, `spec020-demo`, `hermes-bridge`,
-`hermes-dl`, `miller-selfsignup-r1/r2/r3`) más 3 fixtures de una lane
+`hermes-bridge`, `hermes-dl`, `miller-selfsignup-r1/r2/r3`) más 3 fixtures de una lane
 ya terminada (`millrepro`, `miller-dept-repro`, `miller-dept-signup`):
 **12 tenants** vía `sweep_test_tenants.py --from-file --yes`, con
-realm de Keycloak y evento `tenant.deleted` cada uno. Total histórico:
-**107 tenants de prueba eliminados**; 0 filas huérfanas.
+realm de Keycloak y evento `tenant.deleted` cada uno. Una tercera
+pasada barrió 3 fixtures de lanes UI terminadas (`policies-ux`,
+`spec037-ui`, `console-smoke2`). Total histórico: **110 tenants de
+prueba eliminados** (más 2 fixtures `e2e-*` auto-limpiados por sus
+propios tests — 112 eventos `tenant.deleted` en `ops.provider_audit`);
+0 filas huérfanas en cada pasada.
+
+**Verificación del botón** (click-through en browser real, nada
+simulado): `platform/provider-console/e2e/delete-panel.mjs` — 13/13
+PASS (fixture vía self-signup real, login real del operador, botón
+visible, ConfirmDialog fail-closed con slug erróneo, DELETE con body
+plano `{confirm: slug}`, HTTP 200 `deleted:true` + `realm_deleted:true`,
+redirect a /tenants y tenant ausente de la lista).
 
 Los fixtures de lanes ACTIVAS no se tocan hasta que su lane termine
 (sus patrones ya están en el sweeper para la higiene continua):
-`miller-prov-*` (model-providers), `policies-ux`/`spec037-ui`/
-`console-smoke2`/`estructura-viva` (specs UI 036/037).
+`miller-prov-*` (model-providers) y `estructura-viva` (spec 038, en
+review). Cuando esas lanes cierren, una sola pasada de
+`sweep_test_tenants.py --patterns --yes` deja la consola en 0.
 
 ### Bug encontrado durante el barrido (arreglado)
 
