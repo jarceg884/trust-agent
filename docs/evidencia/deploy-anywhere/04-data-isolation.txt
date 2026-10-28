@@ -1,0 +1,23 @@
+== B) volúmenes NUEVOS del cliente (aislamiento de datos) ==
+local     ta2-evidence_kc_data
+local     ta2-evidence_trust_db_data
+local     trust-agent_kc_data
+local     trust-agent_trust_db_data
+
+-- DB del cliente (56432): tenants ANTES de provisioning --
+     0
+
+-- DB del stack dev de la VM (55432): sigue intacta y con SUS tenants --
+   101
+
+-- puertos distintos: stack dev (55432/8080/8000/3100/3200) vs cliente (56432/8181/8100/3110/3210) --
+127.0.0.1:55432
+127.0.0.1:56432
+127.0.0.1:8000
+127.0.0.1:8080
+127.0.0.1:8100
+127.0.0.1:8181
+*:3100
+*:3110
+*:3200
+*:3210

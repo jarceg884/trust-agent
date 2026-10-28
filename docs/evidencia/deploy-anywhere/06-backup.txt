@@ -1,0 +1,3 @@
+[backup] /root/customer-sim3/evidence/backup-demo.dump (764K)
+[backup] Verificación de integridad del dump:
+scripts/backup.sh: line 21: pg_restore: command not found
