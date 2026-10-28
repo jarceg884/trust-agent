@@ -1,0 +1,11 @@
+== A) compose ps (todos los servicios) ==
+NAME                     IMAGE                                COMMAND                  SERVICE              CREATED              STATUS                        PORTS
+ta2-api                  trust-agent/platform:local           "sh -c 'python -m uv…"   api                  About a minute ago   Up 49 seconds (healthy)       
+ta2-attestation-worker   trust-agent/platform:local           "python -m app.devic…"   attestation-worker   About a minute ago   Up 43 seconds                 
+ta2-console              trust-agent/console:local            "docker-entrypoint.s…"   console              About a minute ago   Up 43 seconds (healthy)       
+ta2-db                   postgres:17                          "docker-entrypoint.s…"   db                   About a minute ago   Up About a minute (healthy)   127.0.0.1:56432->5432/tcp
+ta2-idp                  quay.io/keycloak/keycloak:26.2       "/opt/keycloak/bin/k…"   idp                  About a minute ago   Up About a minute (healthy)   8443/tcp, 9000/tcp, 127.0.0.1:8181->8080/tcp
+ta2-jobs-worker          trust-agent/platform:local           "python -m app.jobs.…"   jobs-worker          About a minute ago   Up 43 seconds                 
+ta2-litellm-double       trust-agent/platform:local           "sh -c 'python scrip…"   litellm-double       About a minute ago   Up About a minute (healthy)   
+ta2-provider-console     trust-agent/provider-console:local   "docker-entrypoint.s…"   provider-console     About a minute ago   Up 43 seconds (healthy)       
+ta2-spend-worker         trust-agent/platform:local           "python -m app.gover…"   spend-worker         About a minute ago   Up 43 seconds                 

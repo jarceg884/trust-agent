@@ -1,0 +1,253 @@
+[setup] .env existente — no se sobreescribe
+[setup] POSTGRES_PASSWORD generado (aleatorio)
+[setup] TRUST_APP_PASSWORD generado (aleatorio)
+[setup] TRUST_MIGRATOR_PASSWORD generado (aleatorio)
+[setup] KC_ADMIN_PASSWORD generado (aleatorio)
+[setup] TRUST_DEVICE_TOKEN_SECRET generado (aleatorio)
+[setup] TRUST_VAULT_KEK_B64 generado (aleatorio)
+[setup] TRUST_PROVIDER_TOKEN generado (aleatorio)
+[setup] LITELLM_DB_PASSWORD generado (aleatorio)
+[setup] LITELLM_MASTER_KEY generado (aleatorio)
+[setup] TRUST_POLICY_JWS_PRIVATE_KEY_B64 generado (aleatorio)
+[setup] docker compose build (primera vez ~3-5 min)...
+time="2026-10-28T00:10:21-06:00" level=warning msg="Docker Compose is configured to build using Bake, but buildx isn't installed"
+#0 building with "default" instance using docker driver
+
+#1 [migrate internal] load build definition from Dockerfile
+#1 transferring dockerfile: 1.80kB done
+#1 DONE 0.0s
+
+#2 [migrate internal] load metadata for docker.io/library/python:3.12-slim
+#2 DONE 0.0s
+
+#3 [migrate internal] load .dockerignore
+#3 transferring context: 2B done
+#3 DONE 0.0s
+
+#4 [migrate  1/11] FROM docker.io/library/python:3.12-slim@sha256:a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704
+#4 resolve docker.io/library/python:3.12-slim@sha256:a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704 0.0s done
+#4 DONE 0.0s
+
+#5 [migrate internal] load build context
+#5 transferring context: 1.65MB 0.0s done
+#5 DONE 0.0s
+
+#6 [migrate  6/11] COPY platform/tests/litellm_fake.py ./tests/litellm_fake.py
+#6 CACHED
+
+#7 [migrate  8/11] COPY platform/hermes/plugins /opt/trust-agent/hermes-plugins
+#7 CACHED
+
+#8 [migrate  9/11] COPY db/scripts/migration_guard.py /opt/trust-agent/db/scripts/migration_guard.py
+#8 CACHED
+
+#9 [migrate 10/11] RUN pip install --no-cache-dir .
+#9 CACHED
+
+#10 [migrate  5/11] COPY platform/scripts ./scripts
+#10 CACHED
+
+#11 [migrate  7/11] COPY db/migrations /opt/trust-agent/db/migrations
+#11 CACHED
+
+#12 [migrate  2/11] WORKDIR /opt/trust-agent/platform
+#12 CACHED
+
+#13 [migrate  4/11] COPY platform/app ./app
+#13 CACHED
+
+#14 [migrate  3/11] COPY platform/pyproject.toml platform/alembic.ini ./
+#14 CACHED
+
+#15 [migrate 11/11] RUN useradd --system --no-create-home trust && chown -R trust:trust /opt/trust-agent
+#15 CACHED
+
+#16 [migrate] exporting to image
+#16 exporting layers done
+#16 exporting manifest sha256:b194d4d8632ff992753c89e36c39ff5afa61d23aec82a9350020e3e222dcb3bc done
+#16 exporting config sha256:b55699f3c8340014b41be34bbe7d65a0a6cdec4d2c8706680c22e0f72020acb1 done
+#16 exporting attestation manifest sha256:11bc8bd8b0adda561c7fc5d4182a52ea6447b0a0ed25f998c0d6d8477be8a3ab 0.0s done
+#16 exporting manifest list sha256:ac06a276cf38fb9fa40200eb3ba7114dedc9cec6e79203a872425e306edc29ec 0.0s done
+#16 naming to docker.io/trust-agent/platform:local done
+#16 unpacking to docker.io/trust-agent/platform:local 0.0s done
+#16 DONE 0.1s
+
+#17 [migrate] resolving provenance for metadata file
+#17 DONE 0.0s
+
+#18 [provider-console internal] load build definition from Dockerfile
+#18 transferring dockerfile: 917B done
+#18 DONE 0.0s
+
+#19 [console internal] load build definition from Dockerfile
+#19 transferring dockerfile: 820B done
+#19 DONE 0.0s
+
+#20 [console internal] load metadata for docker.io/library/node:22-slim
+#20 DONE 0.0s
+
+#21 [console internal] load .dockerignore
+#21 transferring context: 85B done
+#21 DONE 0.0s
+
+#22 [console internal] load build context
+#22 DONE 0.0s
+
+#23 [provider-console internal] load .dockerignore
+#23 transferring context: 2B done
+#23 DONE 0.0s
+
+#24 [console 1/6] FROM docker.io/library/node:22-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d
+#24 resolve docker.io/library/node:22-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d
+#24 resolve docker.io/library/node:22-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d 0.0s done
+#24 DONE 0.0s
+
+#25 [provider-console internal] load build context
+#25 transferring context: 375.99kB 0.0s done
+#25 DONE 0.0s
+
+#22 [console internal] load build context
+#22 transferring context: 835.04kB 0.0s done
+#22 DONE 0.0s
+
+#26 [provider-console 3/6] COPY package.json package-lock.json ./
+#26 CACHED
+
+#27 [provider-console 5/6] COPY . .
+#27 CACHED
+
+#28 [provider-console 4/6] RUN npm ci --include=dev
+#28 CACHED
+
+#29 [provider-console 6/6] RUN npm run build
+#29 CACHED
+
+#30 [console 4/6] RUN npm ci --include=dev
+#30 CACHED
+
+#31 [console 5/6] COPY . .
+#31 CACHED
+
+#32 [console 2/6] WORKDIR /app
+#32 CACHED
+
+#33 [console 3/6] COPY package.json package-lock.json ./
+#33 CACHED
+
+#34 [console 6/6] RUN npm run build
+#34 CACHED
+
+#35 [console] exporting to image
+#35 exporting layers done
+#35 exporting manifest sha256:27630ea45a04ee4a02385c683b87198ed063ce0263d6dad10f01284c5fb3e994 done
+#35 exporting config sha256:28bce4774fb501cc219170189f0f2d4b2233f5afa77c1ce7e5fcb6a1aedda201 done
+#35 exporting attestation manifest sha256:6e21eaaa0be57aedb7ae79117ac95614199c0f9ebdebb8ac78870476f44cc310 0.0s done
+#35 exporting manifest list sha256:81721dbcc3fb26a581023b9ae7ad0b7188f9c55e0078192593175634514a1dc3 0.0s done
+#35 naming to docker.io/trust-agent/console:local done
+#35 unpacking to docker.io/trust-agent/console:local 0.0s done
+#35 DONE 0.1s
+
+#36 [provider-console] exporting to image
+#36 exporting layers done
+#36 exporting manifest sha256:6d8f2abc6328e7f29247e8ac91e758455bac997a550d01008cbced82219fcf17 done
+#36 exporting config sha256:3c23f7f62694c752dfcf949396ebe24c237903031c1e27ef6ac6b1419a08efac done
+#36 exporting attestation manifest sha256:c8e97c0bb37a7708f74166df16f20e2f809cd34e17f1e222326747f478f96702 0.0s done
+#36 exporting manifest list sha256:89dbaa852c6766b36b88516fa8020ac744539379b6c79c8ad889603c19478e41 0.0s done
+#36 naming to docker.io/trust-agent/provider-console:local done
+#36 unpacking to docker.io/trust-agent/provider-console:local 0.0s done
+#36 DONE 0.1s
+
+#37 [provider-console] resolving provenance for metadata file
+#37 DONE 0.0s
+
+#38 [console] resolving provenance for metadata file
+#38 DONE 0.0s
+ console  Built
+ migrate  Built
+ provider-console  Built
+[setup] docker compose up -d ...
+ Network ta2-evidence_default  Creating
+ Network ta2-evidence_default  Created
+ Volume ta2-evidence_trust_db_data  Creating
+ Volume ta2-evidence_trust_db_data  Created
+ Volume ta2-evidence_kc_data  Creating
+ Volume ta2-evidence_kc_data  Created
+ Container ta2-db  Creating
+ Container ta2-idp  Creating
+ Container ta2-idp  Created
+ Container ta2-db  Created
+ Container ta2-migrate  Creating
+ Container ta2-migrate  Created
+ Container ta2-api  Creating
+ Container ta2-litellm-double  Creating
+ Container ta2-litellm-double  Created
+ Container ta2-api  Created
+ Container ta2-provider-console  Creating
+ Container ta2-jobs-worker  Creating
+ Container ta2-spend-worker  Creating
+ Container ta2-console  Creating
+ Container ta2-attestation-worker  Creating
+ Container ta2-console  Created
+ Container ta2-provider-console  Created
+ Container ta2-attestation-worker  Created
+ Container ta2-spend-worker  Created
+ Container ta2-jobs-worker  Created
+ Container ta2-db  Starting
+ Container ta2-idp  Starting
+ Container ta2-db  Started
+ Container ta2-db  Waiting
+ Container ta2-idp  Started
+ Container ta2-db  Healthy
+ Container ta2-migrate  Starting
+ Container ta2-migrate  Started
+ Container ta2-migrate  Waiting
+ Container ta2-idp  Waiting
+ Container ta2-migrate  Waiting
+ Container ta2-migrate  Exited
+ Container ta2-litellm-double  Starting
+ Container ta2-migrate  Exited
+ Container ta2-litellm-double  Started
+ Container ta2-idp  Healthy
+ Container ta2-api  Starting
+ Container ta2-api  Started
+ Container ta2-api  Waiting
+ Container ta2-api  Waiting
+ Container ta2-api  Waiting
+ Container ta2-api  Waiting
+ Container ta2-api  Waiting
+ Container ta2-api  Healthy
+ Container ta2-provider-console  Starting
+ Container ta2-api  Healthy
+ Container ta2-attestation-worker  Starting
+ Container ta2-api  Healthy
+ Container ta2-console  Starting
+ Container ta2-api  Healthy
+ Container ta2-spend-worker  Starting
+ Container ta2-api  Healthy
+ Container ta2-jobs-worker  Starting
+ Container ta2-spend-worker  Started
+ Container ta2-jobs-worker  Started
+ Container ta2-console  Started
+ Container ta2-attestation-worker  Started
+ Container ta2-provider-console  Started
+[setup] esperando salud del control plane (hasta 5 min, el IdP tarda la primera vez)...
+[setup] http://127.0.0.1:3110/login responde
+[setup] http://127.0.0.1:3210/login responde
+
+==============================================
+PROVIDER OPERATOR ONE-TIME PASSWORD (shown ONLY once, at bootstrap): username=provider-admin password=[REDACTED-POST-GATE: capturada en vivo por setup.sh] — sign in and change it immediately (first login forces the change).
+  → Cámbiala en el primer login del Provider Console.
+  → (Si vas a correr el smoke ahora, se usa automáticamente.)
+==============================================
+[setup] corriendo smoke de verificación...
+== Smoke Trust Agent ==
+PASS  healthz del API (status=ok, database=up)
+PASS  IdP: discovery OIDC del realm master (200)
+PASS  Admin Console: /login responde (200)
+PASS  Provider Console: /login responde (200)
+PASS  LiteLLM double: rechaza sin master key (401)
+PASS  Login del super-user del proveedor (200 ok=true)
+== Resultado: 6 PASS / 0 FAIL ==
+
+[setup] Listo. Provider Console: http://127.0.0.1:3210/login
+[setup]                Admin Console: http://127.0.0.1:3110/login

@@ -1,0 +1,7 @@
+POST /api/admin/tenants → HTTP 201
+created: True | slug: None | org_code: None | one_time_password: [REDACTED-POST-GATE]
+-- realm del tenant creado EN EL KEYCLOAK DEL CLIENTE (8181) --
+discovery realm deploy-anywhere: 200
+-- DB del cliente: tenants DESPUÉS --
+ deploy-anywhere | active
+
