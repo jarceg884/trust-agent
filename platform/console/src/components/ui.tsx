@@ -77,12 +77,15 @@ export function Button({
 export function Card({
   children,
   className = "",
+  style,
 }: {
   children: ReactNode;
   className?: string;
+  style?: React.CSSProperties;
 }) {
   return (
     <section
+      style={style}
       className={`rounded-xl border border-border-subtle bg-surface shadow-[0_1px_2px_rgba(16,24,40,0.04)] ${className}`}
     >
       {children}
@@ -383,10 +386,22 @@ export function Dialog({
   const ref = useRef<HTMLDivElement>(null);
   const titleId = useId();
 
+  // Fix t_90e899e0 (repro Miller: "escribo una letra y me saca del box"):
+  // TODAS las páginas pasan onClose como arrow inline → nueva identidad en
+  // cada render. Con onClose en las deps del efecto, cada keystroke dentro
+  // del diálogo re-ejecutaba el efecto y su setTimeout(...focus()) robaba
+  // el foco del input para dárselo al panel. El callback vive en un ref
+  // (siempre fresco al leerse en el evento) y el efecto depende SOLO de
+  // `open`: focus inicial + scroll-lock ocurren una única vez al abrir.
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  });
+
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") onCloseRef.current();
     };
     document.addEventListener("keydown", onKey);
     // Focus inicial dentro del diálogo.
@@ -398,7 +413,7 @@ export function Dialog({
       clearTimeout(t);
       document.body.style.overflow = prevOverflow;
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
   return (
@@ -468,6 +483,12 @@ export function ConfirmDialog({
 }) {
   // Atajo de teclado (estándar pro): Enter confirma salvo cuando el foco está
   // en un botón (el Enter nativo de ese botón manda — p. ej. Cancel).
+  // t_90e899e0: onConfirm también llega como arrow inline — mismo patrón de
+  // ref que Dialog para no re-suscribir el listener en cada render.
+  const onConfirmRef = useRef(onConfirm);
+  useEffect(() => {
+    onConfirmRef.current = onConfirm;
+  });
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -475,11 +496,11 @@ export function ConfirmDialog({
       const el = document.activeElement;
       if (el instanceof HTMLButtonElement) return;
       e.preventDefault();
-      onConfirm();
+      onConfirmRef.current();
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [open, loading, onConfirm]);
+  }, [open, loading]);
   return (
     <Dialog
       open={open}
@@ -660,6 +681,70 @@ export function PageHeader({
       </div>
       {actions ? <div className="flex items-center gap-2">{actions}</div> : null}
     </header>
+  );
+}
+
+// --- Tabs (spec 037: navegación de primera intención en /agents) -------------------------------
+
+export function Tabs({
+  tabs,
+  active,
+  onChange,
+}: {
+  tabs: { id: string; label: string; count?: number }[];
+  active: string;
+  onChange: (id: string) => void;
+}) {
+  const onKey = (e: React.KeyboardEvent) => {
+    const idx = tabs.findIndex((t) => t.id === active);
+    if (e.key === "ArrowRight") {
+      e.preventDefault();
+      onChange(tabs[(idx + 1) % tabs.length].id);
+    } else if (e.key === "ArrowLeft") {
+      e.preventDefault();
+      onChange(tabs[(idx - 1 + tabs.length) % tabs.length].id);
+    }
+  };
+  return (
+    <div
+      role="tablist"
+      aria-label="Section tabs"
+      onKeyDown={onKey}
+      className="mb-5 flex gap-1 rounded-lg border border-border-subtle bg-surface-alt p-1"
+    >
+      {tabs.map((t) => {
+        const selected = t.id === active;
+        return (
+          <button
+            key={t.id}
+            role="tab"
+            id={`tab-${t.id}`}
+            aria-selected={selected}
+            aria-controls={`panel-${t.id}`}
+            tabIndex={selected ? 0 : -1}
+            onClick={() => onChange(t.id)}
+            className={`flex items-center gap-2 rounded-md px-3.5 py-1.5 text-sm font-medium transition-all duration-150 ease-out active:scale-[0.98] ${
+              selected
+                ? "bg-surface text-foreground shadow-sm"
+                : "text-muted hover:text-foreground"
+            }`}
+          >
+            {t.label}
+            {typeof t.count === "number" ? (
+              <span
+                className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${
+                  selected
+                    ? "bg-accent/15 text-accent"
+                    : "bg-surface text-faint"
+                }`}
+              >
+                {t.count}
+              </span>
+            ) : null}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
