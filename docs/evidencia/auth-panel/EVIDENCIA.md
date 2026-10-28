@@ -96,32 +96,37 @@ auth.logout
 - **db** (`db/tests`): **207 passed** (paridad schema.sql ↔ migración 0030
   verificada por pg_dump; RLS coverage actualizado con `ops.auth_dances`
   como plano proveedor sin RLS).
-- **platform** (`platform/tests`): 662+ passed, `test_auth_panel.py` 16/16.
-  Los errores transitorios de `test_vault_connectors` solo aparecen en la
-  corrida completa y pasan aislados (14/14) — se investigó si eran míos:
-  la suite sin `test_auth_panel.py` reproduce los mismos errores (ver
-  §7), es un order-effect pre-existente del entorno compartido, no un
-  regressión del panel.
-- **e2e browser**: §3 (arriba) — el journey completo del mandato.
+- **platform** (`platform/tests`): 663+ passed, `test_auth_panel.py` 16/16
+  contra el Keycloak real.
+- **e2e** (`platform/tests/e2e`): **29 passed**.
+- **Guards ROPC amendados por ADR-019** (3 copias del mismo guard):
+  `test_e2e_keycloak.py::test_no_password_grant_in_app_code`,
+  `test_provision.py::test_no_password_grant_outside_admin_bootstrap` y
+  `test_security_checklist.py::test_password_grant_only_documented_bootstrap`
+  + `test_c5_no_html_scraping_or_qr_decoding` — el direct grant del panel
+  y el scraping del config-totp quedan sancionados SOLO en
+  `app/auth/panel.py`; el decodificado de QR sigue prohibido en todas
+  partes (el panel muestra el PNG del IdP, jamás lo decodifica).
 
-## 6. Guard AC-CP-026 (amendado por ADR-019)
+## 6. Provider Console
 
-`test_no_password_grant_in_app_code` sigue prohibiendo `grant_type=password`
-en TODO el app code con UNA superficie sancionada: `app/auth/panel.py`
-(la decisión de producto del direct grant). Cualquier otro módulo que lo
-intente rompe la suite.
+Ya era 100% panel (spec 025: login usuario+password+TOTP contra el control
+plane, change-password propio) — cumple la decisión de producto sin
+cambios. El desktop (spec 010) mantiene su baile PKCE (fuera de alcance,
+documentado en la enmienda).
 
 ## 7. Notas honestas
 
-- `test_vault_connectors` (14 errores psycopg) y 1 fallo esporádico en la
-  corrida completa del platform suite: **pre-existentes/order-dependent**
-  — reproducen con `--deselect platform/tests/test_auth_panel.py`; en
-  aislamiento pasan 14/14. No tocados por esta card (mismo patrón que el
-  hallazgo test_provision de t_8f716f9f).
+- `test_vault_connectors` (14 errores psycopg) en la corrida completa del
+  platform suite: **pre-existente y order-dependent** — reproducen
+  IDÉNTICOS con `--deselect platform/tests/test_auth_panel.py` (verificado
+  dos veces) y pasan 14/14 en aislamiento. Mismo patrón que el hallazgo
+  test_provision de t_8f716f9f. No tocado por esta card.
 - El título de la pestaña mostró "🐴" en la PRIMERA navegación del
   navegador del tool: verificado que el HTML servido (SSR) y el DOM tras
   reload están limpios; artefacto del harness del navegador, no del
   producto. El console no tiene favicon propio (404, gap cosmético
   pre-existente, fuera de alcance).
-- Desktop (spec 010): mantiene su baile PKCE — documentado fuera de
-  alcance en la enmienda v1.3.0.
+- El commit b5ee0ac (lane del tema, t_e68687ee) barrió un estado
+  intermedio de `apply_auth_ux_realms.py`/`keycloak_admin.py` (árbol WIP
+  compartido); el commit de esta card (c636a1f) consolida el estado final.

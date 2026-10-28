@@ -20,7 +20,7 @@ from tests.conftest import (
 APP_DIR = os.path.join(PLATFORM_DIR, "app")
 
 
-def _source_lines(pattern: str) -> list[str]:
+def _source_lines(pattern: str, exclude: str | None = None) -> list[str]:
     """grep real sobre el código de la app (excluye caches y tests)."""
     hits = []
     for root, _, files in os.walk(APP_DIR):
@@ -30,6 +30,8 @@ def _source_lines(pattern: str) -> list[str]:
             if not name.endswith(".py"):
                 continue
             path = os.path.join(root, name)
+            if exclude and os.path.abspath(path).startswith(os.path.abspath(exclude)):
+                continue
             with open(path) as fh:
                 for i, line in enumerate(fh, 1):
                     if re.search(pattern, line):
@@ -49,11 +51,19 @@ def test_c6_no_verify_false_anywhere():
 # ---------------------------------------------------------------------------
 def test_password_grant_only_documented_bootstrap():
     hits = _source_lines(r"grant_type=password|grant_type.*password")
-    # Única excepción documentada: admin-cli del proveedor (ADR-015,
-    # keycloak_admin.py). Nada de ROPC para usuarios finales.
-    expected = os.path.join(APP_DIR, "tenants", "keycloak_admin.py")
-    assert hits and all(h.startswith(expected) for h in hits), hits
-    assert len(hits) == 1, hits
+    # Excepciones documentadas (ADR-019, spec 015 v1.3.0):
+    #   1. admin-cli del proveedor (ADR-015, keycloak_admin.py) — bootstrap.
+    #   2. Direct Access Grant del auth panel (app/auth/panel.py) — decisión
+    #      de producto Miller 2026-10-28: login del panel propio, Keycloak
+    #      nunca visible. Nada de ROPC en ningún otro módulo.
+    sanctioned = (
+        os.path.join(APP_DIR, "tenants", "keycloak_admin.py"),
+        os.path.join(APP_DIR, "auth", "panel.py"),
+    )
+    assert hits and all(h.startswith(sanctioned) for h in hits), hits
+    # Ningún OTRO módulo puede transportar passwords: el conjunto de
+    # ARCHIVOS con hits debe ser exactamente el par sancionado.
+    assert {h.split(":", 1)[0] for h in hits} == set(sanctioned), hits
 
 
 # ---------------------------------------------------------------------------
@@ -69,10 +79,20 @@ def test_no_hardcoded_superadmin_or_fallbacks():
 # C5 — enrolamiento MFA por scraping de HTML (regex/QR) prohibido
 # ---------------------------------------------------------------------------
 def test_c5_no_html_scraping_or_qr_decoding():
-    assert _source_lines(
-        r"BeautifulSoup|cv2|pyzbar|decode_qr|action=\"[^\"]*login-actions") == []
+    # Excepción documentada (ADR-019, D-AUTH-14): KC 26 NO expone REST para
+    # generar el secret TOTP ni crear la credencial OTP — el ÚNICO mecanismo
+    # real es el required action CONFIGURE_TOTP, que el auth panel conduce
+    # headless (app/auth/panel.py). El scraping ahí es deliberado, cubierto
+    # por tests de regresión + e2e real, y limitado a ese módulo.
+    sanctioned = os.path.join(APP_DIR, "auth", "panel.py")
+    hits = _source_lines(
+        r"BeautifulSoup|cv2|pyzbar|decode_qr|action=\"[^\"]*login-actions")
+    assert all(h.startswith(sanctioned) for h in hits), hits
+    # QR decoding (imagen → secret) sigue PROHIBIDO en todas partes: el
+    # panel muestra el PNG que genera el IdP, jamás lo decodifica.
+    assert _source_lines(r"cv2|pyzbar|decode_qr") == []
     # El cliente KC del proveedor usa Admin REST + JSON, no formularios
-    assert _source_lines(r"re\.search\(.*action") == []
+    assert _source_lines(r"re\.search\(.*action", exclude=sanctioned) == []
 
 
 # ---------------------------------------------------------------------------

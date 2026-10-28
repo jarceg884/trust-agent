@@ -500,10 +500,13 @@ def test_new_tenant_isolated_from_tenant_a(client, admin_conn, idp):
 # ---------------------------------------------------------------------------
 
 def test_no_password_grant_outside_admin_bootstrap():
-    """AC-ONB-041: grant_type=password only in the documented Admin REST
-    bootstrap (D-ONB-13); verify=False nowhere."""
+    """AC-ONB-041 (amended by ADR-019, spec 015 v1.3.0): grant_type=password
+    only in (1) the documented Admin REST bootstrap (D-ONB-13) and (2) the
+    auth panel's Direct Access Grant (product decision Miller 2026-10-28 —
+    Keycloak never visible); verify=False nowhere."""
     hits = []
     app_dir = os.path.join(PLATFORM_DIR, "app")
+    sanctioned = os.path.join(app_dir, "auth", "panel.py")
     for root, _, files in os.walk(app_dir):
         for name in files:
             if not name.endswith(".py"):
@@ -514,7 +517,8 @@ def test_no_password_grant_outside_admin_bootstrap():
                     if "verify=False" in line:
                         hits.append(f"{path}:{i} verify=False")
                     if "grant_type=password" in line and \
-                            "admin-cli" not in line and "bootstrap" not in line:
+                            "admin-cli" not in line and "bootstrap" not in line \
+                            and os.path.abspath(path) != os.path.abspath(sanctioned):
                         hits.append(f"{path}:{i} password grant")
     assert hits == []
 
