@@ -134,6 +134,25 @@ fi
 # migrate debe haber terminado bien (compose ya lo garantiza con
 # service_completed_successfully; el healthcheck del api es la prueba real).
 
+# Espera también las consoles (arrancan DESPUÉS del API; hallazgo de la
+# evidencia fresh-clone: sin esta espera el smoke corría demasiado pronto
+# y fallaba en falso contra consoles aún arrancando).
+CONSOLE_PORT="$(env_get TRUST_CONSOLE_PORT)"; CONSOLE_PORT="${CONSOLE_PORT:-3100}"
+PCONSOLE_PORT="$(env_get TRUST_PROVIDER_CONSOLE_PORT)"; PCONSOLE_PORT="${PCONSOLE_PORT:-3200}"
+for url in "http://127.0.0.1:$CONSOLE_PORT/login" "http://127.0.0.1:$PCONSOLE_PORT/login"; do
+  ok=0
+  for _ in $(seq 1 36); do
+    if curl -sf -o /dev/null "$url"; then ok=1; break; fi
+    sleep 5
+  done
+  if [ "$ok" != 1 ]; then
+    echo "[setup] ERROR: $url no respondió en 3 min." >&2
+    echo "[setup] Diagnóstico: docker compose logs --tail 50 console provider-console" >&2
+    exit 1
+  fi
+  echo "[setup] $url responde"
+done
+
 # --- 6) contraseña one-time del super-user del proveedor -----------------------
 OTA="$(docker logs "$PREFIX-api" 2>&1 | grep -m1 'PROVIDER OPERATOR ONE-TIME PASSWORD' || true)"
 echo
