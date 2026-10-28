@@ -72,6 +72,9 @@ TEST_PATTERNS = [
     r"^miller-dept-",        # repros de fábrica del flujo departments
     r"^millrepro$",          # repro de fábrica (modelos)
     r"^policies-ux",         # panel UX de políticas
+    r"^miller-prov-",        # fixtures model-providers 2026-10-28 (admin@*.test)
+    r"^spec037",             # fixtures spec 037 UI 2026-10-28 (admin@*.test)
+    r"^estructura-viva$",    # fixture structure-onboarding 2026-10-28 (.test)
 ]
 _COMPILED = [re.compile(p) for p in TEST_PATTERNS]
 

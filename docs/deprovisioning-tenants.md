@@ -89,6 +89,22 @@ Evidencia de la limpieza: 0 filas huérfanas en todas las tablas con
 eventos `tenant.deleted` en `ops.provider_audit`, 2 realms huérfanos
 históricos (`delete-corp`, `explicit-plan-corp`) también eliminados.
 
+### Segunda pasada (2026-10-28, decisión de Miller)
+
+Miller confirmó que NINGUNO de los 9 candidatos era suyo — empieza
+limpio y creará su tenant desde cero. Borrados los 9 (`arce-demo`,
+`demo-org`, `globex-industries`, `spec020-demo`, `hermes-bridge`,
+`hermes-dl`, `miller-selfsignup-r1/r2/r3`) más 3 fixtures de una lane
+ya terminada (`millrepro`, `miller-dept-repro`, `miller-dept-signup`):
+**12 tenants** vía `sweep_test_tenants.py --from-file --yes`, con
+realm de Keycloak y evento `tenant.deleted` cada uno. Total histórico:
+**107 tenants de prueba eliminados**; 0 filas huérfanas.
+
+Los fixtures de lanes ACTIVAS no se tocan hasta que su lane termine
+(sus patrones ya están en el sweeper para la higiene continua):
+`miller-prov-*` (model-providers), `policies-ux`/`spec037-ui`/
+`console-smoke2`/`estructura-viva` (specs UI 036/037).
+
 ### Bug encontrado durante el barrido (arreglado)
 
 `trust_migrator` no tenía `DELETE` sobre 6 tablas creadas después del
