@@ -18,4 +18,7 @@ docker exec "$PREFIX-db" pg_dump -U postgres -d trust_agent -Fc > "$OUT"
 SIZE="$(du -h "$OUT" | cut -f1)"
 echo "[backup] $OUT ($SIZE)"
 echo "[backup] Verificación de integridad del dump:"
-pg_restore --list "$OUT" >/dev/null && echo "[backup] OK: catálogo legible (restore seguro con scripts/restore.sh)"
+# pg_restore corre DENTRO del contenedor postgres (hallazgo de la evidencia
+# fresh-clone: el host del cliente no necesita client-tools de PostgreSQL).
+docker exec -i "$PREFIX-db" pg_restore --list < "$OUT" >/dev/null \
+  && echo "[backup] OK: catálogo legible (restore seguro con scripts/restore.sh)"
