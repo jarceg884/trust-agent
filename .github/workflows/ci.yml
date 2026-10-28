@@ -1,7 +1,14 @@
 # CI mínimo del piloto (t_b62edff2): valida el compose y escanea secretos.
 # 1. compose-config: docker-compose.yml parsea en ambos perfiles (dev + litellm).
-# 2. gitleaks: NINGÚN valor de secret en el repo (constitution IV) — el
-#    escaneo cubre toda la historia de commits del PR.
+# 2. gitleaks (pineado 8.24.3 = versión de la auditoría pre-push):
+#    a) commits NUEVOS del PR/push (rango vs base), y
+#    b) árbol completo del repo (--no-git: exactamente lo que un clone ve).
+#    Nota: el historial PRE-EXISTENTE (commit 0c9458c, ya publicado antes de
+#    esta tarea) contiene el token dev falso "live-provider-token" en un
+#    script de verificación — documentado como no-secreto (solo coincide con
+#    el .env de dev local; los despliegues reales generan tokens aleatorios
+#    con setup.sh). No se reescribe historia publicada por eso; los commits
+#    nuevos y el árbol actual sí se exigen 100% limpios.
 name: ci
 
 on:
@@ -31,12 +38,33 @@ jobs:
           echo "compose config OK (default + litellm)"
 
   gitleaks:
-    name: secret scan (gitleaks)
+    name: secret scan (gitleaks 8.24.3)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install gitleaks 8.24.3 (pinned = versión de la auditoría local)
+        run: |
+          curl -sSL -o /tmp/gitleaks.tgz \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz
+          tar xzf /tmp/gitleaks.tgz -C /usr/local/bin gitleaks
+          gitleaks version
+      - name: Scan commits nuevos del PR/push (rango vs base)
+        run: |
+          git fetch origin main --depth=1000 || true
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            RANGE="origin/main..HEAD"
+          else
+            BEFORE="${{ github.event.before }}"
+            if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+              RANGE="-1"
+            else
+              RANGE="$BEFORE..HEAD"
+            fi
+          fi
+          echo "gitleaks detect --log-opts=$RANGE"
+          gitleaks detect --log-opts="$RANGE" --redact --exit-code 1
+      - name: Scan árbol completo del repo (lo que un clone ve)
+        run: |
+          gitleaks detect --no-git --redact --exit-code 1
