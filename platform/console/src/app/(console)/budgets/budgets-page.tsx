@@ -3,8 +3,16 @@
 /**
  * Budgets (spec 009 REQ-AC-014): jerarquía org→depto→usuario con estados de
  * corte y edición por nivel (PUT /api/budgets/org, /api/budgets/dept/{id} y
- * /api/budgets/user/{id} — t_6b40c758, QA F3/feedback Miller #5). Los 422
- * de suma (Σ dept ≤ org, Σ usuarios ≤ depto) y el de force-below-spend se
+ * /api/budgets/user/{id} — t_6b40c758, QA F3/feedback Miller #5).
+ *
+ * t_aa139606 (repro Miller): el budget de la ORG vive ahora en una card
+ * destacada de primera intención ("Organization budget") con botón Edit
+ * visible — antes estaba enterrado como la primera fila de la jerarquía y
+ * el admin no encontraba cómo auto-incrementarlo. El control plane NO
+ * exige aprobación del provider para subir el budget org (solo
+ * budget.org.manage, que org_admin tiene por schema.sql); la única
+ * validación extra es force-below-spend al BAJAR. Los 422 de suma
+ * (Σ dept ≤ org, Σ usuarios ≤ depto) y el de force-below-spend se
  * muestran accionables. Al final, historial de periodos cerrados
  * (GET /api/budgets/history, spec 013 D-013-03).
  */
@@ -49,8 +57,11 @@ export function BudgetsPage() {
   const me = useApi<WhoAmI>("/api/me");
   const { push } = useToast();
 
-  // El control plane exige budget.user.manage para PUT /api/budgets/user/{id};
-  // la fila de edición solo se ofrece a quien lo tiene (D-17-01 data-driven).
+  // El control plane exige budget.org.manage para PUT /api/budgets/org y
+  // budget.user.manage para PUT /api/budgets/user/{id}; los botones de
+  // edición solo se ofrecen a quien los tiene (D-17-01 data-driven).
+  const canEditOrgBudget =
+    me.data?.permissions.includes("budget.org.manage") ?? false;
   const canEditUserBudgets =
     me.data?.permissions.includes("budget.user.manage") ?? false;
 
@@ -104,14 +115,95 @@ export function BudgetsPage() {
   }
 
   const org = overview.data?.organization;
+  const orgPct = usagePct(org?.spent_cents ?? 0, org?.budget_cents);
 
   return (
     <div className="space-y-6">
-      {/* Jerarquía */}
+      {/* Organization budget — card destacada de primera intención
+          (t_aa139606, repro Miller): el límite de la ORG es editable por el
+          propio org_admin aquí, sin salir de la página ni pedirle al
+          provider. Subirlo es siempre válido (Σ dept ≤ org se relaja al
+          subir el techo); solo bajarlo por debajo del gasto pide force. */}
+      <Card className="border-accent-border bg-accent-soft/40">
+        <CardHeader
+          title="Organization budget"
+          description="The monthly spend limit for the entire organization. As an org admin you can raise it yourself — no provider approval required."
+          actions={
+            overview.loading ? null : canEditOrgBudget ? (
+              <Button
+                variant="primary"
+                size="sm"
+                title="PUT /api/budgets/org — requires budget.org.manage"
+                onClick={() =>
+                  openEdit({
+                    kind: "org",
+                    name: "Organization",
+                    currentCents: org?.budget_cents ?? null,
+                  })
+                }
+              >
+                Edit budget
+              </Button>
+            ) : (
+              <p className="text-xs text-muted">Requires budget.org.manage</p>
+            )
+          }
+        />
+        {overview.loading ? (
+          <CardBody className="space-y-4">
+            <Skeleton className="h-16 w-full" />
+            <Skeleton className="h-2 w-full" />
+          </CardBody>
+        ) : overview.error ? (
+          <CardBody>
+            <ErrorState error={overview.error} onRetry={overview.refetch} context="GET /api/budgets/overview" />
+          </CardBody>
+        ) : (
+          <CardBody className="space-y-4">
+            <div className="flex flex-wrap items-end justify-between gap-3">
+              <div>
+                <p className="text-[11px] font-medium uppercase tracking-wide text-muted">
+                  Monthly limit
+                </p>
+                <p className="mt-0.5 text-3xl font-semibold tracking-tight text-foreground">
+                  {usd(org?.budget_cents)}
+                </p>
+              </div>
+              <div className="flex items-center gap-6 pb-1">
+                <div>
+                  <p className="text-[11px] font-medium uppercase tracking-wide text-muted">Used</p>
+                  <p className="mt-0.5 text-lg font-semibold text-foreground">
+                    {usd(org?.spent_cents)}
+                    <span className="ml-1 text-xs font-normal text-muted">
+                      ({orgPct}%)
+                    </span>
+                  </p>
+                </div>
+                {org?.cutoff ? <Badge tone="danger">Cutoff</Badge> : null}
+              </div>
+            </div>
+            <Progress
+              pct={orgPct}
+              tone={org?.cutoff ? "danger" : orgPct >= 80 ? "warning" : "accent"}
+            />
+            <p className="text-xs text-muted">
+              {usd(overview.data?.dept_budgets_total_cents ?? 0)} allocated to
+              departments
+              {overview.data?.unassigned_cents != null
+                ? ` · ${usd(overview.data.unassigned_cents)} unallocated`
+                : ""}
+              . Department budgets must sum within this limit — raise it here
+              to make room for more.
+            </p>
+          </CardBody>
+        )}
+      </Card>
+
+      {/* Jerarquía por debajo de la org */}
       <Card>
         <CardHeader
           title="Budget hierarchy"
-          description="Organization → departments → users. A cutoff blocks all model usage at that level."
+          description={`Organization → departments → users. A cutoff blocks all model usage at that level.`}
         />
         {overview.loading ? (
           <CardBody className="space-y-4">
@@ -119,37 +211,12 @@ export function BudgetsPage() {
             <Skeleton className="h-20 w-full" />
           </CardBody>
         ) : overview.error ? (
-          <ErrorState error={overview.error} onRetry={overview.refetch} context="GET /api/budgets/overview" />
+          <CardBody>
+            <ErrorState error={overview.error} onRetry={overview.refetch} context="GET /api/budgets/overview" />
+          </CardBody>
         ) : (
           <CardBody className="space-y-3">
-            {/* Nivel org */}
-            <div className="rounded-lg border border-border-subtle p-4">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <p className="text-sm font-semibold text-foreground">Organization</p>
-                  {org?.cutoff ? <Badge tone="danger">Cutoff</Badge> : null}
-                </div>
-                <div className="flex items-center gap-4">
-                  <p className="text-sm text-muted">
-                    Limit <span className="font-semibold text-foreground">{usd(org?.budget_cents)}</span>
-                  </p>
-                  <p className="text-sm text-muted">
-                    Used <span className="font-semibold text-foreground">{usd(org?.spent_cents)}</span>
-                  </p>
-                  <Button variant="secondary" size="sm" onClick={() => openEdit({ kind: "org", name: "Organization", currentCents: org?.budget_cents ?? null })}>
-                    Edit
-                  </Button>
-                </div>
-              </div>
-              <div className="mt-3">
-                <Progress
-                  pct={usagePct(org?.spent_cents ?? 0, org?.budget_cents)}
-                  tone={org?.cutoff ? "danger" : usagePct(org?.spent_cents ?? 0, org?.budget_cents ?? 0) >= 80 ? "warning" : "accent"}
-                />
-              </div>
-            </div>
-
-            {/* Niveles depto */}
+            {/* Niveles depto — el techo org vive en la card destacada */}
             {(overview.data?.departments ?? []).map((d) => {
               const pct = usagePct(d.spent_cents, d.budget_cents);
               // Cutoff mirrors the enforcement/read path (AC-GOV-012,
@@ -159,10 +226,9 @@ export function BudgetsPage() {
                 d.budget_cents != null &&
                 d.spent_cents >= d.budget_cents;
               return (
-                <div key={d.department_id} className="ml-4 rounded-lg border border-border-subtle p-4 sm:ml-8">
+                <div key={d.department_id} className="rounded-lg border border-border-subtle p-4">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex items-center gap-2">
-                      <span aria-hidden="true" className="text-faint">└</span>
                       <p className="text-sm font-medium text-foreground">{d.name}</p>
                       {cutoff ? <Badge tone="danger">Cutoff</Badge> : null}
                       <span className="text-xs text-muted">{d.members} members</span>
@@ -196,7 +262,7 @@ export function BudgetsPage() {
                     return (
                       <div
                         key={u.user_id}
-                        className="mt-2 ml-4 rounded-lg border border-border-subtle bg-surface-alt/30 p-3 sm:ml-12"
+                        className="mt-2 ml-4 rounded-lg border border-border-subtle bg-surface-alt/30 p-3 sm:ml-8"
                       >
                         <div className="flex flex-wrap items-center justify-between gap-2">
                           <div className="flex items-center gap-2">
@@ -378,9 +444,11 @@ export function BudgetsPage() {
         onClose={() => setEdit(null)}
         title={`Edit ${edit?.name ?? ""} budget`}
         description={
-          edit?.kind === "user"
-            ? "Monthly limit in USD. The user budgets of a department must sum within the department budget."
-            : "Monthly limit in USD. Department budgets must sum within the organization budget."
+          edit?.kind === "org"
+            ? "Monthly limit in USD. Raising the organization budget is always allowed; lowering it below the spend already recorded asks for confirmation."
+            : edit?.kind === "user"
+              ? "Monthly limit in USD. The user budgets of a department must sum within the department budget."
+              : "Monthly limit in USD. Department budgets must sum within the organization budget."
         }
         footer={
           <>
