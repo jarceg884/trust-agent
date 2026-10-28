@@ -63,14 +63,20 @@ def test_catalog_and_ops_are_provider_plane_by_design(admin_conn):
         # Spec 025 (mandato Miller): super-user del Provider Console —
         # operador, sesiones y audit del plano proveedor (D-PS-01/04/07).
         "provider_operators", "provider_sessions", "provider_audit",
+        # Spec 015 v1.3.0 (ADR-019): estado de los auth dances del panel
+        # (TOTP enrollment + proof handle) — pre-autenticación, sin RLS.
+        "auth_dances",
     }
     # ops.spend_rejections (QA H2, D-DB-15) SÍ lleva una columna tenant_id:
     # es una referencia forense a un tenant que NO existe (sin FK), no dato
     # de negocio de un tenant — se verifica solo "sin RLS" más abajo.
-    targets = [("catalog", t) for t in provider_tables
+    # ops.auth_dances (ADR-019): mismo criterio — el tenant_id es una
+    # referencia PRE-autenticación (el mint aún no ocurrió), no dato de
+    # negocio; sin RLS por diseño (D-DB-01/D-DB-14).
+    targets = [(("catalog"), t) for t in provider_tables
                if t not in ("spend_cursor", "login_throttle", "spend_rejections",
                             "provider_operators", "provider_sessions",
-                            "provider_audit", "model_catalog")]
+                            "provider_audit", "model_catalog", "auth_dances")]
     targets.append(("ops", "spend_cursor"))
     targets.append(("ops", "login_throttle"))
     targets.append(("ops", "provider_operators"))
@@ -106,6 +112,13 @@ def test_catalog_and_ops_are_provider_plane_by_design(admin_conn):
         "WHERE n.nspname = 'ops' AND c.relname = 'spend_rejections'"
     )
     assert not cur.fetchone()[0], "ops.spend_rejections: no debería tener RLS"
+    # ops.auth_dances (ADR-019): sin RLS — plano proveedor pre-autenticación.
+    cur.execute(
+        "SELECT c.relrowsecurity FROM pg_class c "
+        "JOIN pg_namespace n ON n.oid = c.relnamespace "
+        "WHERE n.nspname = 'ops' AND c.relname = 'auth_dances'"
+    )
+    assert not cur.fetchone()[0], "ops.auth_dances: no debería tener RLS"
 
 
 def test_app_role_is_neither_superuser_nor_owner_nor_bypassrls(admin_conn):

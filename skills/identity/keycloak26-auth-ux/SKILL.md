@@ -272,7 +272,52 @@ POST /admin/realms/{realm}/identity-provider/instances
   default true, variable). Detectar "vía google" con
   `GET /admin/realms/{realm}/users/{sub}` → `federatedIdentities`.
 
-## 6. Referencias
+## 6. Panel propio (ADR-019, spec 015 v1.3.0) — direct grant + dance headless
+
+Decisión de producto Miller (2026-10-28): el usuario JAMÁS ve páginas de
+Keycloak. Hallazgos probe-verified contra KC 26.2.5 (todo en
+docs/evidencia/auth-panel/EVIDENCIA.md §1):
+
+- **Direct grant stock**: trae "Direct Grant - Conditional OTP"
+  (user-configured + `direct-grant-validate-otp`) pero emite `acr:"1"`
+  incluso con OTP validado — sin condiciones LoA no hay evidencia MFA.
+- **Cableado `trust-direct-grant-loa`** (el que usa el producto): copia del
+  flujo "direct grant" con UNA condición "LoA level 2" AGREGADA al sub-flow
+  Conditional OTP (user-configured conservado, OTP REQUIRED), bind como
+  `directGrantFlow`. Matriz: sin OTP → `acr:"1"`; OTP faltante/malo → 401;
+  OTP válido → `acr:"2"`. `requestedLoa` es SIEMPRE 0 en direct grant:
+  una condición LoA con wrapper "Password LoA" evalúa false y DESACTIVA el
+  OTP (fail-closed) — no envolver. El bug "LoA granted on skip" del browser
+  flow NO reproduce aquí (verificado: usuario sin OTP queda en acr 1).
+- **Credenciales antes que required actions**: password incorrecta → 401
+  "Invalid user credentials"; correcta + acción pendiente → 400 "Account
+  is not fully set up" — ese 400 ES la prueba de la password (habilita el
+  panel de set-password con proof-handle).
+- **KC 26 NO tiene REST para TOTP**: Account REST perdió `POST
+  /account/totp` (405) y `credentials-password` requiere audiencia
+  `account`; Admin REST no crea credenciales OTP. El ÚNICO mecanismo real
+  es el required action CONFIGURE_TOTP → el control plane lo conduce
+  headless (authorize `acr_values=2` + PKCE → login form → config-totp →
+  QR PNG data-URI inline (`id="kc-totp-secret-qr-code"`, con ESPACIO tras
+  la coma) + `totpSecret` hidden (secret RAW, key TOTP = bytes UTF-8) →
+  POST del código → 302 con code → canje → `acr:"2"`).
+- **Cookies del dance**: KC setea `Secure;SameSite=None` sobre http — el
+  navegador lo acepta en 127.0.0.1 (secure context) pero httpx NO: manejar
+  el jar a mano (echo de Cookie header).
+- **REPLAY DE OTP**: KC 26.2 RECHAZA reusar un código dentro de su ventana
+  de 30 s (el código consumido por el dance no valida en un direct grant
+  de la misma ventana). El confirm del panel canjea el authorization code
+  del dance en vez de re-grantar — inmune por diseño.
+- **VERIFY_PROFILE**: usuarios sin firstName/lastName disparan la acción y
+  el direct grant da "not fully set up" SIN acciones listadas — siempre
+  setear nombres al crear usuarios por Admin REST.
+- **Flujos por sub-flow alias**: el listing de ejecuciones es
+  nested-inclusive y `/executions/{id}/executions` 404 para sub-flows
+  creados por API — los hijos se listan con
+  `GET /flows/{subflow-displayName}/executions` (el displayName va
+  PREFIJADO con el nombre del flujo copiado).
+
+## 7. Referencias
 
 - Server Admin Guide 26: authentication flows / step-up LoA
   (keycloak.org/docs/latest/server_admin — "Creating a browser login flow

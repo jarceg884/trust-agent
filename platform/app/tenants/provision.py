@@ -156,6 +156,10 @@ def provision(
         # effort: a heal failure must not break the idempotent re-run.
         try:
             kc.ensure_web_client_redirect_uris(slug)
+            # Spec 015 v1.3.0 (ADR-019): auth panel retro-fit — direct
+            # grant flag + trust-direct-grant-loa flow (same heal path).
+            kc.ensure_direct_grant_enabled(slug)
+            kc.ensure_direct_grant_flow(slug)
         except KeycloakAdminError:
             pass
         return {
@@ -175,6 +179,11 @@ def provision(
         kc.ensure_tenant_id_mapper(slug)
         # MFA evidence via acr (Keycloak 26 never emits `amr` — D-MFA-01).
         kc.ensure_mfa_acr(slug)
+        # Spec 015 v1.3.0 (ADR-019): auth panel — direct grant enabled on
+        # the web client + trust-direct-grant-loa flow so password+OTP
+        # grants carry the signed acr:"2" (D-AUTH-12/13).
+        kc.ensure_direct_grant_enabled(slug)
+        kc.ensure_direct_grant_flow(slug)
         # Spec 015: white-label surface + Google brokering + tenant_id for
         # brokered users (D-AUTH-01/02/03). Google is fail-closed: without
         # TRUST_GOOGLE_CLIENT_ID/SECRET no IdP is added.

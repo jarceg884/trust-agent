@@ -28,6 +28,10 @@ export const COOKIE = {
   loginOrg: "ta_console_login_org",
   /** Marca de que el login en curso ya es un re-intento de step-up MFA. */
   stepup: "ta_console_stepup",
+  /** Auth panel (ADR-019): handle del dance TOTP en curso (httpOnly, 10 min). */
+  panelDance: "ta_panel_dance",
+  /** Auth panel (ADR-019): contexto pendiente {org,email} entre pasos. */
+  panelPending: "ta_panel_pending",
 } as const;
 
 const baseCookie = {
@@ -130,4 +134,65 @@ export async function getPkceCookies(): Promise<{
     state: store.get(COOKIE.oauthState)?.value || null,
     orgCode: store.get(COOKIE.loginOrg)?.value || null,
   };
+}
+
+// --- Auth panel (ADR-019, spec 015 v1.3.0) ----------------------------------
+
+const PANEL_COOKIE_TTL = 600; // 10 min — paridad con ops.auth_dances
+
+export async function setPanelDanceCookie(handle: string): Promise<void> {
+  const store = await cookies();
+  store.set(COOKIE.panelDance, handle, {
+    ...baseCookie,
+    maxAge: PANEL_COOKIE_TTL,
+  });
+}
+
+export async function getPanelDanceCookie(): Promise<string | null> {
+  const store = await cookies();
+  return store.get(COOKIE.panelDance)?.value || null;
+}
+
+export async function clearPanelDanceCookie(): Promise<void> {
+  const store = await cookies();
+  store.set(COOKIE.panelDance, "", { ...baseCookie, maxAge: 0 });
+}
+
+/** Contexto pendiente entre pasos del panel (org + email + proof handle). */
+export async function setPanelPendingCookie(args: {
+  org: string;
+  email: string;
+  handle?: string | null;
+}): Promise<void> {
+  const store = await cookies();
+  store.set(COOKIE.panelPending, JSON.stringify(args), {
+    ...baseCookie,
+    maxAge: PANEL_COOKIE_TTL,
+  });
+}
+
+export async function getPanelPendingCookie(): Promise<{
+  org: string;
+  email: string;
+  handle?: string | null;
+} | null> {
+  const store = await cookies();
+  const raw = store.get(COOKIE.panelPending)?.value;
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as {
+      org?: string;
+      email?: string;
+      handle?: string | null;
+    };
+    if (!parsed.org || !parsed.email) return null;
+    return { org: parsed.org, email: parsed.email, handle: parsed.handle ?? null };
+  } catch {
+    return null;
+  }
+}
+
+export async function clearPanelPendingCookie(): Promise<void> {
+  const store = await cookies();
+  store.set(COOKIE.panelPending, "", { ...baseCookie, maxAge: 0 });
 }

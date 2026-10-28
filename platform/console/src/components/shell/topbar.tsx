@@ -13,6 +13,7 @@ import { Badge, Button, useToast } from "@/components/ui";
 import {
   IconBell,
   IconChevronDown,
+  IconCredentials,
   IconDownload,
   IconLogout,
   IconMenu,
@@ -275,6 +276,14 @@ function UserMenu({ me }: { me: WhoAmI }) {
             <p className="px-2 pb-1 text-[10px] uppercase tracking-wide text-faint">
               Signed in as {topRole}
             </p>
+            {/* Spec 015 v1.3.0 (ADR-019): cambio de password 100% panel. */}
+            <a
+              href="/change-password"
+              role="menuitem"
+              className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-xs text-muted transition-colors hover:bg-surface-alt hover:text-foreground"
+            >
+              <IconCredentials size={14} /> Change password
+            </a>
             <form action="/auth/logout" method="post">
               <button
                 type="submit"

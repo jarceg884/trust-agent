@@ -2,9 +2,9 @@
 
 | Campo | Valor |
 |---|---|
-| **Estado** | Converged (2026-10-26) — AC-AUTH-001..005/007/008/009 verificados con evidencia real (docs/evidencia/auth-ux/EVIDENCIA.md); AC-AUTH-010 (sync `mfa_enrolled`, GAP-10.2) añadido en v1.1.0. **AC-AUTH-006 (Google punta a punta) DESCOPED del v0.1.0-pilot por enmienda v1.2.0 (§7): gap documentado, pass-with-documented-gap para el gate; re-entra en v0.1.1** |
-| **Versión** | 1.2.0 |
-| **Fecha** | 2026-10-27 |
+| **Estado** | Converged (2026-10-26) — AC-AUTH-001..005/007/008/009 verificados con evidencia real (docs/evidencia/auth-ux/EVIDENCIA.md); AC-AUTH-010 (sync `mfa_enrolled`, GAP-10.2) añadido en v1.1.0. **AC-AUTH-006 (Google punta a punta) DESCOPED del v0.1.0-pilot por enmienda v1.2.0 (§7): gap documentado, pass-with-documented-gap para el gate; re-entra en v0.1.1**. **Enmienda v1.3.0 (§8): la UX de login/TOTP/password pasa a PANEL PROPIO (ADR-019, decisión Miller 2026-10-28) — AC-AUTH-011..015** |
+| **Versión** | 1.3.0 |
+| **Fecha** | 2026-10-28 |
 | **Autor** | dev (tarea t_1844fb06, feedback Miller #10) |
 | **Padre** | specs/003-control-plane (auth/JWT/sesiones), specs/004-tenant-onboarding (provisioning KC, D-ONB-12/13), specs/009-admin-console (login PKCE, D-AC-01/02, step-up), specs/011-mfa-acr-evidence (D-MFA-01, ensure_mfa_acr), specs/012-org-endpoints (invitas) |
 | **Idioma** | Español (docs) / inglés (código, UI copy) |
@@ -287,3 +287,99 @@ el operador aporte las credenciales.
   `TRUST_GOOGLE_CLIENT_ID`/`TRUST_GOOGLE_CLIENT_SECRET` en `.env`,
   re-corre el provisioning (idempotente) y se ejecuta AC-AUTH-006 tal como
   está escrito en §5.
+
+## 8. Enmienda v1.3.0 (2026-10-28) — PANEL PROPIO de login/TOTP/password (ADR-019)
+
+**Decisión de producto (Miller, 2026-10-28)**: el usuario final NUNCA es
+redirigido a páginas de Keycloak. Todas las pantallas de autenticación
+(login, enrolamiento TOTP, cambio de password, errores) son del producto.
+Keycloak queda como motor de identidad invisible. Esto **suprime la parte
+UX de D-AUTH-01** (el "Descartado: BFF con pantallas propias" queda
+revocado por decisión explícita de producto) y enmienda ADR-015
+(`directAccessGrantsEnabled: true` en `trust-agent-web`). El tema
+white-label (AC-AUTH-001) permanece como **capa fallback** — NO se cancela.
+
+### D-AUTH-12 — Login panel vía Direct Access Grant
+
+`POST /api/auth/panel/login` `{org, email, password, totp?}` (pre-auth,
+rate-limited con `ops.login_throttle` por IP + cuenta): el control plane
+ejecuta el direct grant contra el realm de la org, verifica el id_token por
+JWKS y mints sesión PostgreSQL con el MISMO camino que hoy (sync
+`mfa_enrolled`, audit `auth.login` con `via:"panel"`). El navegador solo
+habla con el BFF del console (que a su vez solo habla con el control
+plane). El baile PKCE (D-AC-02) permanece implementado como fallback.
+
+### D-AUTH-13 — Evidencia MFA en el direct grant (gate intacto, probe en vivo)
+
+El flujo *direct grant* stock de KC 26 emite `acr:"1"` incluso con OTP
+validado. Cableado nuevo (verificado contra KC 26.2.5 vivo): copia del
+flujo `trust-direct-grant-loa` con UNA condición "LoA level 2" agregada al
+sub-flow "Direct Grant - Conditional OTP" (conservando "Condition - user
+configured"). En direct grant `requestedLoA=0` y `currentLoa=0`, por lo que
+la condición LoA evalúa true incondicional y el user-configured decide el
+skip; el sub-flow solo tiene éxito cuando el OTP validó → LoA 2 →
+`acr:"2"` firmado. Matriz verificada: sin OTP → `acr:"1"`; OTP
+faltante/incorrecto → 401 `invalid_grant`; OTP válido → `acr:"2"`. El bug
+de "LoA otorgado cuando el sub-flow se salta" (hallazgo del browser flow,
+D-AUTH-06) NO reproduce en direct grant (verificado). `mfa_evidence()`
+(D-MFA-01) y el gate `require_mfa` (D-AUTH-07) quedan SIN CAMBIOS.
+
+### D-AUTH-14 — Enrolamiento TOTP panel (dance headless del required action)
+
+KC 26 no expone REST para generar el secret TOTP ni para crear la
+credencial OTP (Account REST perdió `POST /account/totp`; Admin REST no
+crea credenciales OTP — verificado contra fuente 26.2.5). El único
+mecanismo real es el required action `CONFIGURE_TOTP`. El control plane lo
+conduce headless: authorize con `acr_values=2` + PKCE → login form →
+página config-totp (se extraen el QR PNG data-URI y el `totpSecret` por
+ids estables) → el panel muestra el QR con branding del producto → el
+usuario confirma el código → el control plane completa el required action
+→ canjea el code → id_token `acr:"2"` → mint con `mfa_verified=true` +
+sync `mfa_enrolled` + audit `auth.totp_enrolled`. Estado del dance en
+`ops.auth_dances` (handle hasheado, TTL 10 min, passwords JAMÁS
+persistidas). Endpoints: `POST /api/auth/panel/totp/setup` (demuestra la
+password por direct grant), `GET /api/auth/panel/totp/qr`, `POST
+/api/auth/panel/totp/confirm`.
+
+### D-AUTH-15 — Password panel (UPDATE_PASSWORD + cambio voluntario)
+
+- **UPDATE_PASSWORD (primer login)**: el direct grant falla con
+  `invalid_grant` "Account is not fully set up" SOLO después de validar las
+  credenciales (password incorrecto → 401 "Invalid user credentials",
+  distinto — verificado en vivo). El panel pide la nueva password y el
+  control plane aplica Admin REST `reset-password` (temporary=false) +
+  limpia la required action + re-grant con la password nueva + mint
+  (precedente D-AUTH-04: la password transita una vez por el control
+  plane). Audit `auth.password_changed` sin material de credencial.
+- **Cambio voluntario**: `POST /api/auth/panel/password` demuestra la
+  password actual con un direct grant (200) antes de resetear; 401
+  genérico si la actual no coincide.
+
+### D-AUTH-16 — Seguridad del panel (tradeoff aceptado, mitigado)
+
+- Passwords JAMÁS logueadas, almacenadas o reflejadas en errores/audit.
+- Throttle `ops.login_throttle` (REQ-SEC-006) aplica a TODOS los endpoints
+  del panel (IP + cuenta); el lockout progresivo es el mismo.
+- 401 genérico sin oracle: "Invalid email or password". El hint de OTP
+  (`mfa_code_required`) se muestra SOLO cuando la cuenta tiene credencial
+  OTP (lookup Admin REST post-401) — aceptado explícitamente en la
+  decisión de producto.
+- El navegador jamás habla con Keycloak; TLS/local-only igual que hoy.
+
+### Criterios de aceptación (v1.3.0)
+
+| ID | Criterio |
+|---|---|
+| AC-AUTH-011 | Login panel (Admin Console): email+password(+OTP opcional) → sesión admin operativa; el navegador NUNCA es redirigido a una URL de Keycloak (verificable en e2e: cero navegaciones a :8080). |
+| AC-AUTH-012 | Retro-fit idempotente: TODOS los realms existentes quedan con `directAccessGrantsEnabled=true` en `trust-agent-web` y el flujo `trust-direct-grant-loa` cableado+bindeado (script re-corrible, salida real archivada en evidencia). |
+| AC-AUTH-013 | Evidencia MFA: login panel con OTP válido → token `acr:"2"` → sesión `mfa_verified=true` → gate `require_mfa` pasa; sin OTP → `acr:"1"` → gate 403 `mfa_required` cuando la policy lo exige. Matriz negativa: OTP faltante → 401 con hint solo si tiene OTP; password incorrecto → 401 genérico sin oracle; lockout por intentos (throttle DB) → 429. |
+| AC-AUTH-014 | Enrolamiento TOTP 100% panel: login → banner "Set up MFA" → QR con branding del producto → código → sesión `mfa_verified=true`, `users.mfa_enrolled=true` (SQL), credencial `otp` en KC (Admin REST), required action limpia, audit `auth.totp_enrolled`. Cero pantallas de KC. |
+| AC-AUTH-015 | Password panel: (a) primer login con UPDATE_PASSWORD → panel de nueva password → sesión operativa; (b) cambio voluntario con password actual incorrecta → 401 genérico; correcta → password nueva operativa en el siguiente login, audit `auth.password_changed`. |
+
+### Fuera de alcance (v1.3.0)
+
+- Desktop (spec 010): mantiene su baile PKCE (D-DTB-02) — el desktop abre
+  el IdP en una ventana del SO; panel propio del desktop es follow-up.
+- Recuperación de password por email y verificación de email: siguen como
+  flows de Keycloak (fallback) hasta que exista conector de email.
+- Des-inscripción TOTP (sin cambio — ver §4).

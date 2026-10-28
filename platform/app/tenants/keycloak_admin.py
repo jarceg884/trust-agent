@@ -62,6 +62,30 @@ PASSWORD_LOA_PRIORITY = 15      # < Conditional OTP priority (20)
 USER_CONFIGURED_PROVIDER = "conditional-user-configured"
 USERNAME_PASSWORD_PROVIDER = "auth-username-password-form"
 
+# --- Direct Access Grant (spec 015 v1.3.0, ADR-019) ---------------------------
+# The auth panel (Keycloak never visible) logs users in via ROPC against the
+# web client, so `directAccessGrantsEnabled` must be true on `trust-agent-web`
+# (amends ADR-015; product decision Miller 2026-10-28).
+#
+# MFA evidence in the direct grant (D-AUTH-13, probe-verified against KC
+# 26.2.5 live): the STOCK direct grant flow emits acr:"1" even when the OTP
+# validated (no LoA conditions). Wiring: a copy of the built-in flow with ONE
+# "Condition - LoA level 2" ADDED to its "… Conditional OTP" sub-flow (the
+# stock "Condition - user configured" is KEPT). In a direct grant
+# requestedLoa is always 0 and currentLoa starts at 0, so the LoA condition
+# evaluates TRUE unconditionally (ConditionalLoaAuthenticator returns true
+# while currentLoa < MINIMUM_LOA) and the user-configured condition alone
+# decides whether the sub-flow is skipped. The sub-flow therefore only
+# SUCCEEDS when the OTP actually validated → LoA 2 → the tokens carry the
+# signed `acr:"2"` that mfa_evidence() (D-MFA-01) already accepts.
+#
+# FAIL-OPEN CHECK (live-verified): a user WITHOUT an OTP credential gets
+# acr:"1" — the browser-flow bug "LoA granted when the sub-flow is skipped"
+# (see _restructure_loa_flow) does NOT reproduce in the direct grant flow.
+DIRECT_GRANT_FLOW = "trust-direct-grant-loa"
+DIRECT_GRANT_OTP_SUBFLOW_MARKER = "Conditional OTP"
+DIRECT_GRANT_OTP_LOA_LEVEL = "2"
+
 # --- White-label login theme (spec 015, D-AUTH-01) ---------------------------
 # KC 26 default theme is keycloak.v2; our theme extends it (PatternFly v5)
 # and is deployed via the idp-themes/ volume → /opt/keycloak/themes.
@@ -232,7 +256,7 @@ class KeycloakAdminClient:
                 "protocol": "openid-connect",
                 "publicClient": True,
                 "standardFlowEnabled": True,
-                "directAccessGrantsEnabled": False,
+                "directAccessGrantsEnabled": True,
                 "redirectUris": redirect_uris,
                 "attributes": {"pkce.code.challenge.method": "S256"},
             },
@@ -261,6 +285,170 @@ class KeycloakAdminClient:
         before both loopback names (127.0.0.1 + localhost) were registered.
         """
         self._web_client_uuid(realm)
+
+    def ensure_direct_grant_enabled(self, realm: str) -> None:
+        """ADR-019: heal `directAccessGrantsEnabled` on the web client.
+
+        Realms provisioned before the auth panel keep the ADR-015 value
+        (false); this flips it idempotently (only PUTs when it differs).
+        """
+        client_uuid = self._web_client_uuid(realm)
+        resp = self._request(
+            "GET", f"/admin/realms/{realm}/clients/{client_uuid}",
+            step="keycloak.client",
+        )
+        if resp.status_code != 200:
+            raise KeycloakAdminError(
+                "keycloak.client", f"get client: HTTP {resp.status_code}"
+            )
+        client = resp.json()
+        if client.get("directAccessGrantsEnabled"):
+            return
+        client["directAccessGrantsEnabled"] = True
+        resp = self._request(
+            "PUT", f"/admin/realms/{realm}/clients/{client_uuid}",
+            step="keycloak.client", json_body=client,
+        )
+        if resp.status_code not in (200, 204):
+            raise KeycloakAdminError(
+                "keycloak.client",
+                f"enable directAccessGrants: HTTP {resp.status_code} "
+                f"{resp.text[:200]}",
+            )
+
+    def ensure_direct_grant_flow(self, realm: str) -> None:
+        """D-AUTH-13 (spec 015 v1.3.0): wire `trust-direct-grant-loa`.
+
+        Copy of the built-in `direct grant` flow with a "Condition - LoA
+        level 2" added to its "… Conditional OTP" sub-flow (user-configured
+        kept), bound as the realm's directGrantFlow. Idempotent: converges
+        when the copy exists, the condition is configured at level 2 and
+        the realm binding points at the copy.
+        """
+        rep = self._get_realm_rep(realm, "keycloak.direct_grant_flow")
+        if rep.get("directGrantFlow") == DIRECT_GRANT_FLOW and \
+                self._direct_grant_flow_ready(realm):
+            return
+        resp = self._request(
+            "POST",
+            f"/admin/realms/{realm}/authentication/flows/direct%20grant/copy",
+            step="keycloak.direct_grant_flow",
+            json_body={"newName": DIRECT_GRANT_FLOW},
+        )
+        if resp.status_code not in (201, 409):
+            raise KeycloakAdminError(
+                "keycloak.direct_grant_flow",
+                f"copy direct grant flow: HTTP {resp.status_code} "
+                f"{resp.text[:200]}",
+            )
+        self._wire_direct_grant_loa(realm)
+        resp = self._request(
+            "PUT", f"/admin/realms/{realm}", step="keycloak.direct_grant_flow",
+            json_body={"directGrantFlow": DIRECT_GRANT_FLOW},
+        )
+        if resp.status_code not in (200, 204):
+            raise KeycloakAdminError(
+                "keycloak.direct_grant_flow",
+                f"bind directGrantFlow: HTTP {resp.status_code} {resp.text[:200]}",
+            )
+
+    def _wire_direct_grant_loa(self, realm: str) -> None:
+        """Bring the copied flow to the D-AUTH-13 shape: the Conditional OTP
+        sub-flow carries ONE LoA condition at level 2 (user-configured is
+        kept from the stock copy). Sub-flows are addressable by their
+        (display) alias — the listing is nested-inclusive, so children are
+        listed via the sub-flow alias, not the parent (live-verified)."""
+        flat = self._flow_executions(realm, DIRECT_GRANT_FLOW,
+                                     "keycloak.direct_grant_flow")
+        otp = next(
+            (e for e in flat
+             if DIRECT_GRANT_OTP_SUBFLOW_MARKER in (e.get("displayName") or "")),
+            None,
+        )
+        if otp is None:
+            raise KeycloakAdminError(
+                "keycloak.direct_grant_flow",
+                f"flow '{DIRECT_GRANT_FLOW}' is missing its Conditional OTP "
+                "sub-flow",
+            )
+        otp_alias = otp["displayName"]
+        kids = self._flow_executions(realm, otp_alias,
+                                     "keycloak.direct_grant_flow")
+        loa = next(
+            (e for e in kids
+             if e.get("providerId") == LOA_CONDITION_PROVIDER), None,
+        )
+        if loa is None:
+            self._add_execution(realm, otp["flowId"], LOA_CONDITION_PROVIDER,
+                                "REQUIRED", 20)
+            kids = self._flow_executions(realm, otp_alias,
+                                         "keycloak.direct_grant_flow")
+            loa = next(
+                (e for e in kids
+                 if e.get("providerId") == LOA_CONDITION_PROVIDER), None,
+            )
+            if loa is None:
+                raise KeycloakAdminError(
+                    "keycloak.direct_grant_flow",
+                    "LoA condition missing after create",
+                )
+        if self._loa_condition_level(realm, loa) != DIRECT_GRANT_OTP_LOA_LEVEL:
+            self._set_loa_config(
+                realm, loa["id"], DIRECT_GRANT_OTP_LOA_LEVEL,
+                alias="trust-dg-loa-otp-2",
+            )
+
+    def _direct_grant_flow_ready(self, realm: str) -> bool:
+        """True when the bound direct grant flow has the D-AUTH-13 shape."""
+        try:
+            flat = self._flow_executions(realm, DIRECT_GRANT_FLOW,
+                                         "keycloak.direct_grant_flow")
+        except KeycloakAdminError:
+            return False
+        otp = next(
+            (e for e in flat
+             if DIRECT_GRANT_OTP_SUBFLOW_MARKER in (e.get("displayName") or "")),
+            None,
+        )
+        if otp is None:
+            return False
+        state = self._subflow_loa_state(realm, otp["displayName"])
+        return state["loa_level"] == DIRECT_GRANT_OTP_LOA_LEVEL
+
+    def direct_grant_flow_state(self, realm: str) -> dict:
+        """Retrofit reporting: binding + wiring + client flag (never raises)."""
+        state = {"bound_flow": None, "loa_level": None,
+                 "has_user_configured": None, "client_direct_grants": None}
+        try:
+            rep = self._get_realm_rep(realm, "keycloak.direct_grant_flow")
+            state["bound_flow"] = rep.get("directGrantFlow")
+            if rep.get("directGrantFlow") == DIRECT_GRANT_FLOW:
+                sub = self._subflow_loa_state_for(realm)
+                state["loa_level"] = sub.get("loa_level")
+                state["has_user_configured"] = sub.get("has_user_configured")
+            client_uuid = self._web_client_uuid(realm)
+            resp = self._request(
+                "GET", f"/admin/realms/{realm}/clients/{client_uuid}",
+                step="keycloak.client",
+            )
+            if resp.status_code == 200:
+                state["client_direct_grants"] = \
+                    resp.json().get("directAccessGrantsEnabled")
+        except KeycloakAdminError:
+            pass
+        return state
+
+    def _subflow_loa_state_for(self, realm: str) -> dict:
+        flat = self._flow_executions(realm, DIRECT_GRANT_FLOW,
+                                     "keycloak.direct_grant_flow")
+        otp = next(
+            (e for e in flat
+             if DIRECT_GRANT_OTP_SUBFLOW_MARKER in (e.get("displayName") or "")),
+            None,
+        )
+        if otp is None:
+            return {}
+        return self._subflow_loa_state(realm, otp["displayName"])
 
     def _ensure_client_redirect_uris(self, realm: str, client_uuid: str) -> None:
         """F1 (t_38ce1e82): heal redirect URIs of pre-existing clients.
@@ -348,6 +536,73 @@ class KeycloakAdminClient:
             )
         users = resp.json()
         return users[0] if users else None
+
+    def find_user_by_email(self, realm: str, email: str) -> dict | None:
+        """Auth panel (ADR-019): exact email lookup in the realm."""
+        from urllib.parse import quote
+
+        resp = self._request(
+            "GET",
+            f"/admin/realms/{realm}/users?email={quote(email)}&exact=true",
+            step="keycloak.admin_user",
+        )
+        if resp.status_code != 200:
+            raise KeycloakAdminError(
+                "keycloak.admin_user", f"lookup user by email: HTTP {resp.status_code}"
+            )
+        users = resp.json()
+        return users[0] if users else None
+
+    def user_has_otp_credential(self, realm: str, user_id: str) -> bool:
+        """True when the user has an OTP (TOTP) credential — drives the
+        `mfa_code_required` hint of the panel (D-AUTH-16: only shown for
+        accounts that actually have MFA configured)."""
+        resp = self._request(
+            "GET", f"/admin/realms/{realm}/users/{user_id}/credentials",
+            step="keycloak.admin_user",
+        )
+        if resp.status_code != 200:
+            return False  # fail-closed: no hint without a confirmed lookup
+        return any(c.get("type") == "otp" for c in resp.json())
+
+    def set_user_password(
+        self, realm: str, user_id: str, password: str, *,
+        clear_action: str | None = "UPDATE_PASSWORD",
+    ) -> None:
+        """Auth panel (D-AUTH-15): set a PERMANENT password via Admin REST
+        and clear the UPDATE_PASSWORD required action. The caller MUST have
+        proven the CURRENT password first (direct grant 200, or the 400
+        "Account is not fully set up" that only occurs after credential
+        validation — live-verified). The password transits once towards
+        Admin REST and is never stored (D-AUTH-04 precedent)."""
+        resp = self._request(
+            "PUT",
+            f"/admin/realms/{realm}/users/{user_id}/reset-password",
+            step="keycloak.panel_password",
+            json_body={"type": "password", "value": password,
+                       "temporary": False},
+        )
+        if resp.status_code not in (200, 204):
+            raise KeycloakAdminError(
+                "keycloak.panel_password",
+                f"reset password: HTTP {resp.status_code} {resp.text[:200]}",
+            )
+        if clear_action is None:
+            return
+        user = self.get_user(realm, user_id) or {}
+        actions = [a for a in (user.get("requiredActions") or [])
+                   if a != clear_action]
+        resp = self._request(
+            "PUT", f"/admin/realms/{realm}/users/{user_id}",
+            step="keycloak.panel_password",
+            json_body={"requiredActions": actions},
+        )
+        if resp.status_code not in (200, 204):
+            raise KeycloakAdminError(
+                "keycloak.panel_password",
+                f"clear required action: HTTP {resp.status_code} "
+                f"{resp.text[:200]}",
+            )
 
     def ensure_admin_user(
         self, realm: str, *, username: str, email: str, tenant_id: str,

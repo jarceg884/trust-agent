@@ -226,6 +226,128 @@ def sync_mfa_enrolled(conn: Connection, user_id: str) -> bool:
     return (result.rowcount or 0) > 0
 
 
+def mint_transaction(
+    conn: Connection, *, claims: dict, acct_key: str | None, kind: str,
+    via: str, ip: str | None, user_agent: str | None,
+) -> dict:
+    """Shared tenant-scoped mint body (spec 015 v1.3.0, ADR-019).
+
+    Extracted verbatim from POST /api/auth/session so the auth panel
+    (direct grant) mints sessions through the EXACT same path: tenant +
+    issuer checks, user lookup (+ brokered auto-provision gated by
+    allow_self_registration), D-AUTH-11 mfa_enrolled sync, session INSERT,
+    auth.login audit (same transaction — D-AU-07) and throttle success.
+
+    ``claims`` must ALREADY be JWKS-verified; ``acct_key`` is the trusted
+    account throttle key derived from the verified claims. Raises ApiError
+    (invalid_token) on any failure — the audit event for unknown/disabled
+    users is committed inside before raising (must survive the rollback).
+    Returns {"tokens", "user_id", "mfa_verified", "login_via"}.
+    """
+    from .rbac import top_role_key
+    from ..audit import service as audit_service
+    from . import throttle
+
+    tenant_id = claims["tenant_id"]
+    trow = conn.execute(
+        text(
+            "SELECT id, status, oidc_issuer_url, oidc_realm, slug "
+            "FROM tenants"
+        )
+    ).mappings().first()
+    if trow is None:
+        raise invalid_token()
+    if trow["oidc_issuer_url"] and trow["oidc_issuer_url"] != claims["iss"]:
+        raise invalid_token()
+    urow = conn.execute(
+        text("SELECT id, status FROM users WHERE oidc_subject = :sub"),
+        {"sub": claims["sub"]},
+    ).mappings().first()
+    login_via = via
+    if urow is None and via == "oidc":
+        # D-AUTH-05: first brokered login (e.g. Google) — the id_token
+        # already verified cryptographically; auto-provision is gated
+        # by the org policy allow_self_registration.
+        from ..governance.service import org_policy_value
+
+        allowed = org_policy_value(conn, "allow_self_registration")
+        if allowed is True or allowed == "true":
+            from .router import _auto_provision_brokered
+
+            urow = _auto_provision_brokered(
+                conn,
+                realm=trow["oidc_realm"] or trow["slug"],
+                tenant_id=tenant_id,
+                claims=claims,
+            )
+            if urow is not None:
+                login_via = urow["via"]
+                urow = {"id": urow["id"], "status": "active"}
+    if urow is None or urow["status"] != "active":
+        # auth.login_failed — the tenant is already verified (valid
+        # signature/claims + existing tenant + matching iss), so the
+        # event belongs to THIS tenant's chain (D-AU-03). Pre-tenant
+        # failures (bad signature/aud/iss/tenant) are never audited: a
+        # forged token must not pollute any chain. The event must
+        # survive the 401 rollback -> explicit commit before raising.
+        audit_service.emit(
+            conn,
+            tenant_id=tenant_id,
+            actor_role="system",
+            actor_id=str(urow["id"]) if urow is not None else None,
+            action="auth.login_failed",
+            payload={
+                "reason": "user_disabled" if urow is not None else "unknown_user"
+            },
+        )
+        conn.commit()
+        raise invalid_token()
+    mfa_verified = mfa_evidence(claims)
+    if mfa_verified:
+        # D-AUTH-11 (spec 015 v1.1.0): the verified claims prove a
+        # second factor — this is the exact moment the inline TOTP
+        # enrollment converges (the console re-dances with acr=2 and
+        # re-mints, or the auth panel confirms the enrollment dance).
+        # Same tenant-scoped transaction as the session.
+        sync_mfa_enrolled(conn, str(urow["id"]))
+    tokens = mint_session(
+        conn,
+        tenant_id=tenant_id,
+        user_id=str(urow["id"]),
+        kind=kind,
+        mfa_verified=mfa_verified,
+        ip=ip,
+        user_agent=user_agent,
+    )
+    # auth.login — same business transaction as the session INSERT
+    # (D-AU-07: the audit event is part of the flow, not best-effort).
+    role_keys = [r.role_key for r in load_roles(conn, str(urow["id"]))]
+    audit_service.emit(
+        conn,
+        tenant_id=tenant_id,
+        actor_role=top_role_key(role_keys),
+        actor_id=str(urow["id"]),
+        action="auth.login",
+        target_type="session",
+        target_id=tokens.session_id,
+        payload={
+            "kind": kind,
+            "mfa_verified": mfa_verified,
+            "via": login_via,
+        },
+    )
+    # Atomic with the session insert: a successful login clears the
+    # account counter (the IP counter is NOT reset — see throttle.py).
+    if acct_key:
+        throttle.register_success(conn, acct_key)
+    return {
+        "tokens": tokens,
+        "user_id": str(urow["id"]),
+        "mfa_verified": mfa_verified,
+        "login_via": login_via,
+    }
+
+
 def revoke_session(conn: Connection, session_id: str) -> None:
     conn.execute(
         text(

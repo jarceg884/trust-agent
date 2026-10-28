@@ -1,34 +1,27 @@
 "use client";
 
 /**
- * Login (spec 009 REQ-AC-001): el admin introduce el org code (slug = realm
- * Keycloak) y el navegador navega a /auth/login?org=…, que inicia el baile
- * PKCE server-side. Sin MFA en el realm, el control plane responderá 403
- * mfa_required tras el callback y el shell mostrará la puerta MFA.
+ * Login panel (spec 015 v1.3.0, ADR-019, D-AUTH-12 — AC-AUTH-011).
  *
- * Pulido v2 (t_3cf085b9, crítica visual 4/10 → meta 7+):
- * - Focus del input NEUTRO (hallazgo #1): el autoFocus encendía el borde
- *   rojo del focus en el primer paint y parecía un error permanente. El
- *   rojo ahora solo aparece con error real (touched + inválido).
- * - Validación al blur, no al primer caracter: escribir "a" ya marcaba
- *   error; ahora el juicio llega cuando el usuario abandona el campo.
- * - Botón primario con profundidad (sombra sutil) y disabled gris neutro
- *   (hallazgo #2): el rojo a 40% de opacidad se leía como salmón roto.
- * - "Join/Create your organization" como enlaces planos bajo un divisor
- *   (hallazgo #3): las dos cajas bordeadas competían con la CTA primaria y
- *   desbordaban; ahora son navegación terciaria clara y alineada.
+ * The user signs in with org code + email + password (+ the one-time code
+ * when they have MFA). The submit goes to the console BFF
+ * (POST /auth/panel/login), which forwards to the control plane's Direct
+ * Access Grant. The browser NEVER leaves the console origin — Keycloak is
+ * invisible (no redirects to :8080, no IdP pages).
+ *
+ * Statuses routed by the control plane:
+ *   ok              → /overview (session cookies set by the BFF)
+ *   update_password → /set-password (first login: the one-time password was
+ *                     already proven by the grant outcome)
+ *   enroll_totp     → /mfa-setup (the enrollment dance already started)
+ *   401 mfa_code_required → hint shown ONLY for accounts with MFA (the
+ *                     generic 401 carries no oracle — D-AUTH-16)
  */
 import { useState } from "react";
 import { Building2, UserPlus } from "lucide-react";
 import { isValidOrgCode } from "@/lib/config";
+import { panelErrorMessage } from "@/lib/panel";
 import { Button } from "@/components/ui";
-
-const ERROR_MESSAGES: Record<string, string> = {
-  "invalid-org":
-    "Enter a valid organization code (lowercase letters, numbers and dashes).",
-  "unknown-org":
-    "We could not find that organization code. Check it with your administrator.",
-};
 
 export function LoginForm({
   initialError,
@@ -38,28 +31,83 @@ export function LoginForm({
   initialOrg?: string;
 }) {
   const [org, setOrg] = useState(initialOrg);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [totp, setTotp] = useState("");
+  const [showOtp, setShowOtp] = useState(false);
   const [touched, setTouched] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
   const trimmed = org.trim().toLowerCase();
   const valid = isValidOrgCode(trimmed);
   const showError = touched && !valid;
 
-  function submit(e: React.FormEvent) {
+  async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!valid) {
-      // El botón vive siempre habilitado (patrón Stripe): el juicio de
-      // validez aparece AL ENVIAR, con borde y mensaje de error reales —
-      // nunca antes como estado falso.
       setTouched(true);
       return;
     }
-    // Navegación full-page INTENCIONAL: /auth/login es un route handler
-    // que responde con redirect externo al IdP — router.push no aplica.
-    // eslint-disable-next-line @next/next/no-location-assign-relative-destination
-    window.location.href = `/auth/login?org=${encodeURIComponent(trimmed)}`;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch("/auth/panel/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          org: trimmed,
+          email,
+          password,
+          totp: totp.trim() || null,
+        }),
+      });
+      const data = (await res.json()) as {
+        status: string;
+        reason?: string;
+        message?: string;
+      };
+      if (res.ok && data.status === "ok") {
+        window.location.href = "/overview";
+        return;
+      }
+      if (res.ok && data.status === "update_password") {
+        window.location.href = "/set-password";
+        return;
+      }
+      if (res.ok && data.status === "enroll_totp") {
+        window.location.href = "/mfa-setup";
+        return;
+      }
+      if (data.reason === "mfa_code_required") {
+        setShowOtp(true);
+        setError(
+          panelErrorMessage(
+            "mfa_code_required",
+            "Enter your one-time code as well.",
+          ),
+        );
+      } else {
+        setError(
+          panelErrorMessage(
+            data.reason ?? "error",
+            data.message ?? "Sign-in failed. Please try again.",
+          ),
+        );
+      }
+    } catch {
+      setError("The console is unreachable. Check your connection and try again.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   const urlError = initialError
-    ? (ERROR_MESSAGES[initialError] ?? decodeURIComponent(initialError))
+    ? initialError === "invalid-org"
+      ? "Enter a valid organization code (lowercase letters, numbers and dashes)."
+      : initialError === "unknown-org"
+        ? "We could not find that organization code. Check it with your administrator."
+        : decodeURIComponent(initialError)
     : null;
 
   return (
@@ -70,6 +118,14 @@ export function LoginForm({
           className="rounded-lg border border-danger/25 bg-danger-soft px-4 py-3 text-sm text-danger"
         >
           {urlError}
+        </p>
+      ) : null}
+      {error ? (
+        <p
+          role="alert"
+          className="rounded-lg border border-danger/25 bg-danger-soft px-4 py-3 text-sm text-danger"
+        >
+          {error}
         </p>
       ) : null}
       <div>
@@ -104,14 +160,87 @@ export function LoginForm({
           </p>
         ) : null}
       </div>
-      <Button type="submit" variant="primary" className="w-full py-2.5">
-        Continue
+      <div>
+        <label
+          htmlFor="email"
+          className="mb-2 block text-sm font-medium text-foreground"
+        >
+          Email
+        </label>
+        <input
+          id="email"
+          name="email"
+          type="email"
+          autoComplete="username"
+          spellCheck={false}
+          required
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          className="w-full rounded-lg border border-border-subtle bg-surface px-3.5 py-2.5 text-sm text-foreground transition-all duration-150 placeholder:text-muted hover:border-foreground/25 focus:border-foreground/60 focus:outline-none focus:ring-[3px] focus:ring-foreground/[0.12]"
+        />
+      </div>
+      <div>
+        <label
+          htmlFor="password"
+          className="mb-2 block text-sm font-medium text-foreground"
+        >
+          Password
+        </label>
+        <input
+          id="password"
+          name="password"
+          type="password"
+          autoComplete="current-password"
+          required
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          className="w-full rounded-lg border border-border-subtle bg-surface px-3.5 py-2.5 text-sm text-foreground transition-all duration-150 placeholder:text-muted hover:border-foreground/25 focus:border-foreground/60 focus:outline-none focus:ring-[3px] focus:ring-foreground/[0.12]"
+        />
+      </div>
+      <div>
+        <label
+          htmlFor="totp"
+          className="mb-2 block text-sm font-medium text-foreground"
+        >
+          One-time code{" "}
+          <span className="font-normal text-muted">
+            (only if you have MFA configured)
+          </span>
+        </label>
+        <input
+          id="totp"
+          name="totp"
+          type="text"
+          inputMode="numeric"
+          autoComplete="one-time-code"
+          maxLength={8}
+          spellCheck={false}
+          value={totp}
+          onChange={(e) => {
+            setTotp(e.target.value);
+            if (e.target.value) setShowOtp(true);
+          }}
+          onFocus={() => setShowOtp(true)}
+          className={`w-full rounded-lg border bg-surface px-3.5 py-2.5 text-sm text-foreground transition-all duration-150 placeholder:text-muted focus:outline-none ${
+            showOtp && totp
+              ? "border-foreground/60 focus:ring-[3px] focus:ring-foreground/[0.12]"
+              : "border-border-subtle hover:border-foreground/25 focus:border-foreground/60 focus:ring-[3px] focus:ring-foreground/[0.12]"
+          }`}
+          placeholder="6-digit code"
+        />
+      </div>
+      <Button
+        type="submit"
+        variant="primary"
+        className="w-full py-2.5"
+        disabled={busy}
+      >
+        {busy ? "Signing in…" : "Sign in"}
       </Button>
 
       {/* Seam spec 026 vs spec 015: "Join your organization" crea un USUARIO
           dentro de una org existente (spec 015 D-AUTH-04); "Create your
-          organization" crea la ORGANIZACIÓN nueva (spec 026 /signup).
-          Enlaces planos (no cajas) para no competir con la CTA primaria. */}
+          organization" crea la ORGANIZACIÓN nueva (spec 026 /signup). */}
       <div className="pt-2">
         <div className="relative" aria-hidden="true">
           <div className="absolute inset-0 flex items-center">
@@ -123,9 +252,6 @@ export function LoginForm({
             </span>
           </div>
         </div>
-        {/* Pulido v2 r3 (crítica visual: "secondary actions read like muted
-            utility text"): botones fantasma con borde — affordance clara de
-            táctil sin competir con la CTA primaria (patrón Stripe/Linear). */}
         <div className="mt-3 grid grid-cols-2 gap-2">
           <a
             href={`/register${valid ? `?org=${encodeURIComponent(trimmed)}` : ""}`}
@@ -145,9 +271,8 @@ export function LoginForm({
       </div>
 
       <p className="pt-1 text-xs leading-relaxed text-muted">
-        You will sign in on your organization&apos;s secure page. Your
-        organization may require multi-factor authentication — you can also
-        set it up any time from the console.
+        Your organization may require multi-factor authentication — you can
+        also set it up any time from the console.
       </p>
     </form>
   );

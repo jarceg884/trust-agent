@@ -1,14 +1,14 @@
 "use client";
 
 /**
- * Banner MFA persistente (spec 015 D-AUTH-08, AC-AUTH-003/004).
+ * Banner MFA persistente (spec 015 D-AUTH-08 + v1.3.0 ADR-019).
  *
  * Visible en TODAS las páginas del shell mientras la sesión no tenga MFA
  * verificado (acr < 2) y la org no lo exija por policy — la app SIEMPRE
- * sugiere enrolarlo. "Set up MFA" reinicia el baile con acr=2: el flujo LoA
- * del realm muestra el formulario OTP (enrolamiento TOTP inline si el usuario
- * aún no tiene credencial) y al volver el mint marca mfa_verified=true →
- * el banner desaparece.
+ * sugiere enrolarlo. "Set up MFA" abre el PANEL PROPIO de enrolamiento
+ * (/mfa-setup): el usuario confirma su password, escanea el QR del producto
+ * y confirma el código — Keycloak jamás visible (antes reiniciaba el baile
+ * PKCE con acr=2 y mostraba el formulario OTP del IdP).
  */
 import { ShieldCheck } from "lucide-react";
 import type { WhoAmI } from "@/lib/types";
@@ -16,7 +16,6 @@ import type { WhoAmI } from "@/lib/types";
 export function MfaBanner({ me }: { me: WhoAmI }) {
   if (me.mfa_verified) return null;
 
-  const org = me.tenant_slug;
   return (
     <div
       role="status"
@@ -40,7 +39,7 @@ export function MfaBanner({ me }: { me: WhoAmI }) {
         </div>
       </div>
       <a
-        href={`/auth/login?org=${encodeURIComponent(org)}&acr=2`}
+        href="/mfa-setup"
         className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-foreground px-4 py-2 text-xs font-semibold text-white transition-all duration-150 ease-out hover:opacity-90 active:scale-[0.98]"
       >
         Set up MFA

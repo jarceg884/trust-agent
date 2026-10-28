@@ -367,10 +367,15 @@ def test_tampered_keycloak_token_rejected(client, e2e_user_row):
 
 
 def test_no_password_grant_in_app_code():
-    """AC-CP-026: the API never transports user passwords / ROPC."""
+    """AC-CP-026 (amended by ADR-019, spec 015 v1.3.0): the API never
+    transports user passwords / ROPC — with ONE sanctioned surface: the
+    auth panel (app/auth/panel.py), the product-decided Direct Access
+    Grant behind the login panel (Keycloak never visible). Every other
+    module stays forbidden."""
     import os
 
     app_dir = os.path.join(PLATFORM_DIR, "app")
+    sanctioned = os.path.join(app_dir, "auth", "panel.py")
     hits = []
     for root, _, files in os.walk(app_dir):
         for name in files:
@@ -379,5 +384,7 @@ def test_no_password_grant_in_app_code():
                 with open(path) as fh:
                     for i, line in enumerate(fh, 1):
                         if "grant_type=password" in line or "verify=False" in line:
+                            if os.path.abspath(path) == os.path.abspath(sanctioned):
+                                continue
                             hits.append(f"{path}:{i}")
     assert hits == []

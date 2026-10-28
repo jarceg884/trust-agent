@@ -1684,3 +1684,45 @@ INSERT INTO catalog.audit_actions (action, description) VALUES
   ('usage.exported',
    'Usage analytics CSV exported (per-user or per-request level).')
 ON CONFLICT (action) DO NOTHING;
+
+-- ============================================================================
+-- 21. Evolución spec 015 v1.3.0 (ADR-019, auth panel — Keycloak nunca
+--     visible): estado de los "dances" de autenticación del panel.
+--     Misma migración: db/migrations/versions/20261028_0030_auth_panel_dances.py
+--     (paridad pg_dump exigida por db/tests/test_schema_parity.py)
+-- ============================================================================
+
+-- 21.1 ops.auth_dances — estado intermedio del enrolamiento TOTP (D-AUTH-14)
+--     y del proof-handle de UPDATE_PASSWORD (D-AUTH-15) entre requests.
+--     Pre-autenticación por naturaleza: plano ops, sin RLS (D-DB-01/D-DB-14).
+--     El handle se guarda HASHEADO (sha256, como sessions.jti); passwords
+--     JAMÁS se persisten. TTL 10 minutos; las filas consumidas se borran
+--     (por eso trust_app sí lleva DELETE aquí, a diferencia de login_throttle).
+CREATE TABLE IF NOT EXISTS ops.auth_dances (
+  handle_hash  text PRIMARY KEY,
+  kind         text NOT NULL,
+  realm        text NOT NULL,
+  tenant_id    uuid NOT NULL,
+  email        text NOT NULL,
+  state        jsonb NOT NULL,
+  expires_at   timestamptz NOT NULL,
+  created_at   timestamptz NOT NULL DEFAULT now(),
+  updated_at   timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS ix_auth_dances_expiry ON ops.auth_dances (expires_at);
+
+COMMENT ON TABLE ops.auth_dances IS 'In-flight Keycloak auth dances for the auth panel (ADR-019, D-AUTH-14): TOTP enrollment state between the setup and confirm requests. Handle stored hashed; TTL 10 minutes; NO passwords ever persisted. Provider plane: no RLS.';
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE ops.auth_dances TO trust_app;
+-- El blanket de migrator (§ grants) corre ANTES de esta sección en la vía
+-- schema.sql: el grant explícito mantiene la paridad pg_dump con la
+-- migración (que crea la tabla después del blanket de 0001).
+GRANT ALL ON TABLE ops.auth_dances TO trust_migrator;
+
+-- 21.2 Nuevas acciones de audit (enum versionado, extensión por datos).
+--     Los eventos NUNCA llevan material de credencial (D-AUTH-16).
+INSERT INTO catalog.audit_actions (action, description) VALUES
+  ('auth.totp_enrolled', 'TOTP (MFA) enrolled via the auth panel.'),
+  ('auth.password_changed', 'Password set or changed via the auth panel.')
+ON CONFLICT (action) DO NOTHING;

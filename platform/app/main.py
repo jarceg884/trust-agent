@@ -10,6 +10,7 @@ from starlette.status import HTTP_503_SERVICE_UNAVAILABLE
 from . import errors
 from .audit.router import admin_router as audit_admin_router
 from .audit.router import router as audit_router
+from .auth.panel import router as auth_panel_router
 from .auth.router import me_router, router as auth_router
 from .config import get_settings, validate_device_token_secret, validate_policy_jws_key
 from .connectors.router import router as connectors_router
@@ -96,6 +97,7 @@ def create_app() -> FastAPI:
         return {"status": "ok", "database": "up"}
 
     app.include_router(auth_router)
+    app.include_router(auth_panel_router)  # spec 015 v1.3.0 (ADR-019 panel)
     app.include_router(me_router)
     app.include_router(jobs_router)
     app.include_router(audit_router)
