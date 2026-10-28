@@ -100,8 +100,19 @@ services:
       - "127.0.0.1:8080:8080"
     volumes:
       - kc_data:/opt/keycloak/data
+      # Spec 015 D-AUTH-01: white-label login theme (start-dev does not
+      # cache themes, so edits land without a restart).
+      # The theme dir is TRACKED in git on purpose: a `git stash -u` /
+      # `git clean -fd` on the shared tree deletes an untracked host dir and
+      # the recreated dir gets a new inode, leaving this bind mount stale
+      # (empty inside the container) with NO error anywhere — Keycloak
+      # silently falls back to the stock theme (t_689fda26).
+      - ./platform/idp-themes/trust-agent:/opt/keycloak/themes/trust-agent:ro
     healthcheck:
-      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/8080 && printf 'GET /realms/master/.well-known/openid-configuration HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && grep -q ' 200 ' <&3"]
+      # The `test -f` clause makes a stale/empty theme mount LOUD: without
+      # it the container stays "healthy" while serving the stock Keycloak
+      # login + horse favicon (silent AC-AUTH-001 regression).
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/8080 && printf 'GET /realms/master/.well-known/openid-configuration HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && grep -q ' 200 ' <&3 && test -f /opt/keycloak/themes/trust-agent/login/theme.properties"]
       interval: 10s
       timeout: 5s
       retries: 30
