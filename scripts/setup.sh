@@ -43,27 +43,41 @@ else
 fi
 
 # --- 2) secretos donde haya placeholder --------------------------------------
-gen_if_placeholder() { # $1=key  $2=generador
-  local current; current="$(env_get "$1")"
-  if is_placeholder "$current"; then
-    env_set "$1" "$("$2")"
+# NOTA: el valor se evalúa EN EL CALLSITE (bug hallado por la evidencia
+# fresh-clone del tag v0.1.0-pilot: `"$2"` con "rand_hex 24" busca un
+# comando llamado literalmente "rand_hex 24" → secret vacío → Keycloak
+# sin password no arranca). Nunca pases generadores como string.
+gen_if_placeholder() { # $1=key  $2=valor ya generado
+  if is_placeholder "$(env_get "$1")"; then
+    env_set "$1" "$2"
     echo "[setup] $1 generado (aleatorio)"
   fi
 }
-gen_if_placeholder POSTGRES_PASSWORD                "rand_hex 24"
-gen_if_placeholder TRUST_APP_PASSWORD               "rand_hex 24"
-gen_if_placeholder TRUST_MIGRATOR_PASSWORD          "rand_hex 24"
-gen_if_placeholder KC_ADMIN_PASSWORD                "rand_hex 24"
-gen_if_placeholder TRUST_DEVICE_TOKEN_SECRET        "rand_hex 32"
-gen_if_placeholder TRUST_VAULT_KEK_B64              "rand_b64 32"
-gen_if_placeholder TRUST_PROVIDER_TOKEN             "rand_hex 32"
-gen_if_placeholder LITELLM_DB_PASSWORD              "rand_hex 24"
-gen_if_placeholder LITELLM_MASTER_KEY               "rand_hex 32"
+gen_if_placeholder POSTGRES_PASSWORD                "$(rand_hex 24)"
+gen_if_placeholder TRUST_APP_PASSWORD               "$(rand_hex 24)"
+gen_if_placeholder TRUST_MIGRATOR_PASSWORD          "$(rand_hex 24)"
+gen_if_placeholder KC_ADMIN_PASSWORD                "$(rand_hex 24)"
+gen_if_placeholder TRUST_DEVICE_TOKEN_SECRET        "$(rand_hex 32)"
+gen_if_placeholder TRUST_VAULT_KEK_B64              "$(rand_b64 32)"
+gen_if_placeholder TRUST_PROVIDER_TOKEN             "$(rand_hex 32)"
+gen_if_placeholder LITELLM_DB_PASSWORD              "$(rand_hex 24)"
+gen_if_placeholder LITELLM_MASTER_KEY               "$(rand_hex 32)"
 # Clave RSA-2048 PKCS#8 (PEM base64) que firma el governance bundle.
-if is_placeholder "$(env_get TRUST_POLICY_JWS_PRIVATE_KEY_B64)"; then
-  env_set TRUST_POLICY_JWS_PRIVATE_KEY_B64 "$(openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 2>/dev/null | base64 -w0)"
-  echo "[setup] TRUST_POLICY_JWS_PRIVATE_KEY_B64 generado (RSA-2048)"
-fi
+gen_if_placeholder TRUST_POLICY_JWS_PRIVATE_KEY_B64 \
+  "$(openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 2>/dev/null | base64 -w0)"
+
+# Guard fail-fast (constitution IV): si algún secreto fail-closed quedó
+# vacío/placeholder, abortar ANTES del arranque con mensaje accionable —
+# que falle setup.sh, no el contenedor a mitad de compose up.
+for REQ in POSTGRES_PASSWORD TRUST_APP_PASSWORD TRUST_MIGRATOR_PASSWORD \
+           KC_ADMIN_PASSWORD TRUST_DEVICE_TOKEN_SECRET TRUST_VAULT_KEK_B64 \
+           TRUST_POLICY_JWS_PRIVATE_KEY_B64 TRUST_PROVIDER_TOKEN; do
+  if is_placeholder "$(env_get "$REQ")"; then
+    echo "[setup] ERROR: $REQ sigue vacío o con placeholder tras la generación." >&2
+    echo "[setup]        Edítalo a mano en .env con un valor fuerte y re-ejecuta." >&2
+    exit 1
+  fi
+done
 
 # --- 3) derivación de URLs públicas (modo servidor) ---------------------------
 BASE="$(env_get TRUST_PUBLIC_BASE_URL)"
