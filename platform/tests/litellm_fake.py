@@ -9,6 +9,7 @@ server implementing exactly the documented Admin API contract that
 - POST /key/block     -> accepts the sha256 hash as "key" (verified against
                          production LiteLLM behaviour)
 - POST /key/unblock   -> same
+- POST /key/update    -> re-sync of the native max_budget (D-GOV-16)
 - GET  /key/info?key= -> key record
 - GET  /spend/logs/v2 -> paginated logs with request_id, spend (USD),
                          startTime, tokens and the spend_logs_metadata
@@ -29,6 +30,7 @@ import secrets
 import threading
 import uuid
 from datetime import datetime, timezone
+from decimal import Decimal, ROUND_HALF_UP
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -36,17 +38,28 @@ MASTER_KEY = "sk-master-test"
 
 
 class LiteLLMFake:
-    def __init__(self, prices: dict[str, tuple[int, int]] | None = None):
-        # model -> (input_cents_per_m, output_cents_per_m)
+    # Deterministic data-plane token counts of one chat call: the cost is
+    # always TOKENS_IN*cin + TOKENS_OUT*cout ¢/M (see per_call_cents).
+    TOKENS_IN = 100_000
+    TOKENS_OUT = 50_000
+
+    def __init__(self, prices: dict[str, tuple[float, float]] | None = None):
+        # model -> (input_cents_per_m, output_cents_per_m) — precios REALES
+        # del catálogo MaaS intl (spec 018, peor caso P1; ¢/M USD).
         self.prices = prices or {
-            "qwen2.5-72b-instruct": (400, 1200),
-            "deepseek-v3": (270, 1090),
+            "glm-5.2": (140, 440),
+            "deepseek-v4-flash": (13.5, 27),
         }
         self.keys: dict[str, dict] = {}       # sha256 -> record
         self.logs: list[dict] = []
         self.block_calls: list[str] = []
         self.unblock_calls: list[str] = []
+        self.update_calls: list[dict] = []
         self.generate_calls: list[dict] = []
+        # Spec 032: DB-registered models (/model/new — store_model_in_db).
+        # model_name -> {"model_id", "litellm_params", "model_info"}
+        self.models: dict[str, dict] = {}
+        self.model_delete_calls: list[str] = []
         outer = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -76,6 +89,21 @@ class LiteLLMFake:
                         self._json(404, {"error": "Key not found."})
                         return
                     self._json(200, {"key": rec["public"]})
+                    return
+                if self.path.startswith("/model/info"):
+                    # Spec 032: DB models carry model_info.id (the uuid
+                    # /model/delete needs) + db_model=True (real contract).
+                    self._json(200, {"data": [
+                        {"model_name": name,
+                         "model_info": {"id": rec["model_id"],
+                                        "db_model": True}}
+                        for name, rec in outer.models.items()
+                    ]})
+                    return
+                if self.path.startswith("/v1/models"):
+                    names = sorted(set(outer.prices) | set(outer.models))
+                    self._json(200, {"data": [{"id": n, "object": "model"}
+                                              for n in names]})
                     return
                 if self.path.startswith("/spend/logs/v2"):
                     q = parse_qs(urlparse(self.path).query)
@@ -128,15 +156,31 @@ class LiteLLMFake:
                             "type": "budget_exceeded",
                         }})
                         return
-                    tin, tout = 100_000, 50_000  # deterministic token counts
-                    cin, cout = outer.prices.get(model, (400, 1200))
-                    # USD: tokens * cents_per_million / 1e6 / 100
-                    cost_usd = (tin * cin + tout * cout) / 1_000_000 / 100
+                    tin, tout = outer.TOKENS_IN, outer.TOKENS_OUT  # deterministic
+                    # Spec 032: registered DB models price from their
+                    # model_info (USD/token, as /model/new received);
+                    # central models from the catalog prices. Unknown
+                    # models do not route (real gateway: 404).
+                    registered = outer.models.get(model)
+                    if registered is not None:
+                        info = registered.get("model_info") or {}
+                        icpt = float(info.get("input_cost_per_token") or 0.0)
+                        ocpt = float(info.get("output_cost_per_token") or 0.0)
+                        cost_usd = tin * icpt + tout * ocpt
+                    elif model in outer.prices:
+                        cin, cout = outer.prices[model]
+                        # USD: tokens * cents_per_million / 1e6 / 100
+                        cost_usd = (tin * cin + tout * cout) / 1_000_000 / 100
+                    else:
+                        self._json(404, {"error": {
+                            "message": f"Model {model} not found"}})
+                        return
                     pub["spend"] += cost_usd
                     request_id = str(uuid.uuid4())
                     outer.logs.append({
                         "request_id": request_id,
                         "user_api_key_hash": token,
+                        "api_key": token,  # field name of the REAL proxy (t_c4766c4d)
                         "model": model,
                         "spend": cost_usd,
                         "tokens": tin,
@@ -190,6 +234,55 @@ class LiteLLMFake:
                         .append(token)
                     self._json(200, {"blocked": blocking})
                     return
+                if self.path == "/key/update":
+                    # Re-sync of the native max_budget (D-GOV-16): the
+                    # platform calls this after a budget change so the
+                    # gateway's own enforcement follows the platform.
+                    token = body.get("key")
+                    rec = outer.keys.get(token)
+                    if rec is None:
+                        self._json(404, {"error": "Key not found."})
+                        return
+                    if "max_budget" in body and body["max_budget"] is not None:
+                        rec["public"]["max_budget"] = body["max_budget"]
+                        outer.update_calls.append(
+                            {"key": token,
+                             "max_budget": body["max_budget"]})
+                    self._json(200, {"key": rec["public"]["key_alias"],
+                                     "max_budget": rec["public"]["max_budget"]})
+                    return
+                if self.path == "/model/new":
+                    # Spec 032: register a DB model (store_model_in_db).
+                    # Real contract: returns model_id (uuid) — /model/delete
+                    # needs THAT id, not the name.
+                    name = body.get("model_name", "")
+                    if not name:
+                        self._json(400, {"error": "model_name required"})
+                        return
+                    model_id = str(uuid.uuid4())
+                    outer.models[name] = {
+                        "model_id": model_id,
+                        "litellm_params": body.get("litellm_params", {}),
+                        "model_info": body.get("model_info", {}),
+                    }
+                    self._json(200, {"model_id": model_id,
+                                     "model_name": name,
+                                     "litellm_params":
+                                         body.get("litellm_params", {})})
+                    return
+                if self.path == "/model/delete":
+                    model_id = body.get("id", "")
+                    for name, rec in list(outer.models.items()):
+                        if rec["model_id"] == model_id:
+                            del outer.models[name]
+                            outer.model_delete_calls.append(model_id)
+                            self._json(200, {
+                                "message": f"Model: {model_id} deleted "
+                                           "successfully"})
+                            return
+                    self._json(404, {"error": {
+                        "message": f"Model with id={model_id} not found in db"}})
+                    return
                 self._json(404, {"error": "not found"})
 
             def log_message(self, *args):  # silence
@@ -204,6 +297,22 @@ class LiteLLMFake:
     @property
     def base_url(self) -> str:
         return f"http://127.0.0.1:{self.port}"
+
+    def per_call_cents(self, model: str) -> Decimal:
+        """EXACT cost in USD cents of ONE chat call (D-GOV-17, gap B-2).
+
+        Same computation the spend worker performs on this double's logs
+        (`_usd_to_milli_cents`: Decimal chain + quantize 0.001¢
+        ROUND_HALF_UP), so budget math in the suites follows the REAL
+        pricing — deepseek-v4-flash costs 2.700¢ per call, not the rounded
+        3¢ the old integer helper reported (t_378503a1 + t_8bd1fee8).
+        """
+        cin, cout = self.prices.get(model, (140, 440))
+        cost_usd = (self.TOKENS_IN * cin + self.TOKENS_OUT * cout) \
+            / 1_000_000 / 100
+        return (Decimal(str(cost_usd)) * 100).quantize(
+            Decimal("0.001"), rounding=ROUND_HALF_UP
+        )
 
     def chat(self, key: str, model: str) -> tuple[int, dict]:
         """Direct data-plane call helper for tests."""

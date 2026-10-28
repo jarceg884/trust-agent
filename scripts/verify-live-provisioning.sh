@@ -101,7 +101,9 @@ challenge = base64.urlsafe_b64encode(
     hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
 params = {
     "response_type": "code", "client_id": "trust-agent-web", "scope": "openid",
-    "redirect_uri": "http://127.0.0.1:9090/auth/callback",
+    # Callback del helper trust-login del bundle de descarga (spec 023
+    # D-023-13): el flujo real de desktop. Retirado el demo :9090 (t_b8769ecb).
+    "redirect_uri": "http://127.0.0.1:8765/callback",
     "state": "st-live", "code_challenge": challenge,
     "code_challenge_method": "S256",
 }

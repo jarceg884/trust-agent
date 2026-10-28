@@ -1,48 +1,81 @@
 /**
- * Login del operador del proveedor (spec 014 REQ-PC-010, D-PC-02).
+ * Login del operador del proveedor (spec 025, REQ-PS-003/004/008).
  *
- * Valida el token pegado contra el control plane REAL (`GET /api/admin/tenants`
- * con el token como Bearer): 200 ⇒ cookie httpOnly + redirect a la lista;
- * 401/403/503 ⇒ redirect a /login con el reason real (fail-closed).
+ * Usuario+contraseña(+TOTP si MFA activa) contra el control plane REAL
+ * (`POST /api/provider/auth/login`): 200 ⇒ cookie httpOnly con el token de
+ * sesión `pst1…` (D-PS-04 — el token jamás llega a JS del navegador) +
+ * estado del operador para que la UI enrute (required action / tenants).
+ * 401 `mfa_code_required` ⇒ la UI pide el código TOTP (no es un error
+ * terminal); 429 throttle; 503 fail-closed sin operador seedeado.
  */
 import { NextResponse } from "next/server";
-import { api } from "@/lib/control-plane";
+import { api, ApiError } from "@/lib/control-plane";
 import { setProviderCookie } from "@/lib/provider-session";
 
+interface LoginOk {
+  operator: {
+    username: string;
+    must_change_password: boolean;
+    mfa_enrolled: boolean;
+  };
+  session_token: string;
+  expires_at: string;
+}
+
 export async function POST(request: Request) {
-  let token = "";
+  let body: { username?: unknown; password?: unknown; totp_code?: unknown };
   try {
-    const body = (await request.json()) as { token?: unknown };
-    token = typeof body.token === "string" ? body.token.trim() : "";
+    body = (await request.json()) as typeof body;
   } catch {
-    // body inválido → token vacío → 401 real abajo
-  }
-  if (!token) {
     return NextResponse.json(
-      { ok: false, reason: "invalid_token", message: "Enter the provider token." },
-      { status: 401 },
+      { ok: false, reason: "validation_failed", message: "Invalid request body." },
+      { status: 422 },
+    );
+  }
+  const username = typeof body.username === "string" ? body.username.trim() : "";
+  const password = typeof body.password === "string" ? body.password : "";
+  const totpCode =
+    typeof body.totp_code === "string" && body.totp_code.trim()
+      ? body.totp_code.trim()
+      : undefined;
+  if (!username || !password) {
+    return NextResponse.json(
+      {
+        ok: false,
+        reason: "validation_failed",
+        message: "Enter your username and password.",
+      },
+      { status: 422 },
     );
   }
 
   try {
-    // Validación real: el control plane decide si el token es del proveedor.
-    await api("/api/admin/tenants", { bearer: token });
+    const result = await api<LoginOk>("/api/provider/auth/login", {
+      method: "POST",
+      body: { username, password, totp_code: totpCode },
+    });
+    // El token de sesión vive SOLO en la cookie httpOnly (D-PS-04).
+    await setProviderCookie(result.session_token);
+    return NextResponse.json({
+      ok: true,
+      operator: {
+        username: result.operator.username,
+        must_change_password: result.operator.must_change_password,
+        mfa_enrolled: result.operator.mfa_enrolled,
+      },
+    });
   } catch (cause) {
-    const status = cause instanceof Error && "status" in cause
-      ? (cause as { status: number }).status
-      : 503;
-    const reason = cause instanceof Error && "reason" in cause
-      ? (cause as { reason: string }).reason
-      : "unreachable";
-    const message = cause instanceof Error ? cause.message : "Validation failed.";
+    if (cause instanceof ApiError) {
+      return NextResponse.json(
+        { ok: false, reason: cause.reason, message: cause.message },
+        { status: cause.status },
+      );
+    }
     return NextResponse.json(
-      { ok: false, reason, message },
-      { status: status === 503 ? 503 : status },
+      { ok: false, reason: "unreachable", message: "Validation failed." },
+      { status: 503 },
     );
   }
-
-  await setProviderCookie(token);
-  return NextResponse.json({ ok: true });
 }
 
 export const runtime = "nodejs";

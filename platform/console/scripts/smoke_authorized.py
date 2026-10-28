@@ -26,11 +26,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import jwt
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-API_HOST, API_PORT = "127.0.0.1", 8001
+API_HOST, API_PORT = "127.0.0.1", 8000  # API canónico del compose (antes 8001, entorno ad-hoc retirado)
 CONSOLE_HOST, CONSOLE_PORT = "127.0.0.1", 3100
 IDP_PORT = 8908
 ISSUER = f"http://127.0.0.1:{IDP_PORT}/realms/demo-org"
-TENANT_ID = "6bf3f5f4-0d45-4396-a97d-af0aeba4d2b0"
+TENANT_ID = "8142bc02-0c21-4b5b-b409-a9ed492ea7d0"  # demo-org provisionado real (provider API)
 ADMIN_SUB = "32239d41-3392-4d8c-b00c-2eb80e12dc6d"
 ADMIN_EMAIL = "alex.morgan@demo-org.test"
 KID = "console-smoke-kid"
@@ -152,11 +152,11 @@ def main() -> int:
           bool(minted.get("refresh_token")) and bool(minted.get("csrf_token")) and minted.get("session_token") is None,
           body[:200])
 
-    # --- Cookies del console (custodia idéntica al callback) ---------------
+    # --- Cookies del console (custodia idéntica al callback; prefijo por app F2)
     COOKIES.clear()
-    COOKIES["ta_session"] = session_cookie
-    COOKIES["ta_refresh"] = minted["refresh_token"]
-    COOKIES["ta_csrf"] = minted["csrf_token"]
+    COOKIES["ta_console_session"] = session_cookie
+    COOKIES["ta_console_refresh"] = minted["refresh_token"]
+    COOKIES["ta_console_csrf"] = minted["csrf_token"]
 
     def proxy(path, method="GET", payload=None, extra_headers=None):
         data = json.dumps(payload).encode() if payload is not None else None
@@ -207,7 +207,7 @@ def main() -> int:
 
     st, body, _ = proxy("/budgets/org", method="PUT",
                         payload={"amount_cents": (initial_budget or 0) + 10000, "period": "monthly"},
-                        extra_headers={"X-CSRF-Token": COOKIES["ta_csrf"]})
+                        extra_headers={"X-CSRF-Token": COOKIES["ta_console_csrf"]})
     check("mutación con X-CSRF-Token → 200 (presupuesto actualizado)", st == 200, f"HTTP {st} {body[:200]}")
 
     st, body, _ = proxy("/budgets/overview")
@@ -239,7 +239,7 @@ def main() -> int:
     check("POST /auth/logout → redirect a /login", st in (301, 302, 303, 307) and "/login" in hdrs.get("location", ""),
           f"HTTP {st}")
     check("cookies de sesión limpiadas tras logout",
-          not COOKIES.get("ta_session") and not COOKIES.get("ta_csrf"), str(sorted(COOKIES)))
+          not COOKIES.get("ta_console_session") and not COOKIES.get("ta_console_csrf"), str(sorted(COOKIES)))
 
     print()
     if failures:

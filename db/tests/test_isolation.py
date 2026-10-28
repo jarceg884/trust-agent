@@ -29,7 +29,7 @@ def _insert_for(table: str, tenant_id: str, n: int):
     dept = DEPT_A1 if tenant_id == TENANT_A else DEPT_B1
     user = USER_A1 if tenant_id == TENANT_A else USER_B1
     vault = VAULT_A1 if tenant_id == TENANT_A else VAULT_B1
-    model = "deepseek-v3" if tenant_id == TENANT_A else "qwen2.5-72b-instruct"
+    model = "deepseek-v4-flash" if tenant_id == TENANT_A else "glm-5.2"
     # depto sin presupuesto sembrado (evita chocar con el unique de scope)
     free_dept = DEPT_A2 if tenant_id == TENANT_A else DEPT_B1
     rows = {
@@ -63,7 +63,7 @@ def _insert_for(table: str, tenant_id: str, n: int):
         "spend_ledger": (
             "INSERT INTO spend_ledger (tenant_id, request_id, model_name, mode, "
             "cost_base_cents, cost_billed_cents, occurred_at) VALUES (%s, %s, %s, 'central', 10, 10, %s)",
-            (tenant_id, f"req-{n}-{u.hex[:12]}", "deepseek-v3", datetime.now(timezone.utc)),
+            (tenant_id, f"req-{n}-{u.hex[:12]}", "deepseek-v4-flash", datetime.now(timezone.utc)),
         ),
         "policies": (
             "INSERT INTO policies (id, tenant_id, level, key, value) "
@@ -78,6 +78,14 @@ def _insert_for(table: str, tenant_id: str, n: int):
             "INSERT INTO vault_credentials (id, tenant_id, user_id, name, credential_type, "
             "ciphertext_secret, ciphertext_dek, nonce, key_id) VALUES (%s, %s, %s, %s, 'api_key', %s, %s, %s, 'kek-v1')",
             (u, tenant_id, user, f"cred-{n}-{u.hex[:8]}", _CT, _CT, _CT[:12]),
+        ),
+        # spec 024: conexión personalizada del admin (mismo contrato cifrado
+        # que vault_credentials; created_by con FK compuesta al user del tenant).
+        "vault_connections": (
+            "INSERT INTO vault_connections (id, tenant_id, created_by, name, kind, "
+            "ciphertext_secret, ciphertext_dek, nonce, key_id) "
+            "VALUES (%s, %s, %s, %s, 'database', %s, %s, %s, 'kek-v1')",
+            (u, tenant_id, user, f"conn-{n}-{u.hex[:8]}", _CT, _CT, _CT[:12]),
         ),
         "connector_instances": (
             "INSERT INTO connector_instances (id, tenant_id, user_id, connector_slug, credential_id) "
@@ -133,6 +141,19 @@ def _insert_for(table: str, tenant_id: str, n: int):
             "(tenant_id, last_seq, last_hash, purged_rows) "
             "VALUES (%s, 1, %s, 1)",
             (tenant_id, "c" * 64),
+        ),
+        # spec 028 (branding REQ-BRD-004): assets bytea + historial de
+        # versiones publicadas.
+        "branding_assets": (
+            "INSERT INTO branding_assets "
+            "(tenant_id, kind, mime, size_bytes, sha256, content) "
+            "VALUES (%s, 'logo_light', 'image/png', 8, %s, %s)",
+            (tenant_id, "a" * 64, b"\x89PNG\r\n\x1a\n"),
+        ),
+        "branding_versions": (
+            "INSERT INTO branding_versions (tenant_id, version, data) "
+            "VALUES (%s, %s, '{}')",
+            (tenant_id, n),
         ),
     }
     return rows[table]

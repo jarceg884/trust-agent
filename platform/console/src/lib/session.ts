@@ -1,14 +1,16 @@
 /**
  * Custodia de tokens del Admin Console (spec 009 D-AC-01/10).
  *
- * El servidor Next.js local guarda en cookies del origen del console:
- *   ta_session  — session_token (httpOnly; el proxy lo reenvía como cookie
- *                 `trust_session` del control plane)
- *   ta_refresh  — refresh_token (httpOnly; rotación on-401)
- *   ta_csrf     — csrf_token de la sesión admin (legible por JS: el navegador
- *                 debe ponerlo en X-CSRF-Token y el control plane valida el
- *                 hash — REQ-SEC-010; no es un secreto de portador)
- *   ta_pkce_*   — verifier/state/org del baile PKCE en curso (10 min)
+ * El servidor Next.js local guarda en cookies del origen del console
+ * (prefijadas `ta_console_*` para no colisionar con otras apps Next.js en
+ * el mismo host — las cookies NO distinguen puertos, F2 de qa-console-repro):
+ *   ta_console_session  — session_token (httpOnly; el proxy lo reenvía como
+ *                 cookie `trust_session` del control plane)
+ *   ta_console_refresh  — refresh_token (httpOnly; rotación on-401)
+ *   ta_console_csrf     — csrf_token de la sesión admin (legible por JS: el
+ *                 navegador debe ponerlo en X-CSRF-Token y el control plane
+ *                 valida el hash — REQ-SEC-010; no es un secreto de portador)
+ *   ta_console_pkce_*   — verifier/state/org del baile PKCE en curso (10 min)
  *
  * El navegador JAMÁS lee session/refresh (httpOnly). Cero estado de sesión en
  * memoria de proceso (constitution IV): todo vive en cookies + PostgreSQL.
@@ -16,14 +18,16 @@
 import { cookies } from "next/headers";
 
 export const COOKIE = {
-  session: "ta_session",
-  refresh: "ta_refresh",
-  csrf: "ta_csrf",
-  pkceVerifier: "ta_pkce_verifier",
-  oauthState: "ta_oauth_state",
-  loginOrg: "ta_login_org",
+  // Prefijo por app: las apps Next.js comparten host 127.0.0.1 y las
+  // cookies no distinguen puertos (F2). Nombres exclusivos = aislamiento total.
+  session: "ta_console_session",
+  refresh: "ta_console_refresh",
+  csrf: "ta_console_csrf",
+  pkceVerifier: "ta_console_pkce_verifier",
+  oauthState: "ta_console_oauth_state",
+  loginOrg: "ta_console_login_org",
   /** Marca de que el login en curso ya es un re-intento de step-up MFA. */
-  stepup: "ta_stepup",
+  stepup: "ta_console_stepup",
 } as const;
 
 const baseCookie = {

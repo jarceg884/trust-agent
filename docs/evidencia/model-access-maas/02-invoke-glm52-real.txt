@@ -1,0 +1,4 @@
+=== 3. POST http://127.0.0.1:4000/v1/chat/completions (glm-5.2 via proxy -> MaaS real) ===
+model: glm-5.2
+content: 'ok'
+usage: {'prompt_tokens': 20, 'completion_tokens': 149}

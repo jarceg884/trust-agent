@@ -24,3 +24,14 @@ out/
 # Logs y estado efímero
 *.log
 /tmp/
+
+# Lock de serialización de migraciones (runtime, ADR 0001)
+db/migrations/.versions.lock
+
+# E2E spec 023 (hermes-download): homes de empleados de prueba con claves
+# de dispositivo y tokens — NUNCA al repo (constitution IV).
+.e2e/
+
+# Estado runtime del bridge Hermes real (tokens de sesión en claro) —
+# lo escribe el plugin enrolado en vivo; jamás al repo (constitution IV).
+.state-hermes-bridge.json

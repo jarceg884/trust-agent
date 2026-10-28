@@ -1,7 +1,8 @@
 /**
  * Detalle de tenant (spec 014 REQ-PC-013/014/017): estado canónico, counts,
  * presupuesto/gasto, healthcheck en vivo, suspend/reactivate con confirmación,
- * link a la Admin Console del tenant y Hermes download link (D-PC-09).
+ * link a la Admin Console del tenant (D-PC-07). Sin download link —
+ * corrección Miller t_360a752e (vive en el Admin Console del cliente).
  */
 import { ApiError, api } from "@/lib/control-plane";
 import { getProviderToken } from "@/lib/provider-session";

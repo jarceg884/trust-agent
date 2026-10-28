@@ -46,6 +46,19 @@ export function dateTime(iso: string | null | undefined): string {
   }).format(d);
 }
 
+/** ISO → hora local "14:03:25" (timeline de audit, spec 021). */
+export function timeOnly(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return new Intl.DateTimeFormat("en-US", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).format(d);
+}
+
 /** ISO → "3m ago" / "2h ago" / "5d ago". */
 export function timeAgo(iso: string | null | undefined): string {
   if (!iso) return "—";

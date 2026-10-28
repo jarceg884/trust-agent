@@ -55,6 +55,22 @@ def _load_level(
     return {r["key"]: r["value"] for r in rows}
 
 
+def org_policy_value(conn: Connection, key: str) -> Any:
+    """Effective ORG-level value for a policy key (spec 015 D-AUTH-07/08).
+
+    Org row if present, else the catalog default. Department/user overrides
+    do NOT apply: `require_mfa` / `allow_self_registration` gate
+    organization-wide behavior (login UX, registration) that happens before
+    any department context exists.
+    """
+    catalog = load_policy_catalog(conn)
+    entry = catalog.get(key)
+    if entry is None:
+        return None
+    org = _load_level(conn, level="org", department_id=None, user_id=None)
+    return org.get(key, entry["default_value"])
+
+
 def effective_policy(
     conn: Connection, *, user_id: str, department_id: str | None,
 ) -> dict[str, Any]:

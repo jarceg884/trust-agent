@@ -1,0 +1,23 @@
+# Gateway LiteLLM REAL del Trust Agent — dependencias PINNEADAS.
+#
+# SEGURIDAD / supply chain (contexto del operador, 2026-10-24):
+# - 2026-10-21: litellm v1.107.0 se publicó en PyPI/Docker con MALWARE
+#   (robo de credenciales + RCE) entre las 11:39-14:20 UTC; release
+#   retirado. Las versiones previas son seguras.
+# - CVE-2026-114612 (CVSS 9.9, escalada a proxy admin via salt key):
+#   fixed en 1.100.4/1.101.3/1.102.2/1.103.1/1.104.0-rc.2.
+# - CVE-2026-49468 (auth bypass por Host header): fixed en 1.84.0.
+# - 1.106.3 (subida a PyPI 2026-10-24 09:14 UTC, POST-containment) cubre
+#   ambos CVEs y NO es la versión comprometida. Venv inspeccionado: solo
+#   _virtualenv.pth estándar, cero indicadores de malware.
+#
+# REGLAS:
+# 1. QUEDA PINNEADO a 1.106.3 — JAMÁS 'latest' ni tags flotantes de Docker.
+# 2. Antes de cualquier upgrade futuro, revisar
+#    docs.litellm.ai/blog/tags/incident-report + advisories de seguridad.
+# 3. PENDIENTE: disclosure EMBARGOADO con fecha 2026-10-27 — re-check
+#    obligatorio de esa advisory antes de mover la versión.
+# 4. El gateway SOLO escucha en 127.0.0.1 (sin exposición a red).
+litellm[proxy]==1.106.3
+litellm[extra_proxy]==1.106.3
+prisma<1

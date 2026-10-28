@@ -13,8 +13,17 @@ from conftest import (
     USER_CAROL, USER_DAVE, _admin, bearer_headers, mint,
 )
 
-TEST_DB = "trust_agent_platform_test"
-QWEN = "qwen2.5-72b-instruct"
+import os  # noqa: E402 (honor TRUST_TEST_DB como tests/conftest.py)
+TEST_DB = os.environ.get("TRUST_TEST_DB", "trust_agent_platform_test")
+QWEN = "glm-5.2"
+
+# Sandbox de módulo (t_e000bf40): este módulo ingesta filas REALES de HOY
+# en spend_ledger vía el worker (chats contra el doble). Sin limpieza,
+# esas filas rompen los conteos EXACTOS sobre la ventana 'today' del
+# tenant que hacen suites posteriores (test_usage_analytics). El fixture
+# (conftest) borra al salir SOLO el delta de filas creadas aquí y
+# restaura budget_counters al snapshot exacto.
+pytestmark = pytest.mark.usefixtures("ledger_delta_sandbox")
 
 
 @pytest.fixture()
@@ -104,7 +113,7 @@ def test_ingest_idempotent_counters_byok(client, idp, litellm_fake, worker,
     assert all_byok, "Carol tiene aprobación user-level byok"
     assert no_margin, "BYOK no aplica margen (REQ-BUD-011)"
 
-    carol_cents = 100 * rows
+    carol_cents = litellm_fake.per_call_cents(QWEN) * rows
     assert _counter(admin_conn, "user", USER_CAROL) == carol_cents
     assert _counter(admin_conn, "dept", DEPT_A1) >= carol_cents
     assert _counter(admin_conn, "org", TENANT_A) >= carol_cents
@@ -146,8 +155,17 @@ def test_central_margin_applied(client, idp, litellm_fake, worker, admin_conn):
         )
         mode, base, billed = cur.fetchone()
     assert mode == "central"
-    assert base == 100
-    assert billed == 110  # 10 % de margen
+    # Montos dinámicos desde el precio real del doble (t_378503a1). El
+    # margen es Decimal exacto re-cuantizado a 0.001¢ ROUND_HALF_UP
+    # (D-GOV-17, gap B-2 t_8bd1fee8): base × (10_000 + bps)/10_000 —
+    # JAMÁS el floor entero viejo (36¢ × 1.1 = 39.600, no 39).
+    from decimal import Decimal, ROUND_HALF_UP
+    per_call = litellm_fake.per_call_cents(QWEN)
+    assert base == per_call
+    expected_billed = (
+        Decimal(per_call) * 11_000 / Decimal(10_000)
+    ).quantize(Decimal("0.001"), rounding=ROUND_HALF_UP)
+    assert billed == expected_billed  # 10 % de margen (bps 1000)
 
     with admin_conn.cursor() as cur:
         cur.execute(f"UPDATE tenants SET maas_margin_bps = 0 "
@@ -162,7 +180,9 @@ def test_user_cutoff_blocks_keys_and_notifies(client, idp, litellm_fake,
     alice = mint(client, idp, "alice")
     carol = mint(client, idp, "carol")
 
-    spent = _counter(admin_conn, "user", USER_CAROL)
+    # D-GOV-17: _counter devuelve Decimal (milli-centavo); el contrato del
+    # API sigue siendo amount_cents entero → coerción explícita aquí.
+    spent = int(_counter(admin_conn, "user", USER_CAROL))
     assert spent > 0, "el ingest anterior dejó gasto para Carol"
     # Presupuesto por debajo del gasto (force audita la decisión).
     resp = client.put(f"/api/budgets/user/{USER_CAROL}",
@@ -207,9 +227,11 @@ def test_threshold_notification_and_unblock(client, idp, litellm_fake, worker,
     alice = mint(client, idp, "alice")
     carol = mint(client, idp, "carol")
 
-    spent = _counter(admin_conn, "user", USER_CAROL)
-    # Presupuesto por encima del gasto pero dentro del umbral 80 %.
-    budget = spent + 50
+    # D-GOV-17: _counter devuelve Decimal; el API espera amount_cents entero.
+    spent = int(_counter(admin_conn, "user", USER_CAROL))
+    # Presupuesto por encima del gasto pero dentro del umbral 80 %:
+    # spent < budget <= spent / 0.8 (dinámico, t_378503a1).
+    budget = max(spent + 1, int(spent * 1.1))
     assert spent >= budget * 0.8  # sigue en zona de umbral
     resp = client.put(f"/api/budgets/user/{USER_CAROL}",
                       json={"amount_cents": budget, "force": True},
@@ -253,16 +275,18 @@ def test_threshold_notification_and_unblock(client, idp, litellm_fake, worker,
 
 def test_native_gateway_cutoff(client, idp, litellm_fake, admin_conn):
     """Corte NATIVO del gateway (max_budget de la key, ADR-014 plano 1):
-    presupuesto de $2 → la 3ª invocación → 429 budget_exceeded."""
+    presupuesto de exactamente 2 llamadas → la 3ª invocación → 429."""
     alice = mint(client, idp, "alice")
-    # Presupuesto de 200 cents ($2) para que la key nueva nazca con
-    # max_budget = 2.0 USD (cada invocación cuesta $1 en el doble).
+    # Presupuesto de 2 llamadas (dinámico según el precio del doble,
+    # t_378503a1) para que la key nueva nazca con ese max_budget en USD.
+    # D-GOV-17: per_call_cents es Decimal exacto → int() para el API.
+    per_call = litellm_fake.per_call_cents(QWEN)
     resp = client.put(f"/api/budgets/user/{USER_CAROL}",
-                      json={"amount_cents": 200, "force": True},
+                      json={"amount_cents": int(2 * per_call), "force": True},
                       headers=bearer_headers(alice))
     assert resp.status_code == 200
     key = _issue_key(client, alice, USER_CAROL)
-    assert key["max_budget_usd"] == 2.0
+    assert key["max_budget_usd"] == float(2 * per_call / 100)
 
     status, _ = litellm_fake.chat(key["key"], QWEN)
     assert status == 200

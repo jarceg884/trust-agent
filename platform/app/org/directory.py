@@ -17,7 +17,43 @@ from ..auth.rbac import dept_scope, top_role_key
 from ..auth.service import Principal
 from ..errors import not_found, permission_denied, validation_failed
 
-EDITABLE_FIELDS = ("display_name", "department_id")
+EDITABLE_FIELDS = ("display_name", "department_id", "status")
+
+
+def _disable_core(conn: Connection, principal: Principal, user: dict) -> None:
+    """Revocación de acceso (spec 012 REQ-ORG-005 + spec 017 D-17-05):
+    status + sesiones + dispositivos en la MISMA transacción, con audit
+    `user.disabled`. Una sola ruta de código para POST /disable y
+    PUT status=disabled."""
+    conn.execute(
+        text(
+            "UPDATE users SET status = 'disabled', updated_at = now() "
+            "WHERE id = CAST(:id AS uuid)"
+        ),
+        {"id": str(user["id"])},
+    )
+    conn.execute(
+        text(
+            "UPDATE sessions SET status = 'revoked', updated_at = now() "
+            "WHERE user_id = CAST(:id AS uuid) AND status = 'active'"
+        ),
+        {"id": str(user["id"])},
+    )
+    conn.execute(
+        text(
+            "UPDATE devices SET status = 'revoked', updated_at = now() "
+            "WHERE user_id = CAST(:id AS uuid) "
+            "AND status IN ('pending', 'active')"
+        ),
+        {"id": str(user["id"])},
+    )
+    audit.emit(
+        conn, tenant_id=principal.tenant_id,
+        actor_role=top_role_key(principal.role_keys),
+        action="user.disabled", actor_id=principal.user_id,
+        target_type="user", target_id=str(user["id"]),
+        payload={"email": user["email"]},
+    )
 
 
 def _roles_by_user(conn: Connection) -> dict[str, list[dict]]:
@@ -50,7 +86,8 @@ def list_users(conn: Connection, principal: Principal) -> dict:
         params = {"uid": principal.user_id}
     rows = conn.execute(
         text(
-            "SELECT u.id, u.email, u.display_name, u.department_id, u.status "
+            "SELECT u.id, u.email, u.display_name, u.department_id, u.status, "
+            "u.mfa_enrolled "
             f"FROM users u WHERE {condition} ORDER BY u.email"
         ),
         params,
@@ -66,6 +103,7 @@ def list_users(conn: Connection, principal: Principal) -> dict:
             "department_id": str(r["department_id"])
             if r["department_id"] else None,
             "status": r["status"],
+            "mfa_enrolled": bool(r["mfa_enrolled"]),
             "roles": roles.get(uid, []),
         })
     return {"users": users}
@@ -74,7 +112,8 @@ def list_users(conn: Connection, principal: Principal) -> dict:
 def _get_user(conn: Connection, user_id: str) -> dict:
     row = conn.execute(
         text(
-            "SELECT id, email, display_name, department_id, status "
+            "SELECT id, email, display_name, department_id, status, "
+            "mfa_enrolled "
             "FROM users WHERE id = CAST(:u AS uuid)"
         ),
         {"u": user_id},
@@ -99,8 +138,15 @@ def _require_in_scope(
 def update_user(
     conn: Connection, principal: Principal, *, user_id: str,
     display_name: str | None, department_id: str | None,
+    status: str | None = None,
 ) -> dict:
-    """PUT /api/users/{id} — edit display name / move department."""
+    """PUT /api/users/{id} — edit display name / move department / status
+    (spec 017 D-17-05: `disabled` delega en la misma revocación que
+    POST /disable; `active` reactiva con audit `user.updated`)."""
+    if status is not None and status not in ("active", "disabled"):
+        raise validation_failed("status must be 'active' or 'disabled'.")
+    if status == "disabled" and user_id == principal.user_id:
+        raise validation_failed("You cannot disable your own account.")
     user = _get_user(conn, user_id)
     _require_in_scope(conn, principal, user)
 
@@ -151,6 +197,26 @@ def update_user(
             target_type="user", target_id=user_id, payload=payload,
         )
 
+    # Status transition (spec 017 D-17-05) — after the field changes, in
+    # the SAME transaction.
+    if status == "disabled" and user["status"] != "disabled":
+        _disable_core(conn, principal, user)
+    elif status == "active" and user["status"] != "active":
+        conn.execute(
+            text(
+                "UPDATE users SET status = 'active', updated_at = now() "
+                "WHERE id = CAST(:id AS uuid)"
+            ),
+            {"id": user_id},
+        )
+        audit.emit(
+            conn, tenant_id=principal.tenant_id,
+            actor_role=top_role_key(principal.role_keys),
+            action="user.updated", actor_id=principal.user_id,
+            target_type="user", target_id=user_id,
+            payload={"email": user["email"], "status": "active"},
+        )
+
     fresh = _get_user(conn, user_id)
     return {
         "user_id": str(fresh["id"]),
@@ -159,6 +225,7 @@ def update_user(
         "department_id": str(fresh["department_id"])
         if fresh["department_id"] else None,
         "status": fresh["status"],
+        "mfa_enrolled": bool(fresh["mfa_enrolled"]),
     }
 
 
@@ -173,34 +240,6 @@ def disable_user(
     _require_in_scope(conn, principal, user)
 
     if user["status"] != "disabled":
-        conn.execute(
-            text(
-                "UPDATE users SET status = 'disabled', updated_at = now() "
-                "WHERE id = CAST(:id AS uuid)"
-            ),
-            {"id": user_id},
-        )
-        conn.execute(
-            text(
-                "UPDATE sessions SET status = 'revoked', updated_at = now() "
-                "WHERE user_id = CAST(:id AS uuid) AND status = 'active'"
-            ),
-            {"id": user_id},
-        )
-        conn.execute(
-            text(
-                "UPDATE devices SET status = 'revoked', updated_at = now() "
-                "WHERE user_id = CAST(:id AS uuid) "
-                "AND status IN ('pending', 'active')"
-            ),
-            {"id": user_id},
-        )
-        audit.emit(
-            conn, tenant_id=principal.tenant_id,
-            actor_role=top_role_key(principal.role_keys),
-            action="user.disabled", actor_id=principal.user_id,
-            target_type="user", target_id=user_id,
-            payload={"email": user["email"]},
-        )
+        _disable_core(conn, principal, user)
 
     return {"user_id": user_id, "status": "disabled"}

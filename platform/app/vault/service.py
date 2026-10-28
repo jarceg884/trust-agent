@@ -36,7 +36,13 @@ _META_KEYS = (
 
 
 def _to_uuid(value: str) -> str:
-    """Validate UUID format; forged/malformed ids answer 404 (D-CP-09)."""
+    """Validate UUID format; malformed ids answer 404 (D-CP-09).
+
+    Defense in depth only: since t_378503a1 the ROUTE layer rejects
+    malformed UUID params with 422 validation_failed before the service
+    runs, so this 404 is unreachable via the API and protects internal
+    callers instead.
+    """
     try:
         _uuid.UUID(value)
     except (ValueError, AttributeError, TypeError):
@@ -139,7 +145,10 @@ def _check_governance(
     connector_slug: str | None,
     scope: str | None,
 ) -> None:
-    """Deny-overrides gates (D-VC-03): types, connectors, scopes."""
+    """Deny-overrides gates (D-VC-03): types, connectors, scopes.
+
+    Spec 024 (REQ-024-008): catalog connectors are ALSO gated by the
+    effective ``allowed_connections`` tokens (wildcard default)."""
     policy = effective_policy_for_user(conn, principal)
 
     allowed_types = policy.get("vault_allowed_credential_types") or []
@@ -159,6 +168,16 @@ def _check_governance(
     if connector_slug not in allowed_connectors:
         raise connector_not_allowed(
             f"Connector '{connector_slug}' is not allowed by policy."
+        )
+
+    from ..connectors.service import connection_tokens_allow
+
+    if not connection_tokens_allow(
+        set(policy.get("allowed_connections") or []), connector_slug
+    ):
+        raise connector_not_allowed(
+            f"Connector '{connector_slug}' is not covered by the "
+            "allowed_connections policy."
         )
 
     # scoped_credentials is a provider-invariable floor (REQ-CON-006).

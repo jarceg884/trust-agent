@@ -11,6 +11,10 @@ import { api, ApiError } from "@/lib/api-client";
 import type { PolicyList, WhoAmI } from "@/lib/types";
 import { dateTime } from "@/lib/format";
 import {
+  AllowedConnectionsSelector,
+  CONNECTIONS_POLICY_KEY,
+} from "@/components/connection-policy";
+import {
   Badge,
   Button,
   Card,
@@ -30,12 +34,14 @@ import {
   useToast,
 } from "@/components/ui";
 
-const VALUE_TYPES: Record<string, "boolean" | "json"> = {
+const VALUE_TYPES: Record<string, "boolean" | "json" | "connections"> = {
   // Tipos de valor habituales del catálogo (catalog.policy_keys); el control
   // plane valida el tipo real (422 si no coincide).
   require_mfa: "boolean",
   allowed_models_only: "boolean",
   sso_required: "boolean",
+  // spec 024: selector de tokens (catálogo + conexiones personalizadas)
+  allowed_connections: "connections",
 };
 
 export function OrganizationPage({ me }: { me: WhoAmI }) {
@@ -44,9 +50,10 @@ export function OrganizationPage({ me }: { me: WhoAmI }) {
 
   const [createOpen, setCreateOpen] = useState(false);
   const [key, setKey] = useState("");
-  const [valueType, setValueType] = useState<"boolean" | "json">("boolean");
+  const [valueType, setValueType] = useState<"boolean" | "json" | "connections">("boolean");
   const [boolValue, setBoolValue] = useState("true");
   const [jsonValue, setJsonValue] = useState("");
+  const [connectionsValue, setConnectionsValue] = useState<string[]>(["*"]);
   const [submitting, setSubmitting] = useState(false);
   const [deleting, setDeleting] = useState<string | null>(null);
 
@@ -56,6 +63,8 @@ export function OrganizationPage({ me }: { me: WhoAmI }) {
       let value: unknown;
       if (valueType === "boolean") {
         value = boolValue === "true";
+      } else if (valueType === "connections") {
+        value = connectionsValue;
       } else {
         try {
           value = JSON.parse(jsonValue);
@@ -206,22 +215,25 @@ export function OrganizationPage({ me }: { me: WhoAmI }) {
         }
       >
         <div className="space-y-4">
-          <Field label="Policy key" htmlFor="policy-key" hint="Must exist in the policy catalog (e.g. require_mfa).">
+          <Field label="Policy key" htmlFor="policy-key" hint="Must exist in the policy catalog (e.g. require_mfa, allowed_connections).">
             <Input
               id="policy-key"
               value={key}
               onChange={(e) => {
                 setKey(e.target.value);
-                setValueType(VALUE_TYPES[e.target.value] ?? "json");
+                const nextType = VALUE_TYPES[e.target.value] ?? "json";
+                setValueType(nextType);
+                if (nextType === "connections") setConnectionsValue(["*"]);
               }}
               placeholder="require_mfa"
               className="font-mono"
             />
           </Field>
           <Field label="Value type" htmlFor="policy-type">
-            <Select id="policy-type" value={valueType} onChange={(e) => setValueType(e.target.value as "boolean" | "json")}>
+            <Select id="policy-type" value={valueType} onChange={(e) => setValueType(e.target.value as "boolean" | "json" | "connections")}>
               <option value="boolean">Boolean</option>
               <option value="json">JSON</option>
+              <option value="connections">Connections (spec 024)</option>
             </Select>
           </Field>
           {valueType === "boolean" ? (
@@ -231,6 +243,14 @@ export function OrganizationPage({ me }: { me: WhoAmI }) {
                 <option value="false">false</option>
               </Select>
             </Field>
+          ) : valueType === "connections" ? (
+            <div>
+              <p className="mb-2 text-xs font-semibold text-foreground">
+                Allowed connections{" "}
+                <span className="font-mono text-faint">({CONNECTIONS_POLICY_KEY})</span>
+              </p>
+              <AllowedConnectionsSelector value={connectionsValue} onChange={setConnectionsValue} />
+            </div>
           ) : (
             <Field label="JSON value" htmlFor="policy-json" hint='e.g. ["qwen-max", "qwen-plus"]'>
               <Input

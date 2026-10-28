@@ -1,7 +1,8 @@
 /**
- * Login del operador del proveedor (spec 014 REQ-PC-010): pantalla dividida
- * enterprise — valor del producto a la izquierda, pegado del provider token
- * a la derecha. El token se valida contra el control plane REAL.
+ * Login del operador del proveedor (spec 025, REQ-PS-003): pantalla dividida
+ * enterprise — valor del producto a la izquierda, usuario+contraseña a la
+ * derecha. Las credenciales se validan contra el control plane REAL y la
+ * sesión vive en PostgreSQL (cookie httpOnly con el token pst1…).
  */
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
@@ -62,14 +63,14 @@ export default async function LoginPage({
         </p>
       </section>
 
-      {/* Formulario del token */}
+      {/* Formulario de acceso */}
       <section className="flex flex-1 items-center justify-center px-6 py-12">
-        <div className="w-full max-w-sm">
+        <div className="ta-rise w-full max-w-sm">
           <h2 className="text-xl font-semibold text-foreground">
             Sign in to the Provider Console
           </h2>
           <p className="mb-8 mt-1.5 text-sm text-muted">
-            Enter the provider operations token.
+            Enter your operator username and password.
           </p>
           <LoginForm initialError={initialError} />
         </div>

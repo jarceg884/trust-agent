@@ -1,0 +1,30 @@
+Trust Agent
+
+= nn 4 a 7
+Trust Agent demo-org Connected + Inviteuser  £ Download desktop app = A Alex Morgan
+GOVERNANCE
+28 Overview Users & Roles
+Who belongs to the organization and what they can govern.
+
+| Organization
+Departments Users & roles 20
+
+Directory of the organization's users, their departments and role assignments. Role changes are audited (role.assigned / role.revoked).
+& Users & Roles
+
+usER DEPARTMENT ROLES sTaTUS
+© Budgets
+
+Alex Morgan: ora admin
+at Model Access conoraenaemo-orotest TT Operations ‘org_admin active
+Shared Agents
+
+Governance — only organization admins hold roles . assign; role changes, department moves and status transitions are written to the immutable audit log You can never modity your
+© Devices ‘own roles or eisable your own account.
+& Hermes Download
+
+® Credentials
+
+Audit Log
+
+> Branding

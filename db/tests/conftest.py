@@ -45,8 +45,11 @@ USER_A2 = "40000000-0000-0000-0000-000000000002"  # bob   (dept A2)
 USER_B1 = "40000000-0000-0000-0000-000000000003"  # carol (dept B1)
 DEVICE_A1 = "50000000-0000-0000-0000-000000000001"
 DEVICE_B1 = "50000000-0000-0000-0000-000000000002"
-VAULT_A1 = "60000000-0000-0000-0000-000000000001"
-VAULT_B1 = "60000000-0000-0000-0000-000000000002"
+VAULT_A1 = "60000000-0000-0000-0000-000000000001"  # credencial vault tenant A
+VAULT_B1 = "60000000-0000-0000-0000-000000000002"  # credencial vault tenant B
+# spec 024: conexiones personalizadas del tenant (seed para RLS/isolation)
+CONN_A1 = "60000000-0000-0000-0000-000000000003"
+CONN_B1 = "60000000-0000-0000-0000-000000000004"
 
 # Las 16 tablas de negocio (todas con tenant_id + RLS).
 BUSINESS_TABLES = [
@@ -60,6 +63,7 @@ BUSINESS_TABLES = [
     "policies",
     "devices",
     "vault_credentials",
+    "vault_connections",
     "connector_instances",
     "audit_log",
     "model_access",
@@ -72,6 +76,9 @@ BUSINESS_TABLES = [
     "notifications",
     # spec 013 (REQ-AUD-006): migración 0006_audit_retention
     "audit_chain_checkpoint",
+    # spec 028 (branding REQ-BRD-004): migración 0018_branding_versioning
+    "branding_assets",
+    "branding_versions",
 ]
 
 _FAKE_CT = bytes(range(32))  # ciphertext opaco de prueba (nunca plaintext)
@@ -134,9 +141,9 @@ def _seed() -> None:
             cur.execute(
                 "INSERT INTO spend_ledger (tenant_id, request_id, user_id, department_id, model_name, mode, "
                 "cost_base_cents, cost_billed_cents, tokens_in, tokens_out, occurred_at) VALUES "
-                f"('{TENANT_A}', 'req-a-1', '{USER_A1}', '{DEPT_A1}', 'qwen2.5-72b-instruct', 'central', 100, 105, 1000, 200, now()), "
-                f"('{TENANT_A}', 'req-a-2', '{USER_A1}', '{DEPT_A1}', 'deepseek-v3', 'byok', 50, 50, 500, 100, now()), "
-                f"('{TENANT_B}', 'req-b-1', '{USER_B1}', '{DEPT_B1}', 'qwen2.5-72b-instruct', 'central', 80, 80, 800, 150, now())"
+                f"('{TENANT_A}', 'req-a-1', '{USER_A1}', '{DEPT_A1}', 'glm-5.2', 'central', 100, 105, 1000, 200, now()), "
+                f"('{TENANT_A}', 'req-a-2', '{USER_A1}', '{DEPT_A1}', 'deepseek-v4-flash', 'byok', 50, 50, 500, 100, now()), "
+                f"('{TENANT_B}', 'req-b-1', '{USER_B1}', '{DEPT_B1}', 'glm-5.2', 'central', 80, 80, 800, 150, now())"
             )
             cur.execute(
                 "INSERT INTO policies (id, tenant_id, level, department_id, user_id, key, value) VALUES "
@@ -158,6 +165,20 @@ def _seed() -> None:
                 f"(%s, '{TENANT_B}', '{USER_B1}', 'email-imap', 'password', 'email', %s, %s, %s, 'kek-v1')",
                 (VAULT_A1, _FAKE_CT, _FAKE_CT, _FAKE_CT[:12], VAULT_B1, _FAKE_CT, _FAKE_CT, _FAKE_CT[:12]),
             )
+            # spec 024: conexiones personalizadas (definidas por el org_admin,
+            # secreto cifrado con el mismo envelope crypto — aquí ciphertext opaco)
+            cur.execute(
+                "INSERT INTO vault_connections (id, tenant_id, created_by, name, kind, metadata, status, "
+                "ciphertext_secret, ciphertext_dek, nonce, key_id) VALUES "
+                "(%s, '" + TENANT_A + "', '" + USER_A1 + "', 'analytics-db', 'database', "
+                "'{\"type\":\"postgres\",\"host\":\"db.internal\",\"port\":5432,\"database\":\"analytics\",\"username\":\"reader\"}', "
+                "'active', %s, %s, %s, 'kek-v1'), "
+                "(%s, '" + TENANT_B + "', '" + USER_B1 + "', 'billing-api', 'api_key', "
+                "'{\"service\":\"billing\",\"auth\":\"bearer\"}', "
+                "'active', %s, %s, %s, 'kek-v1')",
+                (CONN_A1, _FAKE_CT, _FAKE_CT, _FAKE_CT[:12],
+                 CONN_B1, _FAKE_CT, _FAKE_CT, _FAKE_CT[:12]),
+            )
             cur.execute(
                 "INSERT INTO connector_instances (id, tenant_id, user_id, connector_slug, mode, credential_id) VALUES "
                 f"(gen_random_uuid(), '{TENANT_A}', '{USER_A1}', 'vmware', 'read_only', '{VAULT_A1}'), "
@@ -173,9 +194,9 @@ def _seed() -> None:
             )
             cur.execute(
                 "INSERT INTO model_access (id, tenant_id, model_id, level, department_id, user_id, mode, status) VALUES "
-                "(gen_random_uuid(), %s, (SELECT id FROM catalog.model_catalog WHERE model_name = 'qwen2.5-72b-instruct'), 'org', NULL, NULL, 'central', 'approved'), "
-                "(gen_random_uuid(), %s, (SELECT id FROM catalog.model_catalog WHERE model_name = 'qwen2.5-72b-instruct'), 'user', %s, %s, 'byok', 'approved'), "
-                "(gen_random_uuid(), %s, (SELECT id FROM catalog.model_catalog WHERE model_name = 'deepseek-v3'), 'org', NULL, NULL, 'central', 'approved')",
+                "(gen_random_uuid(), %s, (SELECT id FROM catalog.model_catalog WHERE model_name = 'glm-5.2'), 'org', NULL, NULL, 'central', 'approved'), "
+                "(gen_random_uuid(), %s, (SELECT id FROM catalog.model_catalog WHERE model_name = 'glm-5.2'), 'user', %s, %s, 'byok', 'approved'), "
+                "(gen_random_uuid(), %s, (SELECT id FROM catalog.model_catalog WHERE model_name = 'deepseek-v4-flash'), 'org', NULL, NULL, 'central', 'approved')",
                 (TENANT_A, TENANT_A, DEPT_A1, USER_A1, TENANT_B),
             )
             cur.execute(
@@ -225,6 +246,20 @@ def _seed() -> None:
                 f"('{TENANT_A}', 0, repeat('0', 64), 0), "
                 f"('{TENANT_B}', 0, repeat('0', 64), 0)"
             )
+            # spec 028 (branding REQ-BRD-004): asset + versión publicada
+            # por tenant (aislamiento verificable en test_isolation).
+            for tenant in (TENANT_A, TENANT_B):
+                cur.execute(
+                    "INSERT INTO branding_assets "
+                    "(tenant_id, kind, mime, size_bytes, sha256, content) "
+                    "VALUES (%s, 'logo_light', 'image/png', 8, %s, %s)",
+                    (tenant, "b" * 64, b"\x89PNG\r\n\x1a\n"),
+                )
+                cur.execute(
+                    "INSERT INTO branding_versions (tenant_id, version, data) "
+                    "VALUES (%s, 1, %s)",
+                    (tenant, '{"product_name": "Trust Agent"}'),
+                )
 
 
 @pytest.fixture(scope="session")

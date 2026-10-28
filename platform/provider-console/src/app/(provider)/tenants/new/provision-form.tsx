@@ -239,7 +239,10 @@ export function ProvisionForm() {
               <p className="rounded-lg border border-warning/25 bg-warning-soft px-3.5 py-2.5 text-xs leading-relaxed text-warning">
                 <strong>Shown only once — copy it now.</strong> This temporary
                 password is never stored and cannot be retrieved again. The
-                first sign-in forces a password change and TOTP (MFA) enrollment.
+                first sign-in forces a password change. TOTP (MFA) enrollment
+                is enforced only when the organization&apos;s policy requires
+                MFA (<code>require_mfa=true</code>); otherwise the Admin
+                Console suggests it via the &ldquo;Set up MFA&rdquo; banner.
               </p>
               <dl className="space-y-3 text-sm">
                 <div className="flex flex-wrap items-center gap-2">
@@ -471,8 +474,9 @@ export function ProvisionForm() {
 
           <div className="flex items-center justify-end gap-3 border-t border-border-subtle pt-4">
             <p className="mr-auto text-xs leading-relaxed text-muted">
-              Creates a real Keycloak realm, admin user (temporary password +
-              mandatory TOTP), org budget, default policies and approved models.
+              Creates a real Keycloak realm, admin user (temporary password;
+              MFA enforced only if the org policy requires it), org budget,
+              default policies and approved models.
             </p>
             <Button type="submit" variant="primary" loading={loading} disabled={!canSubmit}>
               Provision tenant

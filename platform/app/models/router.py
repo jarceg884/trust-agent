@@ -6,23 +6,66 @@ from sqlalchemy.engine import Connection
 
 from ..auth.rbac import dept_scope
 from ..auth.service import Principal, get_principal, get_tx, require_mfa
-from ..errors import not_found, permission_denied
+from ..errors import not_found, optional_uuid, permission_denied, require_uuid
 from . import access, keys
 
 router = APIRouter(prefix="/api/models", dependencies=[Depends(require_mfa)])
 
 
+def _actor_role(principal: Principal) -> str:
+    return principal.role_keys[0] if principal.role_keys else "user"
+
+
 @router.get("")
 def list_models(conn: Connection = Depends(get_tx)):
-    """Global model catalog (provider reference; pricing in USD cents/million)."""
+    """Global model catalog (central MaaS + BYOK connections of the tenant;
+    pricing in USD cents/million)."""
     rows = conn.execute(
         text(
-            "SELECT model_name, display_name, provider, "
-            "input_price_cents_per_m, output_price_cents_per_m, status "
-            "FROM catalog.model_catalog ORDER BY model_name"
+            "SELECT model_name, display_name, provider, context_tokens, "
+            "max_output_tokens, input_price_cents_per_m, "
+            "output_price_cents_per_m, status, source FROM catalog.model_catalog "
+            "ORDER BY source DESC, model_name"
         )
     ).mappings()
     return {"models": [dict(r) for r in rows]}
+
+
+# --- Catalog refresh (spec 032, D-032-03) -------------------------------------
+
+class RefreshBody(BaseModel):
+    connection_id: str | None = None  # None = global (central + all llm)
+
+
+@router.post("/catalog/refresh")
+def refresh_catalog(
+    body: RefreshBody,
+    principal: Principal = Depends(get_principal),
+    conn: Connection = Depends(get_tx),
+):
+    """Refresh the model catalog from the connected APIs (real fetch).
+
+    Without connection_id: central gateway sync + every active llm
+    connection. With connection_id: only that connection. Audits
+    model.catalog_refreshed; the connection key never leaves the vault
+    decrypt path (in memory, per use).
+    """
+    if "connections.manage" not in principal.permissions:
+        raise permission_denied("Missing permission: connections.manage")
+    from . import discovery
+
+    if body.connection_id:
+        connection_id = require_uuid(body.connection_id, "connection_id")
+        result = discovery.refresh_connection(
+            conn, principal.tenant_id, connection_id,
+            actor_role=_actor_role(principal), actor_id=principal.user_id,
+        )
+    else:
+        result = discovery.refresh_tenant(
+            conn, principal.tenant_id,
+            actor_role=_actor_role(principal), actor_id=principal.user_id,
+        )
+    return result
 
 
 # --- Model access (REQ-MDL-001/005/006) ---------------------------------------
@@ -97,6 +140,9 @@ def put_access(
     principal: Principal = Depends(get_principal),
     conn: Connection = Depends(get_tx),
 ):
+    # t_378503a1: body UUID ids are format-checked (422, not a SQL 500).
+    body.department_id = optional_uuid(body.department_id, "department_id")
+    body.user_id = optional_uuid(body.user_id, "user_id")
     _require_manage_models(principal)
     _check_scope(conn, principal, body.level,
                  body.department_id, body.user_id)
@@ -114,6 +160,9 @@ def revoke_access(
     principal: Principal = Depends(get_principal),
     conn: Connection = Depends(get_tx),
 ):
+    # t_378503a1: body UUID ids are format-checked (422, not a SQL 500).
+    body.department_id = optional_uuid(body.department_id, "department_id")
+    body.user_id = optional_uuid(body.user_id, "user_id")
     _require_manage_models(principal)
     _check_scope(conn, principal, body.level,
                  body.department_id, body.user_id)
@@ -160,7 +209,8 @@ def issue_key(
     principal: Principal = Depends(get_principal),
     conn: Connection = Depends(get_tx),
 ):
-    target = body.user_id or principal.user_id
+    target = require_uuid(body.user_id, "user_id") if body.user_id \
+        else principal.user_id  # t_378503a1: 422, not 500
     if target != principal.user_id:
         # Admins may issue for users in their scope (budget.user.manage).
         if "budget.user.manage" not in principal.permissions:
@@ -185,6 +235,7 @@ def revoke_key(
     principal: Principal = Depends(get_principal),
     conn: Connection = Depends(get_tx),
 ):
+    key_id = require_uuid(key_id, "key_id")  # t_378503a1: 422, not 500
     row = conn.execute(
         text("SELECT user_id FROM api_keys WHERE id = CAST(:k AS uuid)"),
         {"k": key_id},

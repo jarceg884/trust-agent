@@ -66,3 +66,93 @@ body {
   background: var(--color-surface-alt);
   border-radius: 6px;
 }
+
+/* Capa de fluidez — estándar UI pro (t_7cd4f40e, docs/ui-standard.md).
+   Keyframes cortos y con propósito (150–250ms), SIEMPRE bajo
+   prefers-reduced-motion: no-preference. Diálogos: scale+fade ~180ms;
+   toasts: entrada deslizante; badges: pop de aparición; página: fade sutil. */
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes ta-fade-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+  @keyframes ta-dialog-in {
+    from {
+      opacity: 0;
+      transform: scale(0.96) translateY(6px);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1) translateY(0);
+    }
+  }
+  @keyframes ta-toast-in {
+    from {
+      opacity: 0;
+      transform: translateX(18px);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
+  }
+  @keyframes ta-pop {
+    0% {
+      opacity: 0;
+      transform: scale(0.6);
+    }
+    60% {
+      opacity: 1;
+      transform: scale(1.06);
+    }
+    100% {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+  @keyframes ta-rise {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  .ta-fade-in {
+    animation: ta-fade-in 0.18s ease-out both;
+  }
+  .ta-rise {
+    animation: ta-rise 0.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  .ta-dialog-backdrop {
+    animation: ta-fade-in 0.15s ease-out both;
+  }
+  .ta-dialog-panel {
+    animation: ta-dialog-in 0.18s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  .ta-toast-in {
+    animation: ta-toast-in 0.22s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  .ta-pop {
+    animation: ta-pop 0.25s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  /* Transición sutil de página: fade al montar el contenido principal. */
+  main {
+    animation: ta-fade-in 0.25s ease-out both;
+  }
+}
+
+/* Filas de tabla fluidas: hover con transición de color (sin movimiento,
+   sin saltos de layout). Aplica a todas las tablas del design system. */
+tbody tr {
+  transition: background-color 150ms ease;
+}
+tbody tr:hover {
+  background-color: rgba(242, 244, 247, 0.55);
+}

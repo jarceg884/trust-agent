@@ -9,7 +9,7 @@ export interface TenantListItem {
   id: string;
   slug: string;
   name: string;
-  status: "active" | "suspended";
+  status: "active" | "suspended" | "pending_activation";
   oidc_realm: string;
   oidc_issuer_url: string;
   created_at: string;
@@ -30,16 +30,18 @@ export interface TenantState {
   id: string;
   slug: string;
   name: string;
-  status: "active" | "suspended";
+  status: "active" | "suspended" | "pending_activation";
   oidc_realm: string;
   oidc_issuer_url: string;
   branding: Record<string, unknown> | null;
   created_at: string;
 }
 
-/** Respuesta de suspend/reactivate (REQ-PC-002/003). */
+/** Respuesta de suspend/reactivate (REQ-PC-002/003) y de activate
+ * (spec 026 REQ-SS-003: pending_activation → active + budget inicial). */
 export interface TenantStatusResponse {
   tenant: TenantState;
+  notified_org_admins?: number;
 }
 
 /** Credenciales one-time del admin inicial (spec 004 D-ONB-05). */

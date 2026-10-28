@@ -42,6 +42,15 @@ funcionen sin retocar.
    `platform/scripts/run_litellm_double.py`).
 6. **Postgres init**: `POSTGRES_DB` crea la DB; los roles van por script en
    `docker-entrypoint-initdb.d/` (solo corre la PRIMERA vez del volumen).
+7. **`docker compose build api` es un NO-OP silencioso** (t_99526286): en el
+   compose de trust-agent SOLO `migrate`, `console` y `provider-console`
+   tienen sección `build`; `api`/`jobs-worker`/`spend-worker` usan
+   `image: trust-agent/platform:local` sin build. Reconstruir la imagen de
+   plataforma tras cambiar código Python:
+   `docker compose build migrate && docker compose up -d --force-recreate api jobs-worker spend-worker`
+   — `docker compose build api` "termina" verde sin reconstruir nada y el
+   contenedor sigue corriendo código viejo. Verificar con
+   `docker exec <api> grep -c '<nuevo-código>' <archivo>` tras el up.
 
 ## Verificación de salud mínima (todas deben dar salida real)
 

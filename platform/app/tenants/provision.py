@@ -149,6 +149,15 @@ def provision(
     if existing is not None:
         from .healthcheck import healthcheck
 
+        # F1 (t_38ce1e82): re-running provisioning is the repair path for
+        # pre-existing tenants — realms provisioned before both loopback
+        # names (127.0.0.1 + localhost) were registered only carry the
+        # 127.0.0.1 callbacks, which breaks login from localhost. Best
+        # effort: a heal failure must not break the idempotent re-run.
+        try:
+            kc.ensure_web_client_redirect_uris(slug)
+        except KeycloakAdminError:
+            pass
         return {
             "created": False,
             "tenant": tenant_state(engine, str(existing["id"])),
@@ -166,6 +175,13 @@ def provision(
         kc.ensure_tenant_id_mapper(slug)
         # MFA evidence via acr (Keycloak 26 never emits `amr` — D-MFA-01).
         kc.ensure_mfa_acr(slug)
+        # Spec 015: white-label surface + Google brokering + tenant_id for
+        # brokered users (D-AUTH-01/02/03). Google is fail-closed: without
+        # TRUST_GOOGLE_CLIENT_ID/SECRET no IdP is added.
+        branding = request.branding or {}
+        kc.ensure_login_theme(slug, product_name=branding.get("product_name"))
+        kc.ensure_google_idp(slug)
+        kc.ensure_tenant_id_hardcode_mapper(slug, tenant_id)
         kc_user_uuid, one_time_password = kc.ensure_admin_user(
             slug,
             username=request.admin_email,
@@ -219,8 +235,14 @@ def provision(
             "username": request.admin_email,
             "one_time_password": one_time_password,
             "instructions": (
+                # Copy corregido (QA Pilar 1, t_ccf901f4): el primer login
+                # fuerza UPDATE_PASSWORD, pero el TOTP SOLO es forzado cuando
+                # la policy de la org require_mfa=true (spec 015 D-AUTH-06/07);
+                # con require_mfa=false queda como banner opcional "Set up MFA".
                 "Delivered exactly once. The first login forces a new "
-                "password and TOTP enrollment; this password is invalid "
+                "password; TOTP (MFA) enrollment is enforced only if the "
+                "organization's policy require_mfa is enabled — otherwise "
+                "the Admin Console suggests it. This password is invalid "
                 "afterwards and is never stored by the platform."
             ),
         },
@@ -253,13 +275,24 @@ def _provision_in_db(
     issuer: str,
     kc_user_uuid: str,
     template_keys: list[str],
+    status: str = "active",
+    amount_cents: int | None = None,
+    summary_action: str = "tenant.provisioned",
+    actor_role: str = "provider",
+    actor_id: str | None = None,
 ) -> _Provisioned:
     """The whole tenant in ONE trust_app transaction. Any failure rolls
-    everything back (the caller then compensates the realm)."""
+    everything back (the caller then compensates the realm).
+
+    Spec 026 (D-26-04): parameterized for the public self-signup —
+    status='pending_activation', amount_cents=0, summary_action
+    'tenant.self_registered' and the actor being the self-registered admin.
+    Defaults preserve the provider provisioning behavior exactly."""
     result = _Provisioned()
     branding = dict(DEFAULT_BRANDING)
     branding.update(request.branding or {})
-    amount_cents = int(round(request.initial_budget_usd * 100))
+    if amount_cents is None:
+        amount_cents = int(round(request.initial_budget_usd * 100))
 
     with engine.begin() as conn:
         set_tenant(conn, tenant_id)  # first statement (D-CP-02)
@@ -268,11 +301,12 @@ def _provision_in_db(
             text(
                 "INSERT INTO tenants (id, name, slug, status, oidc_realm, "
                 " oidc_issuer_url, oidc_client_id, branding) "
-                "VALUES (CAST(:id AS uuid), :name, :slug, 'active', :realm, "
+                "VALUES (CAST(:id AS uuid), :name, :slug, :status, :realm, "
                 " :issuer, :client, CAST(:branding AS jsonb))"
             ),
             {
                 "id": tenant_id, "name": request.organization_name, "slug": slug,
+                "status": status,
                 "realm": slug, "issuer": issuer, "client": "trust-agent-web",
                 "branding": json.dumps(branding),
             },
@@ -298,7 +332,7 @@ def _provision_in_db(
             result.departments.append({"id": dept_id, "profile_template": key,
                                        "name": template.name})
             audit_service.emit(
-                conn, tenant_id=tenant_id, actor_role="provider",
+                conn, tenant_id=tenant_id, actor_role=actor_role, actor_id=actor_id,
                 action="department.created", target_type="department",
                 target_id=dept_id, payload={"profile_template": key},
             )
@@ -320,8 +354,13 @@ def _provision_in_db(
             },
         ).mappings().first()
         admin_user_id = str(user_row["id"])
+        # Spec 026: for the self-signup the actor IS the admin just created
+        # (actor_role != 'provider'); the provider path keeps actor_id NULL
+        # exactly as before.
+        if actor_id is None and actor_role != "provider":
+            actor_id = admin_user_id
         audit_service.emit(
-            conn, tenant_id=tenant_id, actor_role="provider",
+            conn, tenant_id=tenant_id, actor_role=actor_role, actor_id=actor_id,
             action="user.created", target_type="user", target_id=admin_user_id,
             payload={"email": request.admin_email, "initial_role": "org_admin"},
         )
@@ -334,7 +373,7 @@ def _provision_in_db(
             {"id": str(uuid.uuid4()), "tid": tenant_id, "uid": admin_user_id},
         )
         audit_service.emit(
-            conn, tenant_id=tenant_id, actor_role="provider",
+            conn, tenant_id=tenant_id, actor_role=actor_role, actor_id=actor_id,
             action="role.assigned", target_type="user", target_id=admin_user_id,
             payload={"role_key": "org_admin"},
         )
@@ -350,7 +389,7 @@ def _provision_in_db(
         )
         result.budget_cents = amount_cents
         audit_service.emit(
-            conn, tenant_id=tenant_id, actor_role="provider",
+            conn, tenant_id=tenant_id, actor_role=actor_role, actor_id=actor_id,
             action="budget.updated", target_type="budget",
             payload={"level": "org", "amount_cents": amount_cents,
                      "period": "monthly"},
@@ -377,7 +416,7 @@ def _provision_in_db(
             )
             result.policies.append(prow["key"])
             audit_service.emit(
-                conn, tenant_id=tenant_id, actor_role="provider",
+                conn, tenant_id=tenant_id, actor_role=actor_role, actor_id=actor_id,
                 action="policy.updated", target_type="policy",
                 target_id=prow["key"],
                 payload={"level": "org", "value": prow["default_value"],
@@ -400,12 +439,18 @@ def _provision_in_db(
                     "model names."
                 )
             model_names = list(request.model_plan)
-            model_rows = conn.execute(
+            # Materializar ANTES de leer `found`: un Result de SQLAlchemy no
+            # admite re-iteración — la comprensión de `found` consumía el
+            # cursor y el loop de INSERT veía cero filas ("model_plan
+            # resolved to zero models"). Encontrado por la re-validación
+            # contra LiteLLM real (t_c4766c4d): model_plan=['glm-5.2'] era
+            # el primer uso REAL del camino de lista explícita.
+            model_rows = list(conn.execute(
                 text("SELECT id, model_name FROM catalog.model_catalog "
                      "WHERE status = 'available' AND model_name = ANY(:names) "
                      "ORDER BY model_name"),
                 {"names": model_names},
-            ).mappings()
+            ).mappings())
             found = {r["model_name"] for r in model_rows}
             missing = sorted(set(model_names) - found)
             if missing:
@@ -424,7 +469,7 @@ def _provision_in_db(
             )
             result.models.append(mrow["model_name"])
             audit_service.emit(
-                conn, tenant_id=tenant_id, actor_role="provider",
+                conn, tenant_id=tenant_id, actor_role=actor_role, actor_id=actor_id,
                 action="model.approved", target_type="model",
                 target_id=mrow["model_name"],
                 payload={"level": "org", "mode": "central"},
@@ -437,11 +482,12 @@ def _provision_in_db(
         # Summary event (REQ-ONB-009) — last, so the payload can carry the
         # full picture of what was created.
         audit_service.emit(
-            conn, tenant_id=tenant_id, actor_role="provider",
-            action="tenant.provisioned", target_type="tenant", target_id=slug,
+            conn, tenant_id=tenant_id, actor_role=actor_role, actor_id=actor_id,
+            action=summary_action, target_type="tenant", target_id=slug,
             payload={
                 "organization_name": request.organization_name,
                 "admin_email": request.admin_email,
+                "status": status,
                 "departments": template_keys,
                 "models": result.models,
                 "policies": result.policies,

@@ -1,7 +1,0 @@
-name: trust-agent-governance
-version: 0.1.0
-description: "Trust Agent governance bridge: exposes the organization's governed state (budget, policies, approved models) as a tool, injects governance context into every turn, and blocks tool calls that the organization's policies deny. Desktop = Hermes configured, never a patched fork (constitution IV / lesson C6)."
-author: "trust-agent (t_d3768316)"
-provides_hooks:
-  - pre_llm_call
-  - pre_tool_call

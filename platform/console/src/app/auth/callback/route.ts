@@ -10,8 +10,9 @@
  *   4. guarda session/refresh/csrf en cookies del console (D-AC-01).
  */
 import { NextResponse, type NextRequest } from "next/server";
-import { ApiError, rawApi } from "@/lib/control-plane";
+import { ApiError, orgConfig, rawApi } from "@/lib/control-plane";
 import { buildAuthorizeUrl, exchangeCodeForTokens, generatePkce, randomState } from "@/lib/oidc";
+import { requestOrigin } from "@/lib/origin";
 import {
   clearPkceCookies,
   clearStepupCookie,
@@ -31,7 +32,10 @@ interface MintSessionResponse {
 }
 
 function fail(request: NextRequest, message: string) {
-  const origin = new URL(request.url).origin;
+  // F1: origin from the Host header, not request.url (Next rebuilds it with
+  // its startup hostname, which flips 127.0.0.1 ↔ localhost and drops the
+  // host-only session cookies).
+  const origin = requestOrigin(request);
   return NextResponse.redirect(
     new URL("/login?error=" + encodeURIComponent(message), origin),
   );
@@ -73,12 +77,17 @@ export async function GET(request: NextRequest) {
   }
 
   // 1) Canje code → id_token (server-side, con el verifier de la cookie).
+  // F1: el redirect_uri del canje debe ser EXACTAMENTE el del authorize; como
+  // Keycloak redirige al navegador a la URI registrada que le pasamos, el Host
+  // de este callback es el mismo host que usó el login → lo derivamos igual.
+  const redirectUri = `${requestOrigin(request)}/auth/callback`;
   let idToken: string;
   try {
     const tokens = await exchangeCodeForTokens({
       orgCode: pkce.orgCode,
       code,
       verifier: pkce.verifier,
+      redirectUri,
     });
     idToken = tokens.id_token;
   } catch {
@@ -126,40 +135,53 @@ export async function GET(request: NextRequest) {
   }
 
   // 2b) Step-up MFA (D-MFA-01): Keycloak 26 no emite `amr`; la evidencia MFA
-  // es `acr` >= 2. Una sesión sin MFA (login solo-password, p. ej. el primer
-  // login donde CONFIGURE_TOTP enrola el TOTP pero no cuenta como
-  // autenticación OTP) no puede usar la consola gobernada. Se re-intenta el
-  // authorize UNA vez — la condición LoA del realm fuerza el formulario OTP
-  // sobre la sesión SSO existente — y si sigue sin MFA, falla cerrado.
+  // es `acr` >= 2. Spec 015 (D-AUTH-07/08): el step-up forzado SOLO aplica
+  // cuando la policy org require_mfa=true. Con require_mfa=false la sesión
+  // sin MFA es válida (la API es policy-aware) y el shell muestra el banner
+  // persistente que sugiere enrolarlo. Sin org-config se falla cerrado.
   if (!minted.mfa_verified) {
-    await clearPkceCookies();
-    // La sesión sin MFA es inservible: revócala (best-effort; /api/auth/logout
-    // está exento de la puerta MFA y acepta la cookie del control plane).
-    try {
-      await rawApi("/api/auth/logout", {
-        method: "POST",
-        bearer: sessionCookie,
-      });
-    } catch {
-      // ignora: la sesión expira sola y no habilita ninguna ruta
-    }
-    if (await hasStepupCookie()) {
+    const cfg = await orgConfig(pkce.orgCode);
+    const requiresMfa = cfg?.require_mfa ?? true;
+    if (!requiresMfa) {
+      // Sesión válida sin MFA: aceptarla (banner persistente en el shell).
       await clearStepupCookie();
-      return fail(
-        request,
-        "Your organization requires multi-factor authentication. " +
-          "Enroll your authenticator app (TOTP) and sign in again.",
+    } else {
+      await clearPkceCookies();
+      // La sesión sin MFA es inservible: revócala (best-effort; /api/auth/logout
+      // está exento de la puerta MFA y acepta la cookie del control plane).
+      try {
+        await rawApi("/api/auth/logout", {
+          method: "POST",
+          bearer: sessionCookie,
+        });
+      } catch {
+        // ignora: la sesión expira sola y no habilita ninguna ruta
+      }
+      if (await hasStepupCookie()) {
+        await clearStepupCookie();
+        return fail(
+          request,
+          "Your organization requires multi-factor authentication. " +
+            "Enroll your authenticator app (TOTP) and sign in again.",
+        );
+      }
+      const { verifier, challenge } = generatePkce();
+      const state = randomState();
+      await setPkceCookies({ verifier, state, orgCode: pkce.orgCode });
+      await setStepupCookie();
+      return NextResponse.redirect(
+        buildAuthorizeUrl({
+          orgCode: pkce.orgCode,
+          challenge,
+          state,
+          redirectUri: `${requestOrigin(request)}/auth/callback`,
+          acrValues: "2",
+        }),
       );
     }
-    const { verifier, challenge } = generatePkce();
-    const state = randomState();
-    await setPkceCookies({ verifier, state, orgCode: pkce.orgCode });
-    await setStepupCookie();
-    return NextResponse.redirect(
-      buildAuthorizeUrl({ orgCode: pkce.orgCode, challenge, state }),
-    );
+  } else {
+    await clearStepupCookie();
   }
-  await clearStepupCookie();
 
   const maxAge = Math.max(
     60,
@@ -173,7 +195,7 @@ export async function GET(request: NextRequest) {
   });
   await clearPkceCookies();
 
-  return NextResponse.redirect(new URL("/overview", url.origin));
+  return NextResponse.redirect(new URL("/overview", requestOrigin(request)));
 }
 
 export const runtime = "nodejs";

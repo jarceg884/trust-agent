@@ -1,9 +1,10 @@
 /**
  * OIDC authorization code + PKCE S256 (spec 009 D-AC-02, constitution IV).
  *
- * Paridad con el desktop (spec 010 D-DTB-02): el baile completo ocurre
- * server-side; el navegador solo recibe el redirect al authorize y vuelve
- * con el `code`. El `code_verifier` jamás cruza al cliente (cookie httpOnly).
+ * Paridad con el resto de las apps web (spec 009 D-AC-02): el baile completo
+ * ocurre server-side; el navegador solo recibe el redirect al authorize y
+ * vuelve con el `code`. El `code_verifier` jamás cruza al cliente (cookie
+ * httpOnly).
  */
 import { createHash, randomBytes } from "node:crypto";
 import { config, issuerFor } from "./config";
@@ -32,23 +33,36 @@ export function randomState(): string {
   return b64url(randomBytes(24));
 }
 
-/** URL de autorización del realm de la org (cliente público, sin secret). */
+/**
+ * URL de autorización del realm de la org (cliente público, sin secret).
+ *
+ * F1 (t_38ce1e82): `redirectUri` se deriva del host por el que entra el
+ * navegador (127.0.0.1 ↔ localhost) para que el baile PKCE —cookies incluidas—
+ * permanezca en ese host; Keycloak redirige de vuelta exactamente a esta URI.
+ *
+ * Spec 015 (D-AUTH-06/08): `acrValues` es parametrizable — el login lo elige
+ * por org-config (2 si la org exige MFA, 1 si es opcional) y "Set up MFA"
+ * fuerza 2 para disparar el enrolamiento TOTP inline sobre la sesión SSO.
+ */
 export function buildAuthorizeUrl(args: {
   orgCode: string;
   challenge: string;
   state: string;
+  redirectUri: string;
+  acrValues?: string;
 }): string {
   const params = new URLSearchParams({
     response_type: "code",
     client_id: config.clientId,
     scope: config.scope,
-    redirect_uri: config.redirectUri,
+    redirect_uri: args.redirectUri,
     state: args.state,
     code_challenge: args.challenge,
     code_challenge_method: "S256",
-    // D-MFA-01: sin esto un login SSO previo sin OTP devolvería acr "1" y la
-    // sesión mintada quedaría sin MFA (403 mfa_required en toda la API).
-    acr_values: config.mfaAcrValues,
+    // D-MFA-01: sin acr_values un login SSO previo sin OTP devolvería acr "1"
+    // y la sesión mintada quedaría sin MFA. Con el flujo LoA nuevo (D-AUTH-06):
+    // acr 1 = password-only; acr 2 = OTP (enrolamiento inline si no hay TOTP).
+    acr_values: args.acrValues ?? config.mfaAcrValues,
   });
   return `${issuerFor(args.orgCode)}/protocol/openid-connect/auth?${params}`;
 }
@@ -65,11 +79,12 @@ export async function exchangeCodeForTokens(args: {
   orgCode: string;
   code: string;
   verifier: string;
+  redirectUri: string;
 }): Promise<TokenSet> {
   const body = new URLSearchParams({
     grant_type: "authorization_code",
     client_id: config.clientId,
-    redirect_uri: config.redirectUri,
+    redirect_uri: args.redirectUri,
     code: args.code,
     code_verifier: args.verifier,
   });

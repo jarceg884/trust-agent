@@ -13,8 +13,9 @@ from conftest import (
     DEPT_A1, TENANT_A, USER_ALICE, _admin, bearer_headers, mint,
 )
 
-TEST_DB = "trust_agent_platform_test"
-QWEN = "qwen2.5-72b-instruct"
+import os  # noqa: E402 (honor TRUST_TEST_DB como tests/conftest.py)
+TEST_DB = os.environ.get("TRUST_TEST_DB", "trust_agent_platform_test")
+QWEN = "glm-5.2"
 
 
 def _put_budget(client, path, body, tokens):

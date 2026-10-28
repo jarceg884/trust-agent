@@ -1,0 +1,70 @@
+Trust Agent
+ADMIN CONSOLE
+
+GOVERNANCE
+
+© O @ 8
+
+9 @ Dd
+
+‘Overview
+
+Organization
+
+Departments
+
+Users & Roles
+
+Budgets
+
+Model Access
+
+Shared Agents
+
+Devices
+
+Hermes Download
+
+Credentials
+
+Audit Log
+
+Branding
+
+demo-org | Connected + Invite user
+
+Audit Log
+
+Immutable, hash-chained record of every governed action.
+
+Audit log
+Append-only, hash-chained record of every governed action, Role-scoped by the control plane.
+
+© Verification requires the org admin role CSV-27 —, JSON-27
+
+Actor Event type Resource type
+Any actor auth.login, budget. cutott Any resource
+Device Free text From
+Device UUID Search payloads. mm/dd/yyyy
+
+Table Timeline By Actor / Session
+
+SEQ WHEN ACTION ACTOR TARGET
+
+«4 Download desktop app
+
+o
+
+Resource ID
+
+To
+
+UUID or fr
+
+mm/dd/yyyy
+
+cost
+
+‘A Alex Morgan ~
+
+ACTIVITY

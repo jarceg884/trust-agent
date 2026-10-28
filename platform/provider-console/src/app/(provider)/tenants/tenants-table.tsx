@@ -20,6 +20,11 @@ import {
 import { IconOrganization } from "@/components/icons";
 
 function StatusBadge({ status }: { status: TenantListItem["status"] }) {
+  // Spec 026: pending_activation = nacido del self-signup público, aún sin
+  // activar ni budget — cola de activación del proveedor.
+  if (status === "pending_activation") {
+    return <Badge tone="warning">Pending activation</Badge>;
+  }
   return status === "active" ? (
     <Badge tone="success">Active</Badge>
   ) : (

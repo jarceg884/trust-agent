@@ -2,7 +2,7 @@
 
 Spec: [`specs/009-admin-console/spec.md`](../../specs/009-admin-console/spec.md) ·
 Mockup: `upload_iaadt_lh.png` (tema claro, acento `#c90104`) ·
-Paridad de stack con [`platform/desktop-client/`](../desktop-client/) (Next 16 + React 19 + Tailwind v4).
+Paridad de stack con [`platform/provider-console/`](../provider-console/) (Next 16 + React 19 + Tailwind v4).
 
 Panel de administración del tenant: **Overview, Organization, Departments,
 Users & Roles, Budgets, Model Access, Shared Agents, Devices, Credentials,

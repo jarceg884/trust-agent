@@ -1,0 +1,17 @@
+{
+  "model": "deepseek-v4.1-flash",
+  "screenshot": "/root/trust-agent/docs/evidencia/header-human-facing/screenshots/01-admin-console-hermes-download-header.png",
+  "prompt": "You are reviewing a screenshot of an admin console web app\n(this is a DEV/LOCAL deployment: a named host or 127.0.0.1 URL is\nacceptable dev state, do not fail it for that).\n\nContext: this header was previously flagged as \"machine-facing\" because the\ntopbar showed the raw tenant slug (e.g. \"hermes-dl\") and the user chip\nshowed only the email local part (\"admin\"). The fix: the topbar now shows\nthe organization NAME with the slug as secondary text, and the user chip\nshows \"Name — role\" when the user has a real display name.\n\nAnswer with EXACTLY this format (numbered checks, PASS or FAIL each, then\nthe score):\n\nCHECK-1 (org name in topbar): PASS/FAIL — <one line of evidence>\nCHECK-2 (slug degraded, not primary): PASS/FAIL — <evidence>\nCHECK-3 (user chip shows a real person name with role, not just \"admin\"):\nPASS/FAIL — <evidence>\nCHECK-4 (no visual regressions in the header: no overlap, no broken\nlayout, consistent styling): PASS/FAIL — <evidence>\nHEADER-SCORE: <N>/10 — <one line: is the header now human-facing and\nprofessional?>\n\nBe strict but fair. Base every verdict ONLY on what is visible in the\nscreenshot.",
+  "verdict": "CHECK-1 (org name in topbar): PASS — Topbar prominently displays \"Hermes Download Evidence Corp\" as the primary identifier next to the sidebar.\n\nCHECK-2 (slug degraded, not primary): PASS — \"hermes-dl\" appears only as small, muted gray secondary text immediately after the org name, visually subordinate.\n\nCHECK-3 (user chip shows a real person name with role, not just \"admin\"): PASS — User chip reads \"Ana Torres — org_admin\" with an avatar initial, not just an email local part.\n\nCHECK-4 (no visual regressions in the header: no overlap, no broken layout, consistent styling): PASS — Topbar elements (org name, \"Connected\" pill, Invite user / Download desktop app buttons, bell, user chip) are evenly spaced, vertically centered, no overlap or clipping, consistent typography and border radius.\n\nHEADER-SCORE: 9/10 — The header now reads as human-facing and professional: org name leads, slug is quiet metadata, and the identity chip shows a named person with role; only minor nit is the fixture-like org name string, which is content, not design.",
+  "usage": {
+    "prompt_tokens": 1311,
+    "total_tokens": 1922,
+    "completion_tokens": 611,
+    "prompt_tokens_details": {
+      "cached_tokens": 0
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 369
+    }
+  }
+}

@@ -174,7 +174,7 @@ export function OverviewPage() {
                       value={orgInput}
                       onChange={(e) => setOrgInput(e.target.value)}
                       inputMode="decimal"
-                      className="w-full rounded-lg border border-border-subtle bg-surface px-3 py-2 text-sm focus:border-accent focus:outline-none"
+                      className="w-full rounded-lg border border-border-subtle bg-surface px-3 py-2 text-sm transition-all duration-150 hover:border-foreground/25 focus:border-foreground/40 focus:ring-[3px] focus:ring-foreground/[0.08] focus:outline-none"
                     />
                   </div>
                 </div>

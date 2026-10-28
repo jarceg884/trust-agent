@@ -24,14 +24,14 @@ Navegor ──(cookies httpOnly del console)──> Next.js console (:3000)
 - **Páginas** (client components): fetch vía `/api/proxy/*` con hook `useApi`
   (loading/error/refetch) + `mutate` para acciones. Skeletons por región.
 - **Proxy** (`app/api/proxy/[...path]/route.ts`): reenvía método/query/body,
-  adjunta `Cookie: trust_session=<ta_session>` y `X-CSRF-Token` (mutaciones);
-  sobre 401 con `ta_refresh` → `POST /api/auth/refresh` upstream, cookies
+  adjunta `Cookie: trust_session=<ta_console_session>` y `X-CSRF-Token` (mutaciones);
+  sobre 401 con `ta_console_refresh` → `POST /api/auth/refresh` upstream, cookies
   nuevas en la respuesta, retry único. Pasa el envelope §5.2 tal cual.
 - **Auth**: `/auth/login?org=` genera PKCE (cookies 10 min) → 302 authorize;
   `/auth/callback` valida state, canjea code, `POST /api/auth/session
   {kind:"admin"}`, extrae `trust_session` de `Set-Cookie` (el body trae
-  `session_token:null` en sesiones admin), guarda `ta_session/ta_refresh/
-  ta_csrf` (csrf legible por JS para el header — el control plane valida el
+  `session_token:null` en sesiones admin), guarda `ta_console_session/ta_console_refresh/
+  ta_console_csrf` (csrf legible por JS para el header — el control plane valida el
   hash), limpia PKCE, redirect `/overview`.
 
 ## 2. Módulos
@@ -40,7 +40,7 @@ Navegor ──(cookies httpOnly del console)──> Next.js console (:3000)
 |---|---|
 | `src/lib/config.ts` | env: apiBase, idpBase, clientId, redirectUri, scope |
 | `src/lib/oidc.ts` | PKCE S256 + authorize/token del realm (paridad desktop) |
-| `src/lib/session.ts` | custodia de cookies (ta_session/ta_refresh/ta_csrf/pkce) |
+| `src/lib/session.ts` | custodia de cookies (ta_console_session/refresh/csrf/pkce — prefijo por app, F2) |
 | `src/lib/control-plane.ts` | cliente server-side (RSC/auth) con envelope §5.2 |
 | `src/lib/types.ts` | tipos derivados del control plane (cada uno cita fuente) |
 | `src/lib/api-client.ts` | cliente navegador vía proxy (ApiError con reason/request_id) |

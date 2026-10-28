@@ -1,0 +1,53 @@
+Trust Agent
+ADMIN CONSOLE
+
+GOVERNANCE
+
+88 Overview
+
+Organization
+
+Be b
+
+Departments
+
+Users & Roles
+
+x»
+
+Budgets
+Model Access
+
+Shared Agents
+
+oo * Oo
+
+Devices
+
+le
+
+Hermes Download
+® Credentials
+
+Audit Log
+
+> Branding
+
+demo-org | Connected + Inviteuser 4 Download desktop app
+
+Devices
+
+Desktop enrollment requests, approvals and revocation.
+
+Enrolled devices
+Devices link desktop clients to users. Revocation invalidates their sessions immediately.
+
+im)
+
+No devices enrolled yet
+Users enroll their devices from the desktop app with their organization code.
+Enrollment requests appear here for approval.
+
+‘A Alex Morgan ~
+
+Allstatuses ¥

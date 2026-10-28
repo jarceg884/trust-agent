@@ -53,7 +53,7 @@ export function Button({
     <button
       {...props}
       disabled={props.disabled || loading}
-      className={`inline-flex items-center justify-center rounded-lg font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${BUTTON_VARIANTS[variant]} ${BUTTON_SIZES[size]} ${className}`}
+      className={`inline-flex items-center justify-center rounded-lg font-medium transition-all duration-150 ease-out active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100 ${BUTTON_VARIANTS[variant]} ${BUTTON_SIZES[size]} ${className}`}
     >
       {loading ? (
         <span
@@ -140,7 +140,7 @@ export function Badge({
 }) {
   return (
     <span
-      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium leading-4 ${BADGE_TONES[tone]} ${className}`}
+      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium leading-4 ta-pop ${BADGE_TONES[tone]} ${className}`}
     >
       {children}
     </span>
@@ -182,7 +182,7 @@ export function Field({
 }
 
 const INPUT_CLASS =
-  "w-full rounded-lg border border-border-subtle bg-surface px-3 py-2 text-sm text-foreground placeholder:text-faint focus:border-accent focus:outline-none disabled:cursor-not-allowed disabled:bg-surface-alt disabled:text-muted";
+  "w-full rounded-lg border border-border-subtle bg-surface px-3 py-2 text-sm text-foreground transition-colors duration-150 placeholder:text-faint focus:border-accent focus:outline-none disabled:cursor-not-allowed disabled:bg-surface-alt disabled:text-muted";
 
 export function Input(props: React.InputHTMLAttributes<HTMLInputElement>) {
   return <input {...props} className={`${INPUT_CLASS} ${props.className ?? ""}`} />;
@@ -393,7 +393,7 @@ export function Dialog({
   if (!open) return null;
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/35 p-4"
+      className="ta-dialog-backdrop fixed inset-0 z-50 flex items-center justify-center bg-foreground/35 p-4"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
@@ -404,7 +404,7 @@ export function Dialog({
         aria-modal="true"
         aria-labelledby={titleId}
         tabIndex={-1}
-        className={`w-full ${width} rounded-xl border border-border-subtle bg-surface shadow-xl focus:outline-none`}
+        className={`ta-dialog-panel w-full ${width} rounded-xl border border-border-subtle bg-surface shadow-xl focus:outline-none`}
       >
         <header className="flex items-start justify-between gap-4 border-b border-border-subtle px-5 py-4">
           <div>
@@ -456,6 +456,20 @@ export function ConfirmDialog({
   confirmLabel?: string;
   danger?: boolean;
 }) {
+  // Atajo de teclado (estándar pro): Enter confirma salvo cuando el foco está
+  // en un botón (el Enter nativo de ese botón manda — p. ej. Cancel).
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Enter" || loading) return;
+      const el = document.activeElement;
+      if (el instanceof HTMLButtonElement) return;
+      e.preventDefault();
+      onConfirm();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open, loading, onConfirm]);
   return (
     <Dialog
       open={open}
@@ -548,7 +562,7 @@ export function Progress({ pct, tone = "accent" }: { pct: number; tone?: "accent
       aria-valuemax={100}
       className="h-1.5 w-full overflow-hidden rounded-full bg-surface-alt"
     >
-      <div className={`h-full rounded-full transition-[width] ${color}`} style={{ width: `${pct}%` }} />
+      <div className={`h-full rounded-full transition-[width] duration-500 ease-out ${color}`} style={{ width: `${pct}%` }} />
     </div>
   );
 }
@@ -655,7 +669,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
           <div
             key={t.id}
             role="status"
-            className={`pointer-events-auto flex items-start gap-2.5 rounded-lg border px-4 py-3 text-sm shadow-lg ${
+            className={`ta-toast-in pointer-events-auto flex items-start gap-2.5 rounded-lg border px-4 py-3 text-sm shadow-lg ${
               t.tone === "success"
                 ? "border-success/25 bg-surface text-foreground"
                 : "border-danger/25 bg-surface text-foreground"

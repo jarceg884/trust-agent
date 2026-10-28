@@ -1,0 +1,56 @@
+Trust Agent
+PROVIDER CONSOLE
+
+OPERATIONS
+
+Tenants
+
+Provision New Client
+
+Provider Console | Operator
+
+Tenants / final-e2e
+
+jal E2E Corp = *etive
+
+Organization
+Canonical state from the control plane.
+
+SLUG KEYCLOAK REALM CREATED
+
+final-e2e final-e2e Oct 23, 2026, 8:38 PM
+DEPARTM olDC ISSUER
+
+3 4 http: //127.0.0.1:8080/realm
+
+s/final-e2e
+
+Healthcheck
+
+Live verification: database, IdP discovery/JWKS, admin user, budget, policies, depart ments, models, audit
+
+chain.
+
+4 Run healthcheck
+
+Run the healthcheck to verify this tenant end-to-end against the live environment.
+
+© Sign out
+| Suspend tenant |
+
+Budget (period)
+
+Organization level
+
+Spent $4.00
+
+of $500.00 / month 1%
+
+Entry points
+Links that bind users to this organization
+
+ADMIN CONSOLE
+‘The customer's admins sign in here (SSO + MFA
+of their realm),
+
+http://127.0.0.1:3100/a. © Copy

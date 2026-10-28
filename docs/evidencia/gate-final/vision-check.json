@@ -1,0 +1,18 @@
+[
+ {
+  "shot": "02-admin-overview-after-ota-login.png",
+  "verdict": "{\"checks\":[{\"n\":1,\"pass\":false,\"note\":\"Sidebar lacks visible Branding and includes extra items (Usage, Policies, Hermes Download); icons are consistent.\"},{\"n\":2,\"pass\":true,\"note\":\"MFA setup banner is present and appears optional/non-blocking.\"},{\"n\":3,\"pass\":true,\"note\":\"Gate Final Corp / gate-final and real budget figures are visible; no lorem ipsum.\"},{\"n\":4,\"pass\":true,\"note\":\"Layout is clean with no visible overlap or unstyled HTML.\"}],\"score\":\"8/10\"}"
+ },
+ {
+  "shot": "05-budgets-org-dept-user.png",
+  "verdict": "{\"checks\":[{\"n\":1,\"pass\":false,\"note\":\"Users missing; departments have no USD limit (\u2014).\"},{\"n\":2,\"pass\":true,\"note\":\"Shows $150.00/$0.00 and bars; $60/$20 absent.\"},{\"n\":3,\"pass\":false,\"note\":\"Edit exists for org/dept only; no user-level Edit.\"},{\"n\":4,\"pass\":true,\"note\":\"No broken layout or overlap.\"}],\"score\":\"5/10\"}"
+ },
+ {
+  "shot": "08-audit-timeline.png",
+  "verdict": "{\"checks\":[{\"n\":1,\"pass\":true,\"note\":\"Green 'Chain intact' indicator visible.\"},{\"n\":2,\"pass\":true,\"note\":\"Actor, Event type, Resource type, dates, free text filters visible.\"},{\"n\":3,\"pass\":false,\"note\":\"Timeline content not visible; only tab and range note present.\"},{\"n\":4,\"pass\":true,\"note\":\"CSV \u00b71 and JSON \u00b71 export buttons visible.\"}],\"score\":\"7.5/10\"}"
+ },
+ {
+  "shot": "09-devices-approve-ui.png",
+  "verdict": "{\"checks\":[{\"n\":1,\"pass\":true,\"note\":\"Table has device rows with active/revoked status badges and POLICY/LAST HEARTBEAT columns.\"},{\"n\":2,\"pass\":true,\"note\":\"Presence indicator shows 0 online / 6 active \u00b7 live.\"},{\"n\":3,\"pass\":false,\"note\":\"No confirmation dialog with Confirm/Cancel actions; only an approved toast.\"},{\"n\":4,\"pass\":true,\"note\":\"Layout appears intact with no obvious breakage.\"}],\"score\":\"7.5/10\"}"
+ }
+]

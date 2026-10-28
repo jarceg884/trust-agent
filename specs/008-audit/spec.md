@@ -151,7 +151,7 @@ Acciones del catálogo `catalog.audit_actions` (spec 002 §3.5). `emit()` SIEMPR
 | **Vault/Conectores (006)** | `vault.credential_created` / `_rotated` / `_revoked` | `credential:<id>` | `{connector_slug}` — jamás el secreto |
 | | `vault.credential_used` | `credential:<id>` | `{agent?, connector_slug}` |
 | | `connector.connected` / `connector.disconnected` | `connector_instance:<id>` | `{connector_slug, mode}` |
-| **Dispositivos (007)** | `device.enrolled` / `device.approved` / `device.revoked` | `device:<id>` | `{fingerprint, user_id}` + `device_id` |
+| **Dispositivos (007)** | `device.enrolled` / `device.approved` / `device.rejected` / `device.revoked` | `device:<id>` | `{fingerprint, user_id}` (+ `outcome`) + `device_id` |
 | **Jobs (003/008 — ya instrumentado)** | `job.created` / `job.completed` | `job:<id>` | `{job_type, idempotency_key?}` |
 | **Audit (008)** | `audit.verified` | — | `{result, source, broken_seq?}` |
 

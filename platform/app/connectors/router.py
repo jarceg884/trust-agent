@@ -5,6 +5,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from ..auth.service import Principal, get_principal, get_tx, require_mfa
+from ..errors import optional_uuid, require_uuid
 from . import service
 
 router = APIRouter(prefix="/api/connectors", dependencies=[Depends(require_mfa)])
@@ -45,10 +46,11 @@ def create_instance(
     conn: Connection = Depends(get_tx),
 ):
     """Connect a connector instance (governance-gated, REQ-CON-002/004)."""
+    credential_id = optional_uuid(payload.credential_id, "credential_id")
     meta, reactivated = service.create_instance(
         conn, principal,
         connector_slug=payload.connector_slug,
-        credential_id=payload.credential_id,
+        credential_id=credential_id,
         mode=payload.mode,
         config=payload.config,
     )
@@ -71,6 +73,7 @@ def get_instance(
     principal: Principal = Depends(get_principal),
     conn: Connection = Depends(get_tx),
 ):
+    instance_id = require_uuid(instance_id, "instance_id")  # t_378503a1
     return service.get_instance(conn, principal, instance_id)
 
 
@@ -81,4 +84,5 @@ def disconnect_instance(
     conn: Connection = Depends(get_tx),
 ):
     """Disconnect an instance (idempotent; audited, REQ-CON-005)."""
+    instance_id = require_uuid(instance_id, "instance_id")  # t_378503a1
     return service.disconnect_instance(conn, principal, instance_id)

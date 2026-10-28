@@ -8,6 +8,7 @@
  * Envelope de errores §5.2: { error: { code, reason, message, request_id } }.
  */
 import { config } from "./config";
+import type { OrgConfig } from "./types";
 
 export class ApiError extends Error {
   status: number;
@@ -104,4 +105,22 @@ export async function api<T = unknown>(
     );
   }
   return payload as T;
+}
+
+/**
+ * GET /api/auth/org-config?org=<slug> (spec 015 D-AUTH-08, público).
+ *
+ * Server-side (login/callback routes): resuelve el acr del baile y decide
+ * el step-up. Devuelve null cuando la org no existe o el control plane no
+ * responde — los callers fallan cerrados (acr 2, step-up activo), que es el
+ * comportamiento seguro por defecto.
+ */
+export async function orgConfig(org: string): Promise<OrgConfig | null> {
+  try {
+    return await api<OrgConfig>(
+      `/api/auth/org-config?org=${encodeURIComponent(org)}`,
+    );
+  } catch {
+    return null;
+  }
 }

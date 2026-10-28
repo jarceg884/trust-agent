@@ -3,7 +3,7 @@ import { PageHeader } from "@/components/ui";
 import { AuditPage } from "./audit-page";
 
 export const metadata: Metadata = {
-  title: "Audit Log — Trust Agent Admin Console",
+  title: "Audit Log",
 };
 
 export default function Page() {

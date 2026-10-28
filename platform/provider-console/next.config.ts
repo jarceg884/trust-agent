@@ -3,7 +3,7 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   // App 100% dinámica (toda página lee cookies de sesión / datos del tenant) —
   // sin cache de componentes: los datos de gobernanza deben ser frescos
-  // (constitution I). Paridad con platform/desktop-client.
+  // (constitution I). Paridad con platform/console.
   cacheComponents: false,
   turbopack: {
     rules: {

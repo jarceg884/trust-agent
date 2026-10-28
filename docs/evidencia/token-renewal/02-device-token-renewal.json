@@ -1,0 +1,8 @@
+{
+  "device_id": "87dcf5e1-6482-42af-9cbf-cab2b405f809",
+  "token": "[REDACTED-POST-GATE: device token de dev, TTL 15 min, expirado]",
+  "renewed_at": 1793126324,
+  "enrolled_at": 1793125304,
+  "org_code": "hermes-dl-e2e",
+  "tenant_slug": "hermes-dl-e2e"
+}

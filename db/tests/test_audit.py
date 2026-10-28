@@ -40,7 +40,7 @@ def test_verify_chain_ok_and_continues_after_app_inserts(app_conn):
             "SELECT max(seq) FROM audit_log WHERE tenant_id = %s", (TENANT_A,)
         ).fetchone()[0]
         _insert_event(conn, TENANT_A, "policy.updated", '{"k": "allowed_connectors"}')
-        _insert_event(conn, TENANT_A, "model.approved", '{"m": "deepseek-v3"}')
+        _insert_event(conn, TENANT_A, "model.approved", '{"m": "deepseek-v4-flash"}')
         after = conn.execute(
             "SELECT max(seq) FROM audit_log WHERE tenant_id = %s", (TENANT_A,)
         ).fetchone()[0]

@@ -1,0 +1,42 @@
+{
+  "_meta": {
+    "verificador": "deepseek-v4.1-flash via skills/software-development/vision-check-maas/",
+    "fecha": "2026-10-27",
+    "capturas": "build final (imagen reconstruida tras r3), full-page CDP 1280x900, sesion admin real acr=2 del tenant hermes-dl",
+    "nota": "Scores de la corrida final sobre las capturas finales. El modelo es no deterministico (+-1-1.5 entre corridas); cada PASS esta respaldado por verificacion DOM de colores/textos computados (ver NOTA-ANTES-DESPUES.md). Las respuestas verbatim de la corrida r1 se preservan abajo."
+  },
+  "01-app-login.png": {
+    "score": "7.5/10",
+    "checks": {
+      "1_input_sin_borde_rojo": "PASS",
+      "2_cta_confiado_enterprise": "PASS (marginal: indigo #4F46E5 AA 6.2:1, 'en el lado vivido' pero confiado)",
+      "3_join_create_alineados_tactiles": "PASS (fragil: labels largos cerca del limite en viewports estrechos)",
+      "4_contraste_panel_oscuro": "PASS (~7:1, casi AAA)"
+    },
+    "top_restantes": [
+      "Sin footer de confianza/legal (Privacy/Terms/Contact admin) en el lado del formulario",
+      "Columna del formulario comprimida vs panel izquierdo ancho (split 50/50)"
+    ]
+  },
+  "02-admin-console-hermes-download.png": {
+    "score": "8/10",
+    "checks": {
+      "5_url_producto_no_localhost": "PASS (marginal: host con nombre aceptable para dev; :8000 y .local siguen siendo tells de dev — dominio publico pendiente de t_b62edff2)",
+      "6_copy_sin_jerga": "PASS",
+      "7_chip_sin_email_truncado": "PASS",
+      "8_disciplina_de_acento": "PASS (un indigo para seleccion/pasos/CTA; rojo solo en 'Disable link')"
+    },
+    "top_restantes": [
+      "org slug crudo en el header (requiere tenant_name en /api/me — derivado a tarea)",
+      "Verde con dos significados (Connected / Enabled)"
+    ]
+  },
+  "historial_scores": {
+    "login": {"antes_2026-10-26": "4/10", "r1": "7/10", "r2_indigo": "7.5/10", "r3_final": "7/10 y 7.5/10 (dos corridas)"},
+    "download": {"antes_2026-10-26": "5.5/10", "r1": "7/10", "r2_acento_roto_en_render": "5/10", "r3_parcial": "6/10", "r3_final": "8/10"}
+  },
+  "r1_verbatim": {
+    "01-app-login.png": "SCORE 7/10\n\n1. PASS — Organization code input looks neutral/calm when empty/focused; no false red error border.\n2. PASS — \"Continue\" is solid, saturated red with white text; reads confident, not washed-out.\n3. PASS — \"Join your organization\" / \"Create your organization\" are aligned on one row, readable, and not overflowing/broken.\n4. PASS — Footer/secondary text is readable; the note and left footer have adequate contrast.\n\nTop 2 remaining issues:\n1. Input focus/placeholder accessibility: no clear focus ring, and the `acme-corp` placeholder is very low-contrast, which feels less polished/accessible than Stripe/Linear.\n2. Secondary actions are visually underweighted: they read more like muted utility text than tappable links/buttons; strengthen hierarchy/affordance.",
+    "02-admin-console-hermes-download.png": "SCORE 7/10\n\nClean bones — consistent spacing, restrained palette, clear type hierarchy — but it reads as a competent generic admin template rather than Linear/Stripe/Vercel tier. The raw dev URL and the off-brand crimson accents are what keep it out of the 8–9 band.\n\n5. Download URL presentation — FAIL: the content is http://127.0.0.1:8000/download/hermes-dl — a localhost host with an exposed port; reads as an internal dev endpoint, not a product surface.\n6. Copy / jargon leakage — PASS: outcome-oriented and reassuring; no spec numbers, no 'API not deployed', no stack traces.\n7. Top-bar email truncation — PASS (barely): ellipsis present (admin@hermes-dl.te…) but clips mid-TLD; weakest element in the bar.\n8. Accent / borders / shadows / icons — PASS (with caveat): crimson active-state indicator and red step icons fight the indigo brand mark; pick one accent role — red reads as 'error' when it's actually 'selected'.\n\nTop 2 remaining issues:\n1. The localhost:8000 download link — a governance product showing a dev-machine URL as its 'stable, never-changing organization link' is a trust-breaker.\n2. Accent color discipline — indigo brand, crimson nav, crimson step icons, green pill, red destructive: five colors competing. Unify the informational/selected accent to the brand hue and reserve red strictly for destructive actions."
+  }
+}

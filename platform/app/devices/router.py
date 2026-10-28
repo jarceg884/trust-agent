@@ -2,10 +2,14 @@
 
 Routes:
   POST /api/devices/enroll               id_token (JWKS+MFA) + org_code -> pending
+                                         (202 + enrollment_token) | active same
+                                         owner -> 200 + fresh device_token
+                                         (D-HRB-03 amend, spec 022 v1.1.0)
   POST /api/devices/enroll/exchange      one-time enrollment_token -> device token
   POST /api/devices/{device_id}/token    renew device token (session + MFA + owner)
   GET  /api/devices/me                   own devices
   GET  /api/devices                      admin list (devices.manage)
+  GET  /api/devices/presence             live presence: who is connected (spec 027)
   GET  /api/devices/{device_id}          admin detail (scope enforced, 404 outside)
   POST /api/devices/{device_id}/approve  pending -> active
   POST /api/devices/{device_id}/reject   pending -> rejected
@@ -23,7 +27,7 @@ from ..auth.jwks import verify_id_token
 from ..auth.mfa import mfa_evidence
 from ..config import get_settings
 from ..db import get_engine, set_tenant
-from ..errors import invalid_token, tenant_suspended, validation_failed
+from ..errors import invalid_token, optional_uuid, require_uuid, tenant_suspended, validation_failed
 from . import service
 
 router = APIRouter(prefix="/api/devices")
@@ -38,6 +42,9 @@ class EnrollBody(BaseModel):
     fingerprint: str
     device_name: str | None = None
     platform: str | None = None
+    # Spec 034 (D-034-04): 'cli' (instalador curl|bash ligado a la org) o
+    # 'desktop' (bundle desktop). Default retrocompatible.
+    device_type: str = "desktop"
 
 
 class ExchangeBody(BaseModel):
@@ -52,6 +59,11 @@ def enroll(body: EnrollBody):
     org_code is validated against the tenant's slug (D-DEV-02) and only helps
     the desktop disambiguate the realm. The enrollment token is returned
     EXACTLY ONCE here (ADR-006).
+
+    D-HRB-03 amend (spec 022 v1.1.0): an ALREADY-ACTIVE device of the same
+    user gets a fresh device token DIRECTLY (200) — the caller re-proved
+    identity with a fresh MFA id_token; no admin re-approval, no one-time
+    enrollment token. 202 + enrollment_token remains the pending flow.
     """
     settings = get_settings()
     claims = verify_id_token(
@@ -81,6 +93,8 @@ def enroll(body: EnrollBody):
             raise validation_failed(
                 "org_code does not match the organization of the verified token."
             )
+        if body.device_type not in ("desktop", "cli"):
+            raise validation_failed("device_type must be 'desktop' or 'cli'.")
         urow = conn.execute(
             text(
                 "SELECT id FROM users WHERE oidc_subject = :sub "
@@ -90,7 +104,14 @@ def enroll(body: EnrollBody):
         ).mappings().first()
         if urow is None:
             raise invalid_token()
-        return service.enroll(
+        # D-AUTH-11 (spec 015 v1.1.0): MFA evidence is REQUIRED here, so the
+        # verified claims prove a second factor — sync the directory column
+        # in the same tenant-scoped transaction. Guarded UPDATE (no-op once
+        # true).
+        from ..auth.service import sync_mfa_enrolled
+
+        sync_mfa_enrolled(conn, str(urow["id"]))
+        result = service.enroll(
             conn,
             tenant_id=str(trow["id"]),
             user_id=str(urow["id"]),
@@ -98,7 +119,13 @@ def enroll(body: EnrollBody):
             fingerprint=body.fingerprint,
             device_name=body.device_name,
             platform=body.platform,
+            device_type=body.device_type,
         )
+    # D-HRB-03 amend: direct re-issue for an active device answers 200
+    # (the decorator default is 202 for the pending flow).
+    if result.get("status") == "active":
+        return JSONResponse(status_code=200, content=result)
+    return result
 
 
 @router.post("/enroll/exchange")
@@ -117,6 +144,7 @@ def renew_device_token(
     conn: Connection = Depends(get_tx),
 ):
     """Renew the short-lived device token (session + MFA + ownership)."""
+    device_id = require_uuid(device_id, "device_id")  # t_378503a1: 422, not 500
     return service.renew_token(conn, principal=principal, device_id=device_id)
 
 
@@ -135,11 +163,28 @@ def list_devices(
     principal: Principal = Depends(get_principal),
     conn: Connection = Depends(get_tx),
 ):
+    department_id = optional_uuid(department_id, "department_id")
     return {
         "devices": service.list_devices(
             conn, principal=principal, status=status, department_id=department_id,
         )
     }
+
+
+@router.get("/presence", dependencies=_MANAGE)
+def device_presence(
+    department_id: str | None = None,
+    principal: Principal = Depends(get_principal),
+    conn: Connection = Depends(get_tx),
+):
+    """GET /api/devices/presence (spec 027 REQ-027-04): live connections.
+
+    Registered BEFORE /{device_id} so "presence" is not captured as a uuid.
+    """
+    department_id = optional_uuid(department_id, "department_id")
+    return service.presence(
+        conn, principal=principal, department_id=department_id
+    )
 
 
 @router.get("/{device_id}", dependencies=_MANAGE)
@@ -148,6 +193,7 @@ def get_device(
     principal: Principal = Depends(get_principal),
     conn: Connection = Depends(get_tx),
 ):
+    device_id = require_uuid(device_id, "device_id")  # t_378503a1: 422, not 500
     return service.get_device(conn, principal=principal, device_id=device_id)
 
 
@@ -157,6 +203,7 @@ def approve(
     principal: Principal = Depends(get_principal),
     conn: Connection = Depends(get_tx),
 ):
+    device_id = require_uuid(device_id, "device_id")  # t_378503a1: 422, not 500
     return service.approve(conn, principal=principal, device_id=device_id)
 
 
@@ -166,6 +213,7 @@ def reject(
     principal: Principal = Depends(get_principal),
     conn: Connection = Depends(get_tx),
 ):
+    device_id = require_uuid(device_id, "device_id")  # t_378503a1: 422, not 500
     return service.reject(conn, principal=principal, device_id=device_id)
 
 
@@ -175,4 +223,5 @@ def revoke(
     principal: Principal = Depends(get_principal),
     conn: Connection = Depends(get_tx),
 ):
+    device_id = require_uuid(device_id, "device_id")  # t_378503a1: 422, not 500
     return service.revoke(conn, principal=principal, device_id=device_id)

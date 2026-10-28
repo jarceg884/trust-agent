@@ -7,6 +7,7 @@ is audited (budget.forced_below_spend).
 """
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 import uuid as _uuid
 
 from sqlalchemy import text
@@ -74,7 +75,10 @@ def _budget_row(
 def _spent_in_window(
     conn: Connection, *, level: str, entity_id: str,
     period_start: date, period_end: date,
-) -> int:
+) -> Decimal | int:
+    """Spent of the window. Decimal (milli-centavo) since migration 0029
+    (D-GOV-17): budget_counters.spent_cents is numeric(12,3); 0 when the
+    window has no counter row yet."""
     row = conn.execute(
         text(
             "SELECT spent_cents FROM budget_counters "
@@ -179,7 +183,7 @@ def _check_force_below_spend(
             target_type="budget", target_id=level,
             payload={"level": level, "department_id": department_id,
                      "user_id": user_id, "amount_cents": amount_cents,
-                     "spent_cents": spent},
+                     "spent_cents": float(spent)},  # Decimal no es JSON-safe
         )
 
 
@@ -306,11 +310,19 @@ def set_user_budget(
     return result
 
 
+def _cents_out(value: Decimal | int | float) -> int | float:
+    """Monto en centavos JSON-safe (D-GOV-17): int si es entero (contrato
+    previo de la API/bundle), float solo si hay fracción sub-centavo."""
+    if value == int(value):
+        return int(value)
+    return float(value)
+
+
 @dataclass
 class LevelStatus:
     level: str
     budget_cents: int | None
-    spent_cents: int
+    spent_cents: Decimal | int  # milli-centavo (D-GOV-17, migración 0029)
     period: str
     cutoff: bool
 
@@ -318,9 +330,12 @@ class LevelStatus:
         return {
             "level": self.level,
             "budget_cents": self.budget_cents,
-            "spent_cents": self.spent_cents,
+            # JSON-safe: int cuando el monto es entero (contrato previo,
+            # ej. bundle AC-GOH-002 exige int) y float SOLO si la fracción
+            # sub-centavo existe (D-GOV-17).
+            "spent_cents": _cents_out(self.spent_cents),
             "remaining_cents": (
-                self.budget_cents - self.spent_cents
+                _cents_out(self.budget_cents - self.spent_cents)
                 if self.budget_cents is not None else None
             ),
             "period": self.period,
@@ -342,9 +357,16 @@ def _level_status(
         conn, level=level, entity_id=entity_id,
         period_start=start, period_end=end,
     )
+    # A budget ROW is an explicit budget, even at 0 cents: cutoff is
+    # spent >= amount, exactly like the enforcement path (spend.py
+    # enforce_tenant). The old `amount_cents > 0` guard conflated
+    # "budget 0" with "no budget" (budget is None here) and made
+    # GET /api/budgets/me report cutoff=false while the spend worker
+    # had already cut the user off (AC-GOV-012, edge amount=0,
+    # gap B-1 t_ac2d2611).
     return LevelStatus(
         level, budget["amount_cents"], spent, budget["period"],
-        budget["amount_cents"] > 0 and spent >= budget["amount_cents"],
+        spent >= budget["amount_cents"],
     )
 
 
@@ -392,6 +414,44 @@ def overview(conn: Connection, tenant_id: str) -> dict:
             "ORDER BY d.name"
         )
     ).mappings()
+    # t_6b40c758 (QA F3): per-user budgets nested under each department —
+    # the read path the console needs to edit them (PUT /api/budgets/user/
+    # {id}) and to surface Σ user budgets vs dept, mirroring Σ dept vs org
+    # (REQ-BUD-003). Users are grouped by their CURRENT department.
+    user_budget_rows = conn.execute(
+        text(
+            "SELECT user_id, amount_cents, period FROM budgets "
+            "WHERE level = 'user' AND status = 'active'"
+        )
+    ).mappings()
+    budget_by_user = {str(r["user_id"]): r for r in user_budget_rows}
+    users_by_dept: dict[str, list[dict]] = {}
+    for u in conn.execute(
+        text(
+            "SELECT id, email, display_name, department_id FROM users "
+            "ORDER BY email"
+        )
+    ).mappings():
+        if u["department_id"] is None:
+            continue  # user budgets are scoped to a department
+        uid = str(u["id"])
+        b = budget_by_user.get(uid)
+        if b is not None:
+            b_start, b_end = period_window(b["period"], today())
+            b_spent = _spent_in_window(
+                conn, level="user", entity_id=uid,
+                period_start=b_start, period_end=b_end,
+            )
+        else:
+            b_spent = 0
+        users_by_dept.setdefault(str(u["department_id"]), []).append({
+            "user_id": uid,
+            "email": u["email"],
+            "display_name": u["display_name"],
+            # null until PUT /api/budgets/user/{id} assigns one.
+            "budget_cents": b["amount_cents"] if b is not None else None,
+            "spent_cents": b_spent,
+        })
     departments = []
     dept_total = 0
     for r in dept_rows:
@@ -405,17 +465,19 @@ def overview(conn: Connection, tenant_id: str) -> dict:
             )
             if r["amount_cents"] is not None else 0
         )
-        members = conn.execute(
-            text("SELECT count(*) AS c FROM users "
-                 "WHERE department_id = CAST(:d AS uuid)"),
-            {"d": str(r["department_id"])},
-        ).mappings().first()["c"]
+        dept_id = str(r["department_id"])
+        dept_users = users_by_dept.get(dept_id, [])
         departments.append({
-            "department_id": str(r["department_id"]),
+            "department_id": dept_id,
             "name": r["name"],
             "budget_cents": r["amount_cents"],
             "spent_cents": spent,
-            "members": members,
+            "members": len(dept_users),
+            "users": dept_users,
+            "user_budgets_total_cents": sum(
+                u["budget_cents"] for u in dept_users
+                if u["budget_cents"] is not None
+            ),
         })
     return {
         "organization": org.as_dict(),
@@ -481,7 +543,7 @@ def history(
             if scope_depts is None:
                 w["organization"] = {
                     "budget_cents": r["budget_cents"],
-                    "spent_cents": r["spent_cents"],
+                    "spent_cents": _cents_out(r["spent_cents"]),
                 }
         elif r["level"] == "dept":
             if scope_depts is None or entity in scope_depts:
@@ -489,7 +551,7 @@ def history(
                     "department_id": entity,
                     "name": dept_names.get(entity),
                     "budget_cents": r["budget_cents"],
-                    "spent_cents": r["spent_cents"],
+                    "spent_cents": _cents_out(r["spent_cents"]),
                 })
         else:  # user
             display_name, user_dept = user_meta.get(entity, (None, None))
@@ -499,7 +561,7 @@ def history(
                     "display_name": display_name,
                     "department_id": user_dept,
                     "budget_cents": r["budget_cents"],
-                    "spent_cents": r["spent_cents"],
+                    "spent_cents": _cents_out(r["spent_cents"]),
                 })
 
     out = []
@@ -516,7 +578,7 @@ def history(
             params["depts"] = [_uuid.UUID(d) for d in scope_depts]
         model_sql += "GROUP BY model_name ORDER BY s DESC, model_name"
         w["by_model"] = [
-            {"model_name": r["model_name"], "spent_cents": r["s"]}
+            {"model_name": r["model_name"], "spent_cents": _cents_out(r["s"])}
             for r in conn.execute(text(model_sql), params).mappings()
         ]
         out.append(w)

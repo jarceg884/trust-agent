@@ -1,247 +1,173 @@
-# Flujo del desktop white-label — login, enrolamiento y sesión gobernada
+# Flujo del desktop real — link de descarga → Hermes → enrolamiento automático
 
-> Spec 010 (`specs/010-desktop-enrollment/`). Implementación cliente:
-> `platform/desktop-client/` (Next.js App Router + TS + Tailwind, puerto **9090**).
-> Contratos de API: specs 003 (sesiones/device token), 005 (gobernanza), 007 (dispositivos).
-> El desktop **es Hermes Agent configurado** — ver §6 y `platform/desktop-client/hermes/README.md`.
+> **Estado (t_b8769ecb, mandato Miller, 2026-10-26)**: el desktop-client demo
+> (:9090, spec 010) fue **RETIRADO del stack y del repo**. Era un double de
+> desarrollo que simulaba el desktop para probar la API de dispositivos —
+> nunca fue el producto. El usuario final **NUNCA ve un panel de
+> enrolamiento**: cuando usa el link y se autentica, su Hermes queda enrolado
+> a la organización automáticamente (zero-UI).
+>
+> Este documento describe el flujo REAL, implementado por las specs 022
+> (puente Hermes real + plugin de gobernanza) y 023 (link de descarga por
+> tenant + bundle white-label). Evidencia y runbooks:
+> `docs/hermes-download.md` (spec 023) y `docs/hermes-real-bridge.md`
+> (spec 022). La versión histórica de este doc (flujo del demo :9090) vive en
+> el historial de git.
 
 ## 1. Visión general
 
-El usuario final descarga el desktop white-label (marca de su organización).
-La primera experiencia tiene tres momentos:
-
 ```
-┌────────────┐   1. LOGIN OIDC/PKCE   ┌────────────┐   2. ENROLLMENT      ┌─────────────┐
-│  Login     │ ─────────────────────► │ Enroll     │ ───────────────────► │ Aprobación  │
-│ (org code) │   SSO+MFA del realm    │ (keypair   │   admin de la org    │ (consola    │
-└────────────┘                        │  local)    │   aprueba el device  │  admin)     │
-                                      └────────────┘                      └─────────────┘
-                                                                                │
-┌──────────────────────────────────────┐   3. SESIÓN GOBERNADA                 │
-│ Dashboard: presupuesto, políticas,   │ ◄──────────────────────────────────────┘
-│ modelos aprobados, dispositivos      │   device token + políticas/perfil/skills de la org
-└──────────────────────────────────────┘
-```
-
-## 2. Login — OIDC authorization code + PKCE S256 (REQ-DTB-001)
-
-El usuario solo escribe su **código de organización** (`org_code` =
-`tenants.slug` = realm Keycloak). El desktop construye el issuer como
-`{idp_base}/realms/{org_code}` (D-DTB-01) — el `org_code` desambigua el realm,
-pero **no es raíz de confianza**: el tenant siempre sale del claim firmado
-`tenant_id` del `id_token` verificado por JWKS (D-CP-03).
-
-Secuencia (todo el baile criptográfico ocurre **server-side** en el servidor
-Next.js local; el navegador jamás ve el verifier ni los tokens):
-
-```
-Navegador                  Next.js :9090                    Keycloak :8080              Control plane :8000
-   │ POST / (org_code)          │                                │                          │
-   │ ─────────────────────────► │ genera verifier + state        │                          │
-   │                            │ (cookies httpOnly ta_pkce_*)   │                          │
-   │ 302 → /realms/{org}/…/auth │                                │                          │
-   │ ◄───────────────────────── │                                │                          │
-   │ login UI (password + TOTP) ────────────────────────────────► │                          │
-   │ 302 → /auth/callback?code&state                             │                          │
-   │ ──────────────────────────► │ canje code→id_token (verifier) │                          │
-   │                            │ ─────────────────────────────► │                          │
-   │                            │ POST /api/auth/session {id_token, kind:"desktop"} ───────► │
-   │                            │                                 │  JWKS + rate-limit +     │
-   │                            │ ◄── session/refresh/csrf + expires_at ──────────────────  │  sesión PostgreSQL
-   │ 302 → /dashboard           │ cookies httpOnly ta_session/ta_refresh/ta_csrf/ta_idtoken │  + audit auth.login
+Admin del cliente                Empleado (usuario final)                Control plane
+─────────────────                ───────────────────────                ─────────────
+Hermes Download (Admin           Abre /download/{slug} → página con
+Console, REQ-AC-033)   ───────►  branding del tenant → descarga el
+comparte el link                 tarball (bundle real de Hermes)
+                                                                        GET /download/{slug}/bundle
+                                                                        audit download.issued
+                                 install.sh → instala Hermes COMPLETO
+                                 en su home: plugin trust-agent-
+                                 governance + binding de org + skin
+                                 white-label + gateway.standalone
+                                 trust-login → navegador real: SSO+MFA
+                                 del realm (acr=2, PKCE S256,
+                                 callback 127.0.0.1:8765)       ─────►  mint de sesión + virtual key
+                                 AUTO-ENROLL zero-UI (plugin):   ─────►  POST /api/devices/enroll → 202 pending
+                                 submit + poll, SIN paneles              enrollment_token one-time
+                                 (el plugin lo hace solo)        ◄────►  POST /api/devices/enroll/exchange
+Aprueba el device desde el                                               (202 pending / 200 token / 410)
+Admin Console (control de        Device token 0600 en el home   ◄──────  200 {device_token} al aprobar
+seguridad, D-023-03)             Sesión GOBERNADA: el Hermes del
+                                 empleado corre bajo la policy
+                                 firmada de la org (veto de tools,
+                                 modelos/presupuesto vía LiteLLM,
+                                 heartbeat + attestation)
 ```
 
-- Cliente público `trust-agent-web`; redirect URI del desktop:
-  `http://127.0.0.1:9090/auth/callback` (registrada por el aprovisionamiento,
-  `oidc_redirect_uris`).
-- **MFA obligatorio** (`require_mfa`, catálogo `policy_keys`): el IdP exige
-  TOTP (required action `CONFIGURE_TOTP` del aprovisionamiento — Keycloak 26
-  NO permite enrolar TOTP vía Admin REST, pitfall #9 del skill
-  `identity/keycloak-admin-oidc`; lo enrola el propio usuario en su primer
-  login, flujo real sin scraping).
-- El mint de sesión (`POST /api/auth/session`) verifica el `id_token` con
-  JWKS (firma/exp/aud/iss), aplica rate limiting de login y crea la sesión en
-  PostgreSQL (nunca en memoria). Devuelve `session_token` (Bearer), 
-  `refresh_token`, `csrf_token`, `expires_at`.
-- Custodia local de tokens (D-DTB-03): cookies **httpOnly** del servidor
-  Next.js local — equivalente web del keychain del desktop empaquetado.
+Tres momentos, **cero UI de enrolamiento** para el invitado:
 
-## 3. Enrolamiento del dispositivo (REQ-DTB-002/003, spec 007)
+1. **Link** — el admin del cliente genera/comparte el link de descarga desde
+   SU Admin Console (sección "Hermes Download"). El proveedor NO genera links
+   (corrección Miller t_360a752e).
+2. **Instalación + login** — el empleado descarga el bundle y corre
+   `install.sh`; luego `trust-login` hace el baile OIDC con el navegador real.
+3. **Enrolamiento automático + aprobación** — el plugin enrola el dispositivo
+   por sí mismo (submit + poll); el admin de la org aprueba desde el Admin
+   Console. La aprobación SE MANTIENE como control de seguridad (D-023-03):
+   con `org_code` público, auto-aprobar convertiría el link en enrolamiento
+   sin control.
+
+## 2. Link de descarga por tenant (spec 023)
+
+| Pieza | Detalle |
+|---|---|
+| Página pública | `GET /download/{tenant_slug}` — HTML con branding publicado del tenant, rate-limited (contadores en PostgreSQL), anti-enumeración (404×5 → 429) |
+| Bundle | `GET /download/{slug}/bundle` — tarball REAL: plugin `trust-agent-governance` (spec 022) + `install.sh` + `trust-login` + manifest con `org_code` y sha256 por miembro |
+| Gestión del link | `GET/PUT /api/download-link` (contrato `{url, enabled, updated_at}`; permiso `download_link.manage`, solo org_admin; toggle en el Admin Console) |
+| Audit | `download.link.enabled` / `download.link.disabled` / `download.issued` (payload `{slug, ip, user_agent, bundle_sha256}`) |
+| Link deshabilitado | descarga → 403 `link_disabled` |
+
+## 3. Instalación (install.sh del bundle)
+
+Instala **Hermes completo** en el home del usuario (`$HERMES_HOME` o
+`~/.hermes`), sin parches al core (constitution IV, lección C6):
+
+- plugin `trust-agent-governance` activo (`plugins.enabled`);
+- `gateway.standalone true` — gateway dedicado por perfil (hallazgo crítico
+  spec 022: el gateway multiplex corre los turnos contra el scope default y
+  los hooks del plugin no disparan);
+- binding de org (`org-code.txt`) y skin white-label derivado del branding
+  publicado del tenant;
+- `platform_toolsets.cli` con la tool `governance_status`;
+- `.env` del perfil con `TRUST_AGENT_API` y la virtual key (se escribe una
+  sola vez; el key material se muestra exactamente una vez).
+
+## 4. Login — trust-login (OIDC authorization code + PKCE S256)
+
+El helper `trust-login` del bundle abre el **navegador real** del usuario
+contra el realm de su organización (`{idp}/realms/{org_code}`):
+
+- cliente público `trust-agent-web`, `acr_values=2` (SSO+MFA — puerta MFA:
+  `amr` O `acr ≥ 2`, spec 011 D-MFA-01);
+- callback local `http://127.0.0.1:8765/callback` (registrado en el cliente
+  público de cada realm por el provisioning; `ensure_web_client_redirect_uris`
+  lo cura en realms pre-existentes);
+- el `id_token` verificado queda en `id-token.txt` con permisos 0600; la
+  virtual key del usuario se auto-emite (self-issue) contra el control plane.
+
+## 5. Enrolamiento automático zero-UI (plugin, spec 007/022)
 
 Primera clase, **cero scraping** (D-DEV-01): la identidad del dispositivo la
-aporta el propio dispositivo.
+aporta el propio dispositivo. El plugin lo hace TODO sin paneles:
 
-1. **Keypair local** (WebCrypto en el navegador, RSA-2048): la clave pública
-   viaja como SPKI PEM; la **privada (PKCS#8) nunca sale del dispositivo**
-   (v1 web: `localStorage`; empaquetado: keychain del SO).
-2. **Fingerprint estable** por instalación (`web-<platform>-<uuid>`).
-3. `POST /api/devices/enroll` — el route handler `/api/desktop/enroll`
-   inyecta el `id_token` (cookie httpOnly; la API exige JWT con evidencia
-   MFA: `amr` o `acr` ≥ 2, D-MFA-01) y
-   el `org_code` (= slug del tenant verificado vía `/api/me`). Respuesta **202**
-   `{device_id, status:"pending", enrollment_token}` — el `enrollment_token`
-   es **one-time** (`enr1.<tenant>.<device>.<secret>`; en DB solo su sha256).
-4. **Espera de aprobación** (D-DEV-04): el canje ES el polling. La pantalla
-   muestra "waiting for approval" y repite `POST /api/devices/enroll/exchange`
-   cada 5 s:
-   - `pending` → **202** (no consume) — sigue esperando;
-   - admin aprueba (consola admin, `POST /api/devices/{id}/approve`) →
-     **200** `{device_token, expires_in}` (consume el hash) — el desktop
-     guarda el device token en el keystore local;
-   - rechazado/revocado/token consumido → **410** uniforme, sin oráculo
-     (mensaje único "enrollment no longer valid").
-5. Audit: `device.enrolled` (usuario) y `device.approved` (admin) con
+1. **Keypair local** (RSA-2048): la pública viaja como SPKI PEM; la privada
+   (PKCS#8) **nunca sale del dispositivo** (keystore del home, 0600).
+2. `POST /api/devices/enroll` con el `id_token` MFA-verified → **202**
+   `{device_id, status:"pending", enrollment_token}` — one-time
+   (`enr1.<tenant>.<device>.<secret>`; en DB solo su sha256).
+3. **Polling** `POST /api/devices/enroll/exchange`:
+   - `pending` → 202 (no consume) — sigue esperando;
+   - admin aprueba (Admin Console, `POST /api/devices/{id}/approve`) →
+     **200** `{device_token, expires_in}` (consume el hash);
+   - rechazado/revocado/consumido → **410** uniforme, sin oráculo.
+4. Audit: `device.enrolled` (usuario) y `device.approved` (admin) con
    `device_id` (REQ-DEV-006).
 
-El device token JWT (HS256, firmado por el control plane, TTL 15 min) es la
-credencial de dispositivo: pasa el `DeviceGate`, actualiza `last_seen_at`
-(throttle 60 s) y su revocación invalida las sesiones ligadas **en la misma
-transacción** (≤ 60 s por construcción, D-DEV-07). Renovación: `POST
-/api/devices/{device_id}/token` (sesión + MFA + propiedad).
+El device token JWT (HS256, TTL 15 min, renovable vía
+`POST /api/devices/{id}/token`) pasa el `DeviceGate`, alimenta el heartbeat
+del plugin y su revocación invalida el acceso **en la misma transacción**
+(D-DEV-07, spec 019: además barre conectores y bloquea la virtual key).
 
-## 4. Recepción de políticas / perfiles / skills de la organización
+## 6. Sesión gobernada — el Hermes del empleado queda gobernado
 
-Con el dispositivo `active`, el usuario queda en **sesión gobernada**. Lo que
-la organización le entrega:
+Lo que la organización impone (no solo muestra):
 
-| Qué | Mecanismo | Dónde se ve |
-|---|---|---|
-| Presupuesto jerárquico (org→depto→usuario, USD centavos) | `GET /api/me/budget` — gastado/restante/corte por nivel | Dashboard "Budget" |
-| Políticas efectivas (combinador org∩depto∩usuario + piso del proveedor) | `GET /api/me/policies` | Dashboard "Organization policies active" |
-| Modelos aprobados (intersección de model access + política `allowed_models`) | `GET /api/models/allowed-for-me` | Dashboard "Approved models" |
-| Dispositivos propios | `GET /api/devices/me` | Dashboard "Your devices" |
-| Inbox de gobernanza (cortes, umbrales) | `GET /api/me/notifications` | Dashboard "Governance notifications" |
-| Perfil del agente (SOUL, config, skills del departamento) | **Profile distribution** de Hermes (`hermes profile install`) | Sesión del agente |
-| Virtual key de modelos (modelos permitidos + `max_budget`) | Emisión one-time del control plane → `.env` del perfil | Gateway LiteLLM |
+- **Tools**: veto `pre_tool_call` por `allowed_tools` de la policy firmada
+  (mensaje exacto `BLOCKED by organization policy: tool <t> is not allowed.
+  Allowed tools: …`); fail-closed en modo `restricted` (toda tool externa
+  bloqueada si la policy no se puede refrescar).
+- **Modelos y presupuesto**: el tráfico LLM pasa por el gateway LiteLLM del
+  tenant con la virtual key del usuario (D-GOV-15) — la key rechaza modelos
+  no aprobados y aplica `max_budget`. Sin `fallback_model`: nada evade el
+  gateway.
+- **Policy en vivo**: heartbeat del plugin aplica la policy vigente
+  (v1→v2→v3 en el mismo ciclo, sin reinicio) y reporta attestation
+  (uptime, versión del plugin, vetos) — `devices.last_heartbeat_at`,
+  `applied_policy_version`, `agent_uptime_seconds` en BD.
+- **Visibilidad para el usuario**: la tool `governance_status` del plugin
+  muestra su estado gobernado (presupuesto, modelos, tools permitidas) —
+  no existe un dashboard web del empleado.
 
-## 5. Sesión gobernada (dashboard, REQ-DTB-004)
+## 7. Artefactos (repo)
 
-El dashboard (`/dashboard`, RSC) muestra **solo datos reales** de la API
-(constitution I — cero mocks): identidad (`/api/me`), presupuesto con banner
-de corte real (`cutoff: true`), políticas activas (las invariables marcadas
-"Provider floor — cannot be relaxed"), modelos aprobados, dispositivos con
-estado y último acceso, notificaciones. Estados de carga/error/vacío reales;
-el error muestra el `request_id` del envelope §5.2 (REQ-DTB-007). Sin sesión →
-redirect a login; 401 de la API → sesión revocada → login.
+| Artefacto | Ruta |
+|---|---|
+| Plugin `trust-agent-governance` (núcleo v2 + enroll + enforcement + attestation) | `platform/hermes/plugins/trust-agent-governance/` |
+| Plantilla de perfil (config + SOUL) | `platform/hermes/profile-template/` |
+| Empaquetado del bundle (servidor) | `platform/app/download/` (page, bundle, router) |
+| Harness E2E (8 fases, idempotente) | `platform/scripts/evidence_hermes_download.py` |
+| Tests | `platform/tests/test_hermes_download.py`, `test_hrb_enforcement.py`, `test_hrb_heartbeat.py`, `test_governance_bundle.py`, `test_governance_attestation.py`, `test_live_policy_presence.py` |
 
-Lo que la sesión gobernada **impone** (no solo muestra):
+El Dockerfile del API copia el plugin a `/opt/trust-agent/hermes-plugins`
+(`settings.hermes_plugin_dir`) para empaquetarlo en el tarball.
 
-- **Solo modelos aprobados**: el tráfico LLM pasa por el gateway LiteLLM del
-  tenant con la virtual key del usuario (D-GOV-15) — la key rechaza modelos no
-  aprobados y aplica presupuesto. Sin `fallback_model` en el perfil: nada
-  evade el gateway.
-- **Presupuesto con corte**: al agotarse el presupuesto, el control plane
-  bloquea la key (401), notifica al inbox y el dashboard muestra el corte.
-- **Políticas activas**: MFA obligatorio, `approved_models_only`, grants
-  explícitos para agentes compartidos, credenciales con scope mínimo —
-  evaluadas server-side en cada operación.
-- **Audit completo**: login, enrolamiento, uso de modelos, cortes — cadena
-  append-only verificable (`audit_verify_chain`).
-
-## 6. Integración con Hermes Agent (oficial, sin forks)
-
-**El desktop es Hermes configurado** (D-DTB-07, constitution IV, lección C6).
-Artefactos en `platform/desktop-client/hermes/`:
-
-1. **Profile por usuario** (`profile-template/config.yaml`): Hermes corre con
-   un perfil propio por usuario; su `model.base_url` apunta al proxy LiteLLM
-   del tenant con `api_key = ${TRUST_USER_VIRTUAL_KEY}`. **El gate real de
-   modelos/presupuesto es LiteLLM** — no hay parche posible que lo evite.
-2. **Profile distribution**: la plantilla (SOUL/config/skills por
-   departamento) se publica como repo git y se instala con
-   `hermes profile install <repo> --alias <user>`; `hermes profile update`
-   actualiza la plantilla sin tocar credenciales/memorias/sesiones de la
-   máquina.
-3. **Plugin `trust-agent-governance`** (`plugin.yaml` + `__init__.py::
-   register(ctx)` — API verificada en `hermes_cli/plugins.py`):
-   - tool `governance_status`: estado gobernado en vivo (presupuesto,
-     políticas, modelos) desde la API con el device token;
-   - hook `pre_llm_call`: **inyecta contexto** de gobernanza en cada turno
-     (verificado: es un hook de contexto, no de veto — el veto de modelos lo
-     hace LiteLLM);
-   - hook `pre_tool_call`: **veto de defensa en profundidad** (p. ej.
-     delegación de agentes con presupuesto en corte) — verificado:
-     `_dispatch_pre_tool_call_hooks` consume `block_message`.
-
-Cero parches a `hermes_cli/`; sin `verify=False`; secretos one-time; sin ROPC
-para usuarios finales.
-
-## 7. Cómo ejecutar el desktop (desarrollo local)
+## 8. Cómo verificarlo (runbook)
 
 ```bash
-# 1) Control plane (platform/README.md): PostgreSQL :55432 + Keycloak :8080
-#    y uvicorn :8000 con TRUST_* correspondientes.
+cd /root/trust-agent
+docker compose up -d --remove-orphans   # stack completo (SIN desktop-client)
 
-# 2) Desktop client (puerto 9090 — redirect URI registrada)
-cd /root/trust-agent/platform/desktop-client
-npm install
-npm run build && npm start        # http://127.0.0.1:9090
-# (dev: npm run dev)
-
-# Variables (defaults ya apuntan al stack local):
-#   TRUST_API_BASE_URL=http://127.0.0.1:8000
-#   TRUST_IDP_BASE_URL=http://127.0.0.1:8080
-#   TRUST_DESKTOP_REDIRECT_URI=http://127.0.0.1:9090/auth/callback
+# E2E completo link→bundle→install→login→auto-enroll→approve→gobernanza:
+cd platform && .venv/bin/python scripts/evidence_hermes_download.py --phase all
+# Runbook detallado: docs/hermes-download.md §5
+# Puente Hermes real + policy en vivo: docs/hermes-real-bridge.md §10
 ```
 
-Flujo de prueba: login con el `org_code` del tenant → SSO+MFA del realm →
-dashboard (si el dispositivo no está enrolado, banner con "Enroll this
-device") → enrolamiento → aprobación desde la consola admin (o API
-`POST /api/devices/{id}/approve`) → el polling del desktop recibe el device
-token → dashboard con el dispositivo `active`.
+## 9. Historia: el demo :9090 (spec 010) y el hallazgo KC26
 
-## 8. Pendientes conocidos (documentados, no bloqueantes)
-
-- **Branding por tenant** (D-DTB-08): a la espera del endpoint de branding en
-  la API; v1 usa el branding por defecto del mockup ("Harper Agent").
-- **Keystore v1 en `localStorage`**: el empaquetado del desktop migrará a
-  keychain del SO (documentado en el código).
-- **Renovación automática del device token** (TTL 15 min): el endpoint existe
-  (`POST /api/devices/{id}/token`, verificado en vivo: 200 con `expires_in`
-  900); la automatización en el runtime del desktop queda para el empaquetado.
-- **Sesiones del agente en el sidebar** (Sessions/Capabilities/Shared
-  agents/Artifacts): corresponden al runtime de Hermes; el dashboard mínimo
-  entrega el estado gobernado (alcance de esta tarea).
-- **`require_device` (DeviceGate) sin rutas de negocio que lo monten aún**:
-  el gate existe (`app/devices/gate.py`, spec 003/007) pero ninguna ruta de
-  data plane lo exige todavía; corresponde a la lane de sesiones de agente.
-
-## 9. Evidencia del smoke en vivo (2026-10-23) y hallazgo KC26
-
-Smoke completo con browser real contra PostgreSQL 17 + Keycloak 26 + uvicorn
-(:8000) + desktop client (:9090), tenant `demo-org` aprovisionado en vivo:
-
-1. Login org code → redirect PKCE S256 al realm real → one-time password del
-   aprovisionamiento → required actions reales (CONFIGURE_TOTP — QR
-   decodificado, TOTP RFC 6238 — y UPDATE_PASSWORD) → callback → sesión
-   mintada (201) → dashboard.
-2. Enrolamiento: WebCrypto RSA-2048 en el navegador → enroll 202 pending →
-   approve (200 active) → polling canjea el enrollment_token one-time →
-   device token guardado local → renovación OK (expires_in 900).
-3. Dashboard 100% real: presupuesto org $500.00/$500.00, 4 políticas
-   "Provider floor", 2 modelos aprobados (deepseek-v3, qwen2.5-72b-instruct),
-   dispositivo `active`. Audit DB: `device.enrolled`/`device.approved` con
-   `device_id`.
-
-**Hallazgo (plataforma) — RESUELTO (t_c43906d1, spec 011 D-MFA-01)**:
-Keycloak 26 NO emite `amr` en id_token ni access_token con configuración
-por defecto (solo `acr:"1"`; probe real con login password+TOTP). La puerta
-MFA exigía `amr`, así que **todo login real de KC recibía 403
-`mfa_required`**. Arreglo de raíz: la puerta acepta `amr` **O** `acr` ≥
-`TRUST_MFA_MIN_ACR` (2) — `app/auth/mfa.py`; el aprovisionamiento cablea
-cada realm con `ensure_mfa_acr()` (`acr.loa.map` + condición LoA en el
-flujo browser); el desktop pide `acr_values=2` en el authorize y su
-callback hace step-up (re-intento único) si el mint llega sin MFA.
-Verificado en vivo (realm `demo-org`, KC 26.2 real): password+TOTP →
-`acr:"2"` → sesión `mfa_verified=true` → `/api/me` 200; password-only sin
-TOTP → `CONFIGURE_TOTP` inline, sin code. Detalles y pitfalls:
-skill `identity/keycloak26-amr-mfa` y `specs/011-mfa-acr-evidence/`.
-
-**Nota de entorno tras el smoke**: `tenants.oidc_issuer_url` de `demo-org`
-quedó apuntando al doble (puerto 8908, ya apagado) porque el comando de
-restauración fue bloqueado por el aprobador de comandos. Restaurar con:
-
-```sql
-UPDATE tenants SET oidc_issuer_url = 'http://127.0.0.1:8080/realms/demo-org'
-WHERE slug = 'demo-org';
-```
+El desktop-client Next.js (:9090) fue el double de desarrollo de la spec 010
+(2026-10-23): simulaba login+enrolamiento+dashboard para ejercitar la API de
+dispositivos contra Keycloak real. Cumplió su propósito (contratos spec 007
+verificados, hallazgo KC26 `amr`/`acr` → spec 011 D-MFA-01, skill
+`identity/keycloak26-amr-mfa`) y fue retirado cuando el flujo real convergió
+(specs 022/023). Su código y la versión original de este documento quedan en
+el historial de git.

@@ -1,0 +1,50 @@
+│  ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠿⣿⣦⣤⣈⠁⢠⣴⣿⠿⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀  file: patch, read_file, search_files, write_file                                                                                                                    │
+│  ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠉⠻⢿⣿⣦⡉⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀  image_gen: image_generate                                                                                                                                           │
+│  ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠘⢷⣦⣈⠛⠃⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀  memory: memory                                                                                                                                                      │
+│  ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢠⣴⠦⠈⠙⠿⣦⡄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀  (and 6 more toolsets...)                                                                                                                                            │
+│  ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠸⣿⣤⡈⠁⢤⣿⠇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀                                                                                                                                                                      │
+│  ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠉⠛⠷⠄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀  Available Skills                                                                                                                                                    │
+│  ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣀⠑⢶⣄⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀  autonomous-ai-agents: claude-code, codex, computer-use, hermes-agent, opencode                                                                                      │
+│  ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣿⠁⢰⡆⠈⡿⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀  creative: architecture-diagram, ascii-video, baoyu-infographic, claude-design, design-md, humanizer, +4 more                                                        │
+│  ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠳⠈⣡⠞⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀  devops: sdlc-review                                                                                                                                                 │
+│  ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀  email: email-inbox-triage, himalaya                                                                                                                                 │
+│                                  media: gif-search, songsee, youtube-content                                                                                                                         │
+│  glm-5.2 · Nous Research         note-taking: obsidian                                                                                                                                               │
+│  /root/trust-agent               productivity: airtable, box, document-to-action-items, docx, google-workspace, maps, +8 more                                                                        │
+│  Session: c0ad78e6               research: arxiv, competitor-news-monitor, grounded-citations, llm-wiki                                                                                              │
+│                                  social-media: xurl                                                                                                                                                  │
+│                                  software-development: codebase-inspection, dogfood, github, hermes-agent-skill-authoring, +8 more                                                                   │
+│                                  web: blocked-page-recovery                                                                                                                                          │
+│                                                                                                                                                                                                      │
+│                                  21 tools · 54 skills · /help for commands                                                                                                                           │
+│                                  ⚠ update available                                                                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+Welcome to Hermes Agent! Type your message or /help for commands.
+⚠  Secret redaction is DISABLED (HERMES_REDACT_SECRETS=false). API keys and tokens may appear verbatim in chat output, session JSONs, and logs. Set security.redact_secrets: true in config.yaml to
+re-enable.
+✦ Tip: hermes config check scans for missing or stale configuration options.
+
+
+────────────────────────────────────────
+● Use the terminal tool to run: echo hello
+Initializing agent...
+────────────────────────────────────────
+
+
+┌─ Reasoning ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+The user wants me to run a simple terminal command.
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+  ┊ 💻 preparing terminal…
+
+╭─ ☤ Hermes ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+The terminal tool is blocked by your organization's governance policy. The allowed tools are only governance_status and web_search — terminal is not in the approved list, so I can't run echo hello or
+any shell command.
+
+If you need terminal access, an organization admin would need to add terminal to the allowed tools in the signed policy bundle.
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+ ☤ glm-5.2 │ ~15K/1M │ [░░░░░░░░░░] ~1% │ ◎ 76.4% │ ◷ 5.4s │ ↑ 10 t/s │ 44s │ ⏲ 11s │ ✓ 0s                                                                                ─ Use the terminal tool to...
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ Draft a reply to the last email in my inbox
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+

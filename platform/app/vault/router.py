@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.engine import Connection
 
 from ..auth.service import Principal, get_principal, get_tx, require_mfa
+from ..errors import require_uuid
 from . import service
 
 router = APIRouter(
@@ -61,6 +62,7 @@ def get_credential(
     principal: Principal = Depends(get_principal),
     conn: Connection = Depends(get_tx),
 ):
+    credential_id = require_uuid(credential_id, "credential_id")  # t_378503a1
     return service.get_credential(conn, principal, credential_id)
 
 
@@ -72,6 +74,7 @@ def rotate_credential(
     conn: Connection = Depends(get_tx),
 ):
     """Rotate -> new value ONE time; the previous value dies (D-VC-05)."""
+    credential_id = require_uuid(credential_id, "credential_id")  # t_378503a1
     return service.rotate_credential(
         conn, principal, credential_id,
         new_secret_value=payload.new_secret_value if payload else None,
@@ -85,6 +88,7 @@ def revoke_credential(
     conn: Connection = Depends(get_tx),
 ):
     """Revoke + immediate cutoff of dependent instances (REQ-VLT-005)."""
+    credential_id = require_uuid(credential_id, "credential_id")  # t_378503a1
     return service.revoke_credential(conn, principal, credential_id)
 
 
@@ -96,4 +100,5 @@ def use_credential(
 ):
     """Runtime injection channel (REQ-VLT-003): decrypted value to the
     credential owner's connector runtime, in memory, audited."""
+    credential_id = require_uuid(credential_id, "credential_id")  # t_378503a1
     return service.use_credential(conn, principal, credential_id)

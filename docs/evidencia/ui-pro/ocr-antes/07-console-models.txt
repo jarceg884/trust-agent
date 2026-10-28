@@ -1,0 +1,38 @@
+Trust Agent
+
+Trust Agent demo-org | Connected + Inviteuser 4 Downloaddesktopapp A AlexMorgan ~
+GOVERNANCE
+
+Model Access
+88 Overview
+
+‘Approved models per level — central gateway or BYOK.
+f Organization
+
+& Departments Model catalog & approvals
+
+‘Only approved models can be used. Pricing in USD per milion tokens. Approvals cascade: org — department — user.
+2 Users & Roles:
+© Budgets Governance policy (Approved models only — enforced
+
+Model approvals are part of the governance policy. The effective set for a user is the intersection across levels — organization « department n user — further narrowed by
+wt Model Access allowed_modells (deny-overrides: a denial at any level wins).
+
+allowed_models (org): NVo ac model is eligible.
+© Shared Agents a 7
+@ Devices
+
+MODEL PROVIDER context INPUT PRICE OUTPUT PRICE APPROVALS,
+& Hermes Download
+
+DeepSeek VA Flash hhuawel_maas ™ $030/M $120/M ora ‘Approve | Revoke
+& Credentials eepscskve 3 Tas
+
+Audit Log DeepSeek-V4-Flash hhuawel_maas ™ $014/M $027/M ora ‘Approve | Revoke
+
+deepseek-v4-flash
+> Branding
+
+GLM-51
+
+ous: hhuawei_maas 198k $108 /M $377/M org Approve | Revoke

@@ -13,6 +13,36 @@ from ..auth.service import Principal, get_principal
 from .tokens import verify_device_token
 
 
+def check_device_access(
+    conn, device_id: str, principal: Principal, *, touch: bool = True
+) -> None:
+    """Device row must exist, belong to the principal and be ACTIVE.
+
+    Shared by the DeviceGate dependency and the governance-bundle auth
+    (spec 019 §5.5): revocation is enforced here on every request.
+    `touch` updates last_seen_at with a 60 s throttle (D-DEV-09).
+    """
+    row = conn.execute(
+        text(
+            "SELECT status FROM devices "
+            "WHERE id = CAST(:did AS uuid) AND user_id = CAST(:uid AS uuid)"
+        ),
+        {"did": device_id, "uid": principal.user_id},
+    ).mappings().first()
+    if row is None or row["status"] != "active":
+        raise device_not_authorized()
+    if touch:
+        conn.execute(
+            text(
+                "UPDATE devices SET last_seen_at = now(), updated_at = now() "
+                "WHERE id = CAST(:did AS uuid) "
+                "  AND (last_seen_at IS NULL "
+                "       OR last_seen_at < now() - interval '60 seconds')"
+            ),
+            {"did": device_id},
+        )
+
+
 def require_device(
     request: Request, principal: Principal = Depends(get_principal)
 ) -> Principal:
@@ -28,24 +58,5 @@ def require_device(
     engine = get_engine()
     with engine.begin() as conn:
         set_tenant(conn, principal.tenant_id)
-        row = conn.execute(
-            text(
-                "SELECT status FROM devices "
-                "WHERE id = CAST(:did AS uuid) AND user_id = CAST(:uid AS uuid)"
-            ),
-            {"did": claims["device_id"], "uid": principal.user_id},
-        ).mappings().first()
-        if row is None or row["status"] != "active":
-            raise device_not_authorized()
-        # last_seen_at with a 60 s throttle (D-DEV-09): at most one write per
-        # minute per device; the status check above still runs every request.
-        conn.execute(
-            text(
-                "UPDATE devices SET last_seen_at = now(), updated_at = now() "
-                "WHERE id = CAST(:did AS uuid) "
-                "  AND (last_seen_at IS NULL "
-                "       OR last_seen_at < now() - interval '60 seconds')"
-            ),
-            {"did": claims["device_id"]},
-        )
+        check_device_access(conn, claims["device_id"], principal)
     return principal

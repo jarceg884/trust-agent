@@ -1,0 +1,99 @@
+# Fix t_dd2f5f65 — race multi-proceso del auto-enroll (410s mutuos)
+
+Hallazgo: docs/hermes-download.md §4.1 (E2E spec 023, 03-plugin-log.txt).
+Fix: `enroll.py` (plugin trust-agent-governance, spec 022) — sin cambios de
+contrato server-side.
+
+## Qué se cambió
+
+1. **flock por home** (`enroll.py::_HomeLock`): lock exclusivo sobre
+   `$HERMES_HOME/trust-agent/.autoenroll.lock` (LOCK_EX con espera acotada
+   `AUTOENROLL_LOCK_WAIT_S=30s`; el kernel lo libera si el proceso muere).
+   Serializa el enroll ENTRE PROCESOS del mismo home: gateway standalone +
+   TUI + gateways explícitos. Aplica al watcher zero-UI (`auto_enroll_once`)
+   Y al comando manual `/trust-enroll` (no pueden pisarse entre sí).
+2. **Reuse-first** (`enroll.py::_enroll_attempt`): si hay un enrollment
+   token guardado para la MISMA org, se canjea SIN re-POSTear
+   `/api/devices/enroll` — cada POST resetea `enrollment_token_hash` del
+   device pending (upsert por fingerprint, `devices/service.py::enroll`) e
+   invalida el token que otro proceso poll-ea. Solo se re-POSTea si el token
+   guardado responde 410 (consumido/caducado/rechazado → recovery con
+   re-enroll, ADR-013); un error transitorio del canje NO re-POSTea.
+3. `_exchange_saved` → `_exchange_saved_raw` (outcomes crudos); el path 409
+   conserva el mensaje "ask an admin to revoke".
+
+## Evidencia before/after (repro determinística, 3 procesos reales)
+
+Harness: `repro_race.py` (workspace de la tarea t_dd2f5f65). Escenario
+idéntico para ambas corridas: 3 procesos Python reales con el plugin sobre
+el MISMO home, fake control plane con la semántica EXACTA de
+`devices/service.py` (cada POST /enroll resetea el hash; exchange con token
+≠ vigente → 410 one-time), "admin" aprueba tras 6 exchanges.
+
+- BEFORE: `enroll.py` PRE-FIX REAL — el instalado por el bundle spec 023 en
+  `/root/trust-agent/.e2e/hermes-dl-home/plugins/trust-agent-governance/`
+  (artefacto del E2E que halló el bug; md5 9ec726f6f031ddb1a8ee32def2209eef).
+- AFTER: `enroll.py` del árbol fuente con el fix (md5
+  b4b154e9f6d1b6b61364a1c6892436f3). NOTA: la corrida se hizo en la ruta
+  `platform/desktop-client/hermes/plugins/...`; una lane hermana movió el
+  árbol a `platform/hermes/plugins/...` durante la tarea — mismo archivo,
+  mismo md5, verificado tras el move.
+
+```
+                            BEFORE (pre-fix)     AFTER (fix)
+------------------------------------------------------------
+enroll_posts                               3               1
+exchange_calls                             6               6
+http_410s_served                           2               0
+converged                               True            True
+device_token_saved                      True            True
+wall_s                                   3.6             9.6
+```
+
+outcomes por proceso:
+- BEFORE: [["exchange","already_enrolled"], ["active"], ["exchange","already_enrolled"]]
+- AFTER:  [["pending","active"], ["already_enrolled"], ["pending","already_enrolled"]"]
+
+plugin.log (ruido del hallazgo original, reproducido en BEFORE):
+
+```
+{"ts": ..., "pid": 737128, "event": "auto_enroll_attempt", "outcome": "exchange", "detail": "enrollment token rejected or already used (410): The enrollment token is invalid or already used. (gone)"}
+{"ts": ..., "pid": 737126, "event": "auto_enroll_attempt", "outcome": "exchange", "detail": "enrollment token rejected or already used (410): ..."}
+{"ts": ..., "pid": 737127, "event": "auto_enrolled", ...}
+```
+(dos pids distintos canjeando fallidamente = los 410s mutuos del
+03-plugin-log.txt original; en AFTER solo "pending" limpio + un
+"auto_enrolled", cero 410.)
+
+## Regresión permanente
+
+`platform/tests/test_hrb_enforcement.py` (4 tests nuevos, fake control
+plane embebido):
+
+- `test_auto_enroll_reuses_saved_token_without_repost` — reuse-first: cero
+  POST /enroll con token guardado vigente.
+- `test_auto_enroll_gone_discards_saved_and_reposts` — 410 del guardado →
+  descarta + re-POSTea + persiste el nuevo.
+- `test_auto_enroll_busy_when_lock_held` — flock tomado por otro proceso →
+  outcome "busy" (el ciclo reintenta), sin pisar el token.
+- `test_auto_enroll_multiprocess_no_mutual_410` — 3 SUBPROCESOS reales sobre
+  el mismo home: exactamente 1 POST /enroll, 0 410s servidos, los 3
+  convergen (1 active + 2 already_enrolled vía device-token.json).
+
+Suite: `tests/test_hrb_enforcement.py` 32/32 PASS; bloque de la lane
+(hrb_enforcement + hrb_heartbeat + governance_bundle + live_policy_presence
++ hermes_download) 83/83 PASS; suite completa 514 passed + 2 failed
+(test_e2e_keycloak.py — lane hermana activa en ese archivo, live Keycloak
+`authorize HTTP 400`, no importa nada de este diff).
+
+## Para QA / deploy
+
+- El bundle de descarga se sirve desde la copia del plugin DENTRO del
+  contenedor (`settings.hermes_plugin_dir` =
+  `/opt/trust-agent/hermes-plugins/...`, Dockerfile
+  `COPY platform/hermes/plugins ...`): hace falta REBUILD del contenedor
+  api para que el bundle lleve el fix; después revalidar con
+  `scripts/evidence_hermes_download.py` (fases firstrun→approve→governed).
+- El branch del lock dentro de `cmd_trust_enroll` (manual) está cubierto por
+  simetría con `auto_enroll_once` (testeado) + lint; no tiene test directo
+  con servidor — cubrible con el runbook §5 si se quiere evidencia extra.

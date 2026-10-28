@@ -7,7 +7,7 @@ import { PageHeader } from "@/components/ui";
 import { OrganizationPage } from "./organization-page";
 
 export const metadata: Metadata = {
-  title: "Organization — Trust Agent Admin Console",
+  title: "Organization",
 };
 
 export default async function Page() {

@@ -27,6 +27,7 @@ import argparse
 import sys
 import time
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal, ROUND_HALF_UP
 
 from sqlalchemy import text
 
@@ -34,6 +35,26 @@ from ..config import get_settings
 from ..db import build_engine, plain_tx
 from ..models.litellm import LiteLLMClient, SpendLog
 from .spend import enforce_tenant, ingest_entries, RawSpend
+
+# Milli-centavo (D-GOV-17, spec 005 / migración 0029): los costos del ledger
+# llevan 3 decimales de centavo. ROUND_HALF_UP es conservador para el corte —
+# jamás redondea POR DEBAJO del costo real.
+_MILLI_CENT = Decimal("0.001")
+
+
+def _usd_to_milli_cents(spend_usd: float | None) -> Decimal:
+    """USD → centavos con precisión de milli-centavo (0.001¢).
+
+    Gap B-2 (t_8bd1fee8): `round(usd * 100)` a entero truncaba a 0¢ las
+    llamadas reales pequeñas de MaaS (ej. $0.000045 = 0.0045¢ → 0¢) y los
+    presupuestos sub-contaban gasto real. La cadena Decimal evita además
+    el error binario del float: str(4.5e-05) es exacto.
+    """
+    if spend_usd is None:
+        spend_usd = 0.0
+    return (Decimal(str(spend_usd)) * 100).quantize(
+        _MILLI_CENT, rounding=ROUND_HALF_UP
+    )
 
 
 def _parse_time(value: str) -> datetime:
@@ -84,7 +105,7 @@ def build_entries(
                 tenant_id=tenant_id,
                 user_id=user_id,
                 model_name=log.model,
-                cost_base_cents=round(log.spend_usd * 100),
+                cost_base_cents=_usd_to_milli_cents(log.spend_usd),
                 tokens_in=log.tokens_in,
                 tokens_out=log.tokens_out,
                 occurred_at=_parse_time(log.occurred_at),

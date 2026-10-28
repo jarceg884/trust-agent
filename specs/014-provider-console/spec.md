@@ -11,6 +11,26 @@
 
 ---
 
+> ## CORRECCIÓN DE MILLER (2026-10-26, tarea t_360a752e) — download link REMOVIDO
+>
+> El **"Hermes download link"** (D-PC-09, REQ-PC-017, AC-PC-017) fue implementado
+> en esta console pero **NO pertenece aquí**: el proveedor solo crea/gestiona
+> tenants. El link de descarga lo genera y envía el **ADMIN DEL CLIENTE** desde
+> SU Admin Console (`platform/console`, sección "Hermes Download" — ver nota
+> equivalente en specs/009-admin-console/spec.md). En esta corrida (t_360a752e):
+>
+> - Se eliminó el botón/link del detalle de tenant (`tenant-detail.tsx`),
+>   la función `hermesDownloadUrl` y la config `desktopAppUrl`
+>   (`TRUST_DESKTOP_APP_URL` fuera del docker-compose).
+> - D-PC-09, REQ-PC-017 y AC-PC-017 quedan **REVOCADOS** (supercedidos por la
+>   sección "Hermes Download" de la spec 009). La evidencia histórica
+>   `docs/evidencia/provider-console/10-hermes-download-link-prefill.png`
+>   documenta el estado ANTES de la corrección.
+> - El resto de la spec (provisioning, lista, suspend/reactivate, healthcheck,
+>   deep-link a la Admin Console) queda vigente sin cambios.
+
+---
+
 ## 1. Problema y alcance
 
 **Problema (feedback Miller #1)**: no existe panel donde el **proveedor** despliegue clientes. La Admin Console (:3100) es por-tenant (login OIDC del realm del cliente); el provisioning hoy es solo `POST /api/admin/tenants` vía script/CLI (`trust-provision`). La operación provider no tiene superficie visual.
@@ -23,7 +43,7 @@
 2. **Provider Console** — app Next.js nueva (`platform/provider-console/`, puerto **3200**):
    - Login del operador del proveedor (provider token, verificado contra el control plane).
    - Lista de tenants (tabla enterprise con estado, realm, usuarios, presupuesto, gasto, creación).
-   - Provisioning de nuevo cliente desde la UI — reusa el flujo idiom-proof de spec 004 TAL CUAL (misma capa de servicio `provision()`): realm KC real, admin inicial con password temporal + `CONFIGURE_TOTP`, departamentos seed, presupuesto org, políticas default, `model_plan`. La **OTA one-time se muestra UNA sola vez** en la UI (panel con warning + copy; no se persiste en ningún store).
+   - Provisioning de nuevo cliente desde la UI — reusa el flujo idiom-proof de spec 004 TAL CUAL (misma capa de servicio `provision()`): realm KC real, admin inicial con password temporal (primer login fuerza `UPDATE_PASSWORD`; el TOTP **no** se fuerza como required action — corrección de copy QA Pilar 1, t_ccf901f4: desde spec 015 el enrolamiento TOTP es policy-aware, forzado solo con `require_mfa=true`, si no sugerido vía banner "Set up MFA" en la Admin Console), departamentos seed, presupuesto org, políticas default, `model_plan`. La **OTA one-time se muestra UNA sola vez** en la UI (panel con warning + copy; no se persiste en ningún store).
    - Suspender / reactivar tenant desde la UI (con confirmación).
    - Detalle por tenant: estado canónico, counts, healthcheck en vivo, y **link a su Admin Console** (`:3100/auth/login?org=<slug>`).
 3. **Evidence real**: provisionar un tenant REAL desde la UI nueva y documentar evidencia (screenshots + OCR + curl + SQL) en `docs/provider-console.md`.
@@ -47,7 +67,7 @@
 | D-PC-06 | **OTA one-time en la UI**: la respuesta `201` de provisioning contiene `one_time_activation` (password temporal, issuer, client_id) que se renderiza UNA vez en un panel con warning explícito ("shown only once — copy it now") y botones copy. El valor vive solo en memoria del componente (React state); no se persiste (sin localStorage/sessionStorage/DB) y al navegar se pierde — paridad exacta con D-ONB-05 (la re-ejecución idempotente no lo re-entrega). | D-ONB-05, constitution IV |
 | D-PC-07 | **Link a la Admin Console del tenant** = `http://127.0.0.1:3100/auth/login?org=<slug>` (deep-link al baile PKCE del realm del cliente; el route handler de spec 009 acepta `?org=`). El Provider Console NO minta sesiones del tenant ni salta el login/MFA del cliente. | spec 009 REQ-AC-001, constitution IV |
 | D-PC-08 | **Gasto del período corriente** = `SUM(spent_cents)` de `budget_counters` nivel `org` cuyo período contiene `today`; sin fila → `0`. Montos en centavos en el API; la UI formatea a USD. | schema 002 §5.6, constitution VI |
-| D-PC-09 | **Link de descarga del desktop por tenant** (mandato Miller 2026-10-26, comentario de la tarea): acción por tenant "Hermes download link" que genera el punto de entrada del flujo app→organización: `${TRUST_DESKTOP_APP_URL}/?org=<slug>` — **org_code embebido en el link**. El target real hoy es el desktop white-label (spec 010, :9090), cuya pantalla de login acepta `?org=` (extensión de spec 010 documentada aquí, REQ-PC-017). Cuando el puente Hermes real (spec 022, t_c875626f) aterrice el app de Hermes completo, `TRUST_DESKTOP_APP_URL` se apunta al nuevo target y el contrato de binding (`?org=<slug>`) NO cambia. El link no lleva secretos: el org_code es público (slug/realm); la confianza nace del login OIDC+MFA del realm del tenant y del enrolamiento de dispositivo (spec 007), no del link. | comentario Miller, specs 007/010, constitution IV |
+| D-PC-09 | **[REVOCADA — corrección Miller 2026-10-26, t_360a752e]** Link de descarga del desktop por tenant. Implementada originalmente aquí, fue REMOVIDA: el proveedor no envía links de descarga; el admin del cliente lo genera desde SU Admin Console (spec 009, sección "Hermes Download"). El contrato de binding (org_code público embebido en el link, sin secretos) se mantiene, ahora sobre el endpoint estable `/download/{tenant_slug}` de la spec 023. | comentario Miller, specs 007/010/023, constitution IV |
 
 ## 3. Requisitos (formato EARS)
 
@@ -85,8 +105,8 @@
 **REQ-PC-014** (M) [D-PC-07] — Cuando el operador abre el detalle de un tenant, el sistema muestra estado canónico, counts, presupuesto/gasto, botón healthcheck en vivo (resultado real `GET …/healthcheck`) y el link "Open Admin Console" que abre `:3100/auth/login?org=<slug>`.
 > **AC-PC-014**: detalle del tenant provisionado con healthcheck `status=ok` visible; el link apunta al realm correcto.
 
-**REQ-PC-017** (M) [D-PC-09, mandato Miller] — Cuando el operador abre el detalle de un tenant, el sistema muestra el **Hermes download link** del tenant (`${desktopAppUrl}/?org=<slug>`, org_code embebido) con copy al portapapeles y apertura en pestaña nueva; al abrirlo, el desktop app muestra su pantalla de login con la organización prellenada (binding real app→org).
-> **AC-PC-017**: abrir el link del tenant provisionado en el navegador → pantalla de login del desktop con el org code prellenado = slug del tenant (screenshot + OCR).
+**REQ-PC-017** (M) — **[REVOCADO — corrección Miller 2026-10-26, t_360a752e]** El "Hermes download link" ya NO se muestra en el Provider Console: el detalle de tenant solo ofrece el deep-link a la Admin Console del cliente. El link de descarga vive en el Admin Console del cliente (spec 009, REQ-AC-033).
+> **AC-PC-017** (revocado): el detalle de tenant NO muestra ningún bloque "Hermes download link" (verificado por screenshot + OCR tras la corrección).
 
 **REQ-PC-015** (M) [constitution VI, tarea] — Cuando se construye la app, `npm run build` compila limpio (exit 0) y `npm run lint` sin errores.
 > **AC-PC-015**: salida real de build/lint adjunta en docs.
@@ -117,13 +137,15 @@ Suspend/reactivate responden `{ "tenant": {…estado canónico (tenant_state)…
 - [x] AC-PC-010…014 (flujo real en navegador + screenshots/OCR en `docs/evidencia/provider-console/`).
 - [x] AC-PC-015 (build + lint limpios).
 - [x] AC-PC-016 (`docs/provider-console.md` con evidencia curl + SQL + OCR).
-- [x] AC-PC-017 (download link → desktop login con org prellenada, screenshot + DOM).
+- [x] AC-PC-017 (download link → desktop login con org prellenada, screenshot + DOM). **[REVOCADO después — corrección Miller t_360a752e: el link se mudó al Admin Console del cliente (spec 009 REQ-AC-033); el Provider Console ya no lo muestra (screenshot + OCR post-corrección: `docs/evidencia/hermes-download-admin-console/03-provider-console-tenant-detail-sin-download-link.png` — verificación DOM: sin "Hermes download link", sin "Copy link", sin URL `/download/{slug}`; la sección "Entry points" solo ofrece el deep-link a la Admin Console del cliente).]**
 - [x] No-regresión: `test_provision.py` pasa (verificado junto a provider_admin antes de la colisión spec 019); suite completa bloqueada transitoriamente por spec 019 — desviación documentada, no ajustable desde spec 014 sin tocar código ajeno en vuelo.
 
 Desviaciones documentadas:
 - D-PC-09 (añadida tras el mandato de Miller del 2026-10-26): el target del download
   link es hoy el desktop white-label (:9090); el contrato `?org=<slug>` queda fijado
   para que spec 022 (puente Hermes real) reapunte `TRUST_DESKTOP_APP_URL` sin cambios
-  en el Provider Console.
+  en el Provider Console. **[SUPERSEDADA — corrección Miller 2026-10-26 (t_360a752e):
+  D-PC-09/REQ-PC-017 revocados; el link de descarga vive en el Admin Console del
+  cliente contra el endpoint estable `/download/{tenant_slug}` (spec 023).]**
 - Corrección incidental de branding del desktop-client ("Harper Agent" → "Trust
   Agent", placeholder retirado por D-ONB-01).

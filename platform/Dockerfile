@@ -16,6 +16,12 @@ COPY platform/scripts ./scripts
 COPY platform/tests/litellm_fake.py ./tests/litellm_fake.py
 # Vía canónica de migraciones (spec 002): db/migrations.
 COPY db/migrations /opt/trust-agent/db/migrations
+# Plugin trust-agent-governance empaquetado en el bundle de descarga (spec
+# 023): el API lo copia al tarball desde este árbol (settings.hermes_plugin_dir).
+COPY platform/hermes/plugins /opt/trust-agent/hermes-plugins
+# Guardián de serialización (ADR 0001): el servicio migrate lo corre ANTES del
+# upgrade para rechazar árboles bifurcados con mensaje accionable.
+COPY db/scripts/migration_guard.py /opt/trust-agent/db/scripts/migration_guard.py
 
 RUN pip install --no-cache-dir .
 
@@ -25,4 +31,7 @@ RUN useradd --system --no-create-home trust && chown -R trust:trust /opt/trust-a
 USER trust
 
 EXPOSE 8000
-CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8000"]
+# Host/puerto desde el entorno (t_b62edff2, portabilidad): default dev
+# 127.0.0.1:8000; en un servidor con IP propia fija TRUST_API_HOST=0.0.0.0
+# (y el puerto con TRUST_API_PORT) en el .env — sin rebuild de imagen.
+CMD ["sh", "-c", "python -m uvicorn app.main:app --host ${TRUST_API_HOST:-127.0.0.1} --port ${TRUST_API_PORT:-8000}"]

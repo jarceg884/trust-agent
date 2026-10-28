@@ -3,6 +3,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
+from sqlalchemy.exc import DataError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.status import HTTP_503_SERVICE_UNAVAILABLE
 
@@ -10,16 +11,24 @@ from . import errors
 from .audit.router import admin_router as audit_admin_router
 from .audit.router import router as audit_router
 from .auth.router import me_router, router as auth_router
-from .config import get_settings, validate_device_token_secret
+from .config import get_settings, validate_device_token_secret, validate_policy_jws_key
 from .connectors.router import router as connectors_router
 from .db import get_engine
+from .devices.attestation import router as device_attestation_router  # spec 019 Inc. 3
+from .devices.heartbeat import router as device_heartbeat_router
 from .devices.router import router as devices_router
+from .download.router import admin_router as download_admin_router  # spec 023
+from .download.router import public_router as download_public_router  # spec 023
 from .errors import ApiError, new_request_id, request_id_var
+from .governance.bundle import bundle_router, public_router as governance_public_router
 from .governance.router import router as governance_router
 from .jobs.router import router as jobs_router
 from .models.router import router as models_router
 from .org.router import router as org_router
+from .provider.operator import bootstrap_provider_operator
+from .provider.router import router as provider_router
 from .tenants.router import router as tenants_router
+from .vault.connections import router as vault_connections_router
 from .vault.router import router as vault_router
 
 
@@ -42,8 +51,12 @@ def create_app() -> FastAPI:
     # Fail-closed boot (constitution IV): get_settings() refuses to start
     # without TRUST_DATABASE_URL (REQ-CP-002) and the device-token signing
     # key must be a real secret — never empty or a "change-me" placeholder
-    # (QA t_993c71d5).
-    validate_device_token_secret(get_settings())
+    # (QA t_993c71d5). Same for the governance bundle signing key (spec 019,
+    # D-GOH-02): a bundle signed with a missing/default key would be
+    # forgeable and the plugin's L2 enforcement with it.
+    settings = get_settings()
+    validate_device_token_secret(settings)
+    validate_policy_jws_key(settings)
 
     app = FastAPI(
         title="Trust Agent Control Plane",
@@ -67,6 +80,9 @@ def create_app() -> FastAPI:
     app.add_exception_handler(
         StarletteHTTPException, http_exception_handler
     )
+    # Safety net (t_378503a1): PostgreSQL 22P02 invalid-uuid DataError that
+    # escapes route-level require_uuid validation -> 422, never 500.
+    app.add_exception_handler(DataError, errors.data_error_handler)
     app.add_exception_handler(Exception, errors.unhandled_error_handler)
 
     @app.get("/healthz")
@@ -87,10 +103,23 @@ def create_app() -> FastAPI:
     app.include_router(models_router)
     app.include_router(connectors_router)
     app.include_router(devices_router)
+    app.include_router(device_heartbeat_router)  # spec 027 (heartbeat/presencia)
+    app.include_router(device_attestation_router)  # spec 019 Inc. 3 (attestation)
     app.include_router(vault_router)
+    app.include_router(vault_connections_router)  # spec 024 (custom connections)
     app.include_router(tenants_router)
+    app.include_router(provider_router)  # spec 025 (super-user del proveedor)
     app.include_router(governance_router)
+    app.include_router(bundle_router)
+    app.include_router(governance_public_router)
     app.include_router(org_router)
+    app.include_router(download_public_router)  # spec 023: /download/{slug}
+    app.include_router(download_admin_router)  # spec 023: /api/download-link
+
+    # Spec 025 (mandato Miller): seed idempotente del super-user del
+    # proveedor al arranque. Fail-soft si la tabla aún no existe (imagen sin
+    # migrar): se registra el error y el login provider fail-closea (503).
+    bootstrap_provider_operator()
     return app
 
 

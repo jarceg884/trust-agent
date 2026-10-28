@@ -1,38 +1,49 @@
-# Trust Agent — empaquetado local single-node (constitution VII).
+# Trust Agent — empaquetado single-node "desplegable donde sea" (t_b62edff2).
 #
-# Levanta la plataforma completa para validación local:
+# Levanta la plataforma completa:
 #   db (PostgreSQL 17) · idp (Keycloak 26.2) · migrate (Alembic, one-shot)
-#   api (control plane FastAPI :8000) · jobs-worker · spend-worker
-#   litellm-double (:39989, doble DECLARADO D-GOV-15) · console (Next.js :3100)
+#   api (control plane FastAPI) · jobs-worker · spend-worker · attestation-worker
+#   litellm-double (doble DECLARADO de tests) · console (Admin Console)
+#   provider-console · [perfil `litellm`] proxy LiteLLM REAL + su PostgreSQL
 #
-# NOTA de red: api / workers / migrate / console / litellm-double corren con
-# `network_mode: host` (Linux). Motivo: los tokens OIDC llevan issuer
-# `http://127.0.0.1:8080/realms/<org>` (la URL que ve el navegador) y el API
-# verifica la firma contra JWKS en ESA MISMA URL — con red bridge el
-# contenedor no podría resolver 127.0.0.1:8080 del host y habría que
-# bifurcar URLs de issuer (frágil). Host networking mantiene una sola
-# verdad: los puertos canónicos del runbook (55432/8080/8000/39989/3100).
+# PORTABILIDAD (mandato Miller: "desplegable donde sea"):
+#   TODO lo que era fijo a 127.0.0.1 es ahora una variable del .env con
+#   default de dev IDÉNTICO al runbook original (55432/8080/8000/39989/
+#   3100/3200) — en dev no cambia nada. En un servidor propio basta
+#   `scripts/setup.sh` (derivación automática desde TRUST_PUBLIC_BASE_URL)
+#   o editar a mano las 4-5 variables que marca el README §Modo servidor.
 #
-# Uso:
-#   cp .env.example .env  (y rellena los secretos)
-#   docker compose build
-#   docker compose up -d
-#   docker compose ps                       # todos en healthy/running
-#   curl -s http://127.0.0.1:8000/healthz   # {"status":"ok","database":"up"}
+# NOTA de red: api / workers / migrate / consoles / litellm-double corren con
+# `network_mode: host` (Linux). Motivo: los tokens OIDC llevan issuer con la
+# URL pública del IdP (la que ve el navegador) y el API verifica la firma
+# contra JWKS EN ESA MISMA URL — con red bridge habría que bifurcar URLs de
+# issuer (frágil). Host networking mantiene una sola verdad de URLs.
+#
+# Uso (dev, zero-config):
+#   cp .env.example .env && scripts/setup.sh
+#   # o a mano:
+#   docker compose build && docker compose up -d && scripts/smoke.sh
+#
+# Uso (servidor con IP/dominio propio):
+#   TRUST_PUBLIC_BASE_URL=http://TU-IP-O-DOMINIO scripts/setup.sh
+#
+# Uso (producción con proxy LiteLLM REAL en vez del doble de tests):
+#   docker compose --profile litellm up -d   (ver README §Topologías)
 #
 # Por qué cada pieza:
-#   db            → postgres:17 pineado (runbook db/README.md), roles vía
-#                   db/scripts/bootstrap.sql (trust_app sin BYPASSRLS /
-#                   trust_migrator dueño), DB trust_agent creada por init.
+#   db            → postgres:17 pineado, roles vía db/scripts/bootstrap.sh
+#                   (contraseñas del .env), DB trust_agent creada por init.
 #   migrate       → one-shot: `alembic upgrade head` por la vía canónica
 #                   (db/migrations, D-CP-11). El API espera a que termine.
 #   idp           → Keycloak 26.2 start-dev; el provisioning crea el realm
-#                   por tenant vía Admin REST (D-ONB-13), no hace falta
-#                   import de realm.
+#                   por tenant vía Admin REST (D-ONB-13).
 #   litellm-double→ doble HTTP DECLARADO de la Admin API (D-GOV-15,
-#                   platform/tests/litellm_fake.py). Para un proxy LiteLLM
-#                   real: levántalo aparte y cambia TRUST_LITELLM_BASE_URL /
-#                   TRUST_LITELLM_MASTER_KEY del servicio api+spend-worker.
+#                   platform/tests/litellm_fake.py). SOLO dev/tests.
+#   litellm       → [perfil] proxy LiteLLM REAL (imagen pineada v1.106.3,
+#                   litellm-real/config.yaml con precios MaaS reales) + su
+#                   PostgreSQL dedicado. Producción: el control plane apunta
+#                   aquí (TRUST_LITELLM_BASE_URL) — un cliente no gobierna
+#                   spend contra un double.
 #   jobs-worker   → cola de jobs en PostgreSQL (invites de usuarios, spec 012).
 #   spend-worker  → ingest de spend + enforcement de corte (spec 005).
 
@@ -40,47 +51,70 @@ name: trust-agent
 
 x-api-env: &api-env
   # La app SIEMPRE conecta como trust_app (sin BYPASSRLS, sujeto a RLS).
-  TRUST_DATABASE_URL: postgresql+psycopg://trust_app:trust_app_dev@127.0.0.1:55432/trust_agent
+  TRUST_DATABASE_URL: postgresql+psycopg://trust_app:${TRUST_APP_PASSWORD:-trust_app_dev}@127.0.0.1:${TRUST_DB_PORT:-55432}/trust_agent
   # Conexión de claim del worker (rol trust_migrator, SOLO cola SKIP LOCKED).
-  TRUST_DATABASE_MIGRATOR_URL: postgresql+psycopg://trust_migrator:trust_migrator_dev@127.0.0.1:55432/trust_agent
-  # OIDC: issuer base aceptado == el Keycloak publicado en 127.0.0.1:8080.
-  TRUST_IDP_BASE_URLS: http://127.0.0.1:8080
+  TRUST_DATABASE_MIGRATOR_URL: postgresql+psycopg://trust_migrator:${TRUST_MIGRATOR_PASSWORD:-trust_migrator_dev}@127.0.0.1:${TRUST_DB_PORT:-55432}/trust_agent
+  # OIDC: issuer base aceptado == el Keycloak público (deriva de
+  # TRUST_PUBLIC_BASE_URL vía scripts/setup.sh; default dev 127.0.0.1:8080),
+  # + el IdP de test del smoke autorizado (console/scripts/smoke_authorized.py,
+  # JWKS real firmado RS256 — el API verifica la firma de verdad).
+  TRUST_IDP_BASE_URLS: ${TRUST_IDP_BASE_URLS:-http://127.0.0.1:8080,http://127.0.0.1:8908}
   TRUST_OIDC_AUDIENCE: trust-agent-web
   # Redirect URIs registradas en el cliente público por tenant al aprovisionar:
-  # console (:3100) y desktop/e2e (:9090).
-  TRUST_OIDC_REDIRECT_URIS: http://127.0.0.1:3100/auth/callback,http://127.0.0.1:9090/auth/callback
+  # console y el callback del helper trust-login del bundle de descarga
+  # (:8765, spec 023 D-023-13). setup.sh las deriva de TRUST_PUBLIC_BASE_URL.
+  TRUST_OIDC_REDIRECT_URIS: ${TRUST_OIDC_REDIRECT_URIS:-http://127.0.0.1:3100/auth/callback,http://localhost:3100/auth/callback,http://127.0.0.1:8765/callback}
   # Secretos fail-closed (sin ellos create_app() rechaza el arranque).
   TRUST_DEVICE_TOKEN_SECRET: ${TRUST_DEVICE_TOKEN_SECRET}
   TRUST_VAULT_KEK_B64: ${TRUST_VAULT_KEK_B64}
-  # Plano de control de modelos. Default: doble declarado en 39989 (D-GOV-15,
-  # tests/demo). Para un proxy LiteLLM REAL basta fijar en .env
-  # TRUST_LITELLM_BASE_URL / TRUST_LITELLM_MASTER_KEY (re-validación
-  # t_c4766c4d: proxy real en :4000 con venv propio en litellm-real/ y
-  # PostgreSQL dedicado trust-agent-litellm-db :55433).
-  # Vacío ⇒ fail-closed (503 en keys/spend/enforcement).
+  # Clave de firma del governance bundle (spec 019 D-GOH-02, fail-closed).
+  TRUST_POLICY_JWS_PRIVATE_KEY_B64: ${TRUST_POLICY_JWS_PRIVATE_KEY_B64}
+  TRUST_POLICY_JWS_ISSUER: ${TRUST_POLICY_JWS_ISSUER:-https://trust-agent.control-plane/}
+  # Plano de control de modelos. Default: doble declarado (D-GOV-15, tests).
+  # PRODUCCIÓN: apuntar al proxy real del perfil `litellm` (o al que el
+  # cliente aporte en topología BYOK) desde el .env. Vacío ⇒ fail-closed.
   TRUST_LITELLM_BASE_URL: ${TRUST_LITELLM_BASE_URL:-http://127.0.0.1:39989}
   TRUST_LITELLM_MASTER_KEY: ${TRUST_LITELLM_MASTER_KEY:-sk-master-test}
-  # Operaciones del proveedor (spec 004): token bearer + Admin REST del IdP.
+  # Upstream MaaS vivo (spec 018 §5, D-018-07): el refresh central reconcilia
+  # el catálogo contra GET {endpoint}/models con la key del proveedor (en
+  # memoria, por uso; jamás en respuestas/logs/audit). Vacío ⇒ el refresh
+  # degrada al chequeo de routing del gateway (nunca fail-open).
+  TRUST_MAAS_ENDPOINT: ${TRUST_MAAS_ENDPOINT:-}
+  TRUST_MAAS_API_KEY: ${TRUST_MAAS_API_KEY:-}
+  # Operaciones del proveedor (spec 004/025): token bearer de scripts +
+  # super-user del Provider Console (seed al arranque, OTA logueada 1 vez).
   TRUST_PROVIDER_TOKEN: ${TRUST_PROVIDER_TOKEN}
-  TRUST_KEYCLOAK_ADMIN_URL: http://127.0.0.1:8080
+  TRUST_PROVIDER_OPERATOR_USERNAME: ${TRUST_PROVIDER_OPERATOR_USERNAME:-provider-admin}
+  TRUST_PROVIDER_OPERATOR_INITIAL_PASSWORD: ${TRUST_PROVIDER_OPERATOR_INITIAL_PASSWORD:-}
+  TRUST_KEYCLOAK_ADMIN_URL: ${TRUST_KEYCLOAK_ADMIN_URL:-http://127.0.0.1:8080}
   TRUST_KEYCLOAK_ADMIN_USER: ${KC_ADMIN_USER:-admin}
   TRUST_KEYCLOAK_ADMIN_PASSWORD: ${KC_ADMIN_PASSWORD}
-  # Local corre sobre http://127.0.0.1 ⇒ Secure cookies off SOLO en local.
-  TRUST_COOKIE_SECURE: "false"
+  # Local corre sobre http ⇒ Secure cookies off SOLO en local; con HTTPS
+  # público fija TRUST_COOKIE_SECURE=true en el .env.
+  TRUST_COOKIE_SECURE: ${TRUST_COOKIE_SECURE:-false}
+  # Bind/puerto del uvicorn del API (los usa el CMD del Dockerfile y el
+  # healthcheck). Dev: 127.0.0.1:8000. Servidor: TRUST_API_HOST=0.0.0.0.
+  TRUST_API_HOST: ${TRUST_API_HOST:-127.0.0.1}
+  TRUST_API_PORT: ${TRUST_API_PORT:-8000}
 
 services:
   db:
     image: postgres:17
-    container_name: trust-agent-db
+    container_name: ${TRUST_CONTAINER_PREFIX:-trust-agent}-db
     environment:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-trustlocal}
       POSTGRES_DB: trust_agent
+      # Roles canónicos con contraseñas del entorno (t_b62edff2):
+      TRUST_APP_PASSWORD: ${TRUST_APP_PASSWORD:-trust_app_dev}
+      TRUST_MIGRATOR_PASSWORD: ${TRUST_MIGRATOR_PASSWORD:-trust_migrator_dev}
     ports:
-      - "127.0.0.1:55432:5432"
+      # La DB NUNCA se publica fuera del host (aunque cambies TRUST_BIND):
+      # solo el stack local conecta aquí.
+      - "127.0.0.1:${TRUST_DB_PORT:-55432}:5432"
     volumes:
       - trust_db_data:/var/lib/postgresql/data
       # Roles canónicos (idempotente): trust_app / trust_migrator.
-      - ./db/scripts/bootstrap.sql:/docker-entrypoint-initdb.d/01-roles.sql:ro
+      - ./db/scripts/bootstrap.sh:/docker-entrypoint-initdb.d/01-roles.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d trust_agent -q"]
       interval: 5s
@@ -90,14 +124,17 @@ services:
 
   idp:
     image: quay.io/keycloak/keycloak:26.2
-    container_name: trust-agent-idp
+    container_name: ${TRUST_CONTAINER_PREFIX:-trust-agent}-idp
     command: ["start-dev", "--http-port=8080"]
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KC_ADMIN_USER:-admin}
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_ADMIN_PASSWORD}
       KC_HEALTH_ENABLED: "true"
     ports:
-      - "127.0.0.1:8080:8080"
+      # TRUST_IDP_BIND: dev 127.0.0.1 (default); en servidor propio
+      # setup.sh lo pone en 0.0.0.0 para que el navegador del cliente
+      # llegue al IdP por la URL pública.
+      - "${TRUST_IDP_BIND:-127.0.0.1}:${TRUST_IDP_PORT:-8080}:8080"
     volumes:
       - kc_data:/opt/keycloak/data
       # Spec 015 D-AUTH-01: white-label login theme (start-dev does not
@@ -124,11 +161,12 @@ services:
       context: .
       dockerfile: platform/Dockerfile
     image: trust-agent/platform:local
-    container_name: trust-agent-migrate
+    container_name: ${TRUST_CONTAINER_PREFIX:-trust-agent}-migrate
     network_mode: host
     environment:
-      DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD:-trustlocal}@127.0.0.1:55432/trust_agent
-    command: ["alembic", "-c", "alembic.ini", "upgrade", "head"]
+      DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD:-trustlocal}@127.0.0.1:${TRUST_DB_PORT:-55432}/trust_agent
+      TRUST_DB_PORT: ${TRUST_DB_PORT:-55432}
+    command: ["sh", "-c", "python /opt/trust-agent/db/scripts/migration_guard.py check && alembic -c alembic.ini upgrade head"]
     depends_on:
       db:
         condition: service_healthy
@@ -136,7 +174,7 @@ services:
 
   api:
     image: trust-agent/platform:local
-    container_name: trust-agent-api
+    container_name: ${TRUST_CONTAINER_PREFIX:-trust-agent}-api
     network_mode: host
     environment: *api-env
     depends_on:
@@ -145,7 +183,7 @@ services:
       idp:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "python", "-c", "import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3).status == 200 else 1)"]
+      test: ["CMD-SHELL", "python -c \"import os,urllib.request; urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('TRUST_API_PORT','8000')+'/healthz', timeout=3)\""]
       interval: 10s
       timeout: 5s
       retries: 30
@@ -154,7 +192,7 @@ services:
 
   jobs-worker:
     image: trust-agent/platform:local
-    container_name: trust-agent-jobs-worker
+    container_name: ${TRUST_CONTAINER_PREFIX:-trust-agent}-jobs-worker
     network_mode: host
     environment: *api-env
     command: ["python", "-m", "app.jobs.worker"]
@@ -165,7 +203,7 @@ services:
 
   spend-worker:
     image: trust-agent/platform:local
-    container_name: trust-agent-spend-worker
+    container_name: ${TRUST_CONTAINER_PREFIX:-trust-agent}-spend-worker
     network_mode: host
     environment: *api-env
     command: ["python", "-m", "app.governance.spend_worker"]
@@ -174,16 +212,32 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # Attestation overdue detection (spec 019 Inc. 3, REQ-GOH-013): active
+  # devices without attestation beyond attestation_overdue_hours get an
+  # org_admin notification + audit row (ungoverned agent detection).
+  attestation-worker:
+    image: trust-agent/platform:local
+    container_name: ${TRUST_CONTAINER_PREFIX:-trust-agent}-attestation-worker
+    network_mode: host
+    environment: *api-env
+    command: ["python", "-m", "app.devices.attestation_worker"]
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
   litellm-double:
     image: trust-agent/platform:local
-    container_name: trust-agent-litellm-double
+    container_name: ${TRUST_CONTAINER_PREFIX:-trust-agent}-litellm-double
     network_mode: host
-    command: ["python", "scripts/run_litellm_double.py", "--port", "39989"]
+    environment:
+      TRUST_LITELLM_DOUBLE_PORT: ${TRUST_LITELLM_DOUBLE_PORT:-39989}
+    command: ["sh", "-c", "python scripts/run_litellm_double.py --port ${TRUST_LITELLM_DOUBLE_PORT:-39989}"]
     depends_on:
       migrate:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 39989), timeout=3)"]
+      test: ["CMD-SHELL", "python -c \"import os,socket; socket.create_connection(('127.0.0.1', int(os.environ.get('TRUST_LITELLM_DOUBLE_PORT','39989'))), timeout=3)\""]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -193,18 +247,26 @@ services:
     build:
       context: ./platform/console
     image: trust-agent/console:local
-    container_name: trust-agent-console
+    container_name: ${TRUST_CONTAINER_PREFIX:-trust-agent}-console
     network_mode: host
     environment:
-      TRUST_API_BASE_URL: http://127.0.0.1:8000
-      TRUST_IDP_BASE_URL: http://127.0.0.1:8080
+      # URL del API vista por el BFF server-side (host networking ⇒
+      # loopback SIEMPRE, aunque la URL pública sea otra).
+      TRUST_API_BASE_URL: ${TRUST_API_BASE_URL:-http://127.0.0.1:8000}
+      # URL pública del IdP (la que ve el navegador; issuer OIDC).
+      TRUST_IDP_BASE_URL: ${TRUST_IDP_PUBLIC_URL:-http://127.0.0.1:8080}
       TRUST_OIDC_CLIENT_ID: trust-agent-web
-      TRUST_CONSOLE_REDIRECT_URI: http://127.0.0.1:3100/auth/callback
+      # Redirect URI pública del console (derivada de TRUST_PUBLIC_BASE_URL).
+      TRUST_CONSOLE_REDIRECT_URI: ${TRUST_CONSOLE_PUBLIC_URL:-http://127.0.0.1:3100}/auth/callback
+      # URL pública del link de descarga (spec 023, hallazgo #5 t_3cf085b9).
+      TRUST_DOWNLOAD_BASE_URL: ${TRUST_DOWNLOAD_BASE_URL:-http://127.0.0.1:8000}
+      # Puerto de arranque (lo lee el CMD del Dockerfile y el healthcheck).
+      TRUST_CONSOLE_PORT: ${TRUST_CONSOLE_PORT:-3100}
     depends_on:
       api:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3100/login').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:'+(process.env.TRUST_CONSOLE_PORT||'3100')+'/login').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
       interval: 10s
       timeout: 5s
       retries: 30
@@ -212,57 +274,86 @@ services:
     restart: unless-stopped
 
   # Provider Console (spec 014): panel del proveedor — provisioning,
-  # suspensión/reactivación y salud de tenants (:3200). Auth por provider
-  # token en cookie httpOnly (D-PC-02), BFF proxy con Authorization header.
+  # suspensión/reactivación y salud de tenants. Auth por super-user del
+  # proveedor (spec 025) en cookie httpOnly (D-PS-02), BFF proxy.
   provider-console:
     build:
       context: ./platform/provider-console
     image: trust-agent/provider-console:local
-    container_name: trust-agent-provider-console
+    container_name: ${TRUST_CONTAINER_PREFIX:-trust-agent}-provider-console
     network_mode: host
     environment:
-      TRUST_API_BASE_URL: http://127.0.0.1:8000
-      TRUST_ADMIN_CONSOLE_URL: http://127.0.0.1:3100
-      # Target del Hermes download link por tenant (D-PC-09): el desktop
-      # white-label :9090 con `?org=<slug>`; cuando el puente Hermes real
-      # (spec 022) aterrice, se apunta al bundle del app completa.
-      TRUST_DESKTOP_APP_URL: http://127.0.0.1:9090
+      TRUST_API_BASE_URL: ${TRUST_API_BASE_URL:-http://127.0.0.1:8000}
+      TRUST_ADMIN_CONSOLE_URL: ${TRUST_CONSOLE_PUBLIC_URL:-http://127.0.0.1:3100}
+      TRUST_PROVIDER_CONSOLE_PORT: ${TRUST_PROVIDER_CONSOLE_PORT:-3200}
     depends_on:
       api:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3200/login').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:'+(process.env.TRUST_PROVIDER_CONSOLE_PORT||'3200')+'/login').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
       interval: 10s
       timeout: 5s
       retries: 30
       start_period: 15s
     restart: unless-stopped
 
-  # Desktop client white-label (spec 010): login OIDC/PKCE por org +
-  # enrolamiento de dispositivo (:9090). Corre durable para que el
-  # "Hermes download link" del Provider Console tenga target real.
-  desktop-client:
-    build:
-      context: ./platform/desktop-client
-    image: trust-agent/desktop-client:local
-    container_name: trust-agent-desktop-client
+  # ---------------------------------------------------------------------
+  # PERFIL `litellm` — proxy LiteLLM REAL para PRODUCCIÓN (t_b62edff2,
+  # recuadro Miller: "un cliente no puede gobernar spend contra un double").
+  # NO corre en dev: `docker compose --profile litellm up -d`.
+  # El control plane debe apuntar aquí desde el .env:
+  #   TRUST_LITELLM_BASE_URL=http://127.0.0.1:4000
+  #   TRUST_LITELLM_MASTER_KEY=<LITELLM_MASTER_KEY del .env>
+  # Ver README §Topologías (MaaS central del proveedor vs BYOK del cliente).
+  # ---------------------------------------------------------------------
+  litellm:
+    image: ghcr.io/berriai/litellm:${LITELLM_IMAGE_TAG:-v1.106.3}
+    container_name: ${TRUST_CONTAINER_PREFIX:-trust-agent}-litellm
+    profiles: ["litellm"]
     network_mode: host
+    command: ["--config", "/config/config.yaml", "--host", "127.0.0.1", "--port", "${TRUST_LITELLM_PORT:-4000}"]
     environment:
-      TRUST_API_BASE_URL: http://127.0.0.1:8000
-      TRUST_IDP_BASE_URL: http://127.0.0.1:8080
-      TRUST_OIDC_CLIENT_ID: trust-agent-web
-      TRUST_DESKTOP_REDIRECT_URI: http://127.0.0.1:9090/auth/callback
+      # Upstream MaaS (o el proveedor que el cliente use en BYOK): la key
+      # vive SOLO en el .env (nunca en el repo — constitution IV).
+      MAAS_ENDPOINT: ${TRUST_MAAS_ENDPOINT:-}
+      MAAS_API_KEY: ${TRUST_MAAS_API_KEY:-}
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-litellm-change-me}
+      # PostgreSQL DEDICADO del proxy (budgets; sin DB fallan abiertos).
+      DATABASE_URL: postgresql://litellm:${LITELLM_DB_PASSWORD:-litellm_dev}@127.0.0.1:${TRUST_LITELLM_DB_PORT:-55433}/litellm
+      STORE_MODEL_IN_DB: "True"
+    volumes:
+      - ./litellm-real/config.yaml:/config/config.yaml:ro
     depends_on:
-      api:
+      litellm-db:
         condition: service_healthy
-    healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:9090/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
-      interval: 10s
-      timeout: 5s
-      retries: 30
-      start_period: 15s
     restart: unless-stopped
+
+  litellm-db:
+    image: postgres:17
+    container_name: ${TRUST_CONTAINER_PREFIX:-trust-agent}-litellm-db
+    profiles: ["litellm"]
+    environment:
+      POSTGRES_PASSWORD: ${LITELLM_DB_PASSWORD:-litellm_dev}
+      POSTGRES_DB: litellm
+    ports:
+      - "127.0.0.1:${TRUST_LITELLM_DB_PORT:-55433}:5432"
+    volumes:
+      - litellm_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d litellm -q"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+# t_b8769ecb (mandato Miller): el desktop-client demo (:9090, spec 010) fue
+# RETIRADO. Nunca fue el producto: era un double de desarrollo que simulaba
+# el desktop para probar la API de dispositivos. El flujo real es link de
+# descarga → bundle de Hermes real → enrolamiento automático (specs 022/023,
+# docs/hermes-download.md). El plugin y la plantilla de perfil viven ahora en
+# platform/hermes/ (los empaqueta el bundle de /download/{slug}/bundle).
 
 volumes:
   trust_db_data:
   kc_data:
+  litellm_db_data:

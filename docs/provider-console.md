@@ -15,7 +15,7 @@ modelo de auth distinto al de la Admin Console (:3100):
 | | Admin Console (:3100) | Provider Console (:3200) |
 |---|---|---|
 | Actor | usuarios del tenant (org_admin…) | operador del proveedor |
-| Auth | OIDC/PKCE del realm del tenant + cookie `trust_session` | provider token (`TRUST_PROVIDER_TOKEN`) en cookie **httpOnly** `ta_provider` |
+| Auth | OIDC/PKCE del realm del tenant + cookie `trust_session` | operador del proveedor: usuario+contraseña(+TOTP) → cookie **httpOnly** `ta_provider` (spec 025; `TRUST_PROVIDER_TOKEN` queda como break-glass deprecado) |
 | Permiso | roles del tenant | `tenants.provision` (rol `platform_admin`, data-driven) |
 | BFF | proxy con cookie de sesión + CSRF | proxy con `Authorization: Bearer` desde la cookie |
 
@@ -30,8 +30,11 @@ debe portar `tenants.provision` (constitution III/IV).
    departamentos, presupuesto org (USD), gasto del período (USD) con barra de uso,
    fecha de creación. Datos reales de `GET /api/admin/tenants`.
 3. **Provisioning desde la UI** — reusa el flujo idiom-proof de spec 004 TAL CUAL
-   (misma capa `provision()`): realm KC real, admin inicial con password temporal +
-   `CONFIGURE_TOTP`, 4 deptos seed con plantillas, presupuesto org, políticas default,
+   (misma capa `provision()`): realm KC real, admin inicial con password temporal
+   (primer login fuerza `UPDATE_PASSWORD`; el TOTP **no** se fuerza como required
+   action — desde spec 015 el enrolamiento es policy-aware: forzado solo con
+   `require_mfa=true`, si no sugerido vía banner "Set up MFA" en la Admin Console),
+   4 deptos seed con plantillas, presupuesto org, políticas default,
    `model_plan`. El **panel OTA one-time** muestra las credenciales UNA sola vez
    (solo React state, sin persistencia — D-PC-06).
 4. **Suspend / Reactivate** — con diálogo de confirmación; transaccional + auditado
@@ -39,13 +42,20 @@ debe portar `tenants.provision` (constitution III/IV).
    es inmediato (403 `tenant_suspended` en el core).
 5. **Detalle por tenant** — estado canónico, counts, presupuesto/gasto, **healthcheck
    en vivo** (10 checks: DB, discovery, JWKS, admin KC, MFA LoA, budget, políticas,
-   deptos, modelos, cadena de audit), link **Open Admin Console**
-   (`:3100/auth/login?org=<slug>`) y **Hermes download link** (ver §4).
-6. **Hermes download link** (mandato Miller 2026-10-26) — por tenant,
-   `http://127.0.0.1:9090/?org=<slug>` con **org_code embebido**: el empleado abre el
-   desktop app ya ligado a la organización; tras SSO+MFA el dispositivo se enrola
-   (spec 007) y queda gobernado. Sin secretos en el link: la confianza nace del login
-   del realm y del enrolamiento, no del link (D-PC-09).
+   deptos, modelos, cadena de audit) y link **Open Admin Console**
+   (`:3100/auth/login?org=<slug>`).
+6. **Hermes download link** — **[ELIMINADO — corrección Miller 2026-10-26,
+   t_360a752e]** El link de descarga NO se genera ni se envía desde aquí: lo
+   genera y envía el **admin del cliente** desde SU Admin Console (sección
+   "Hermes Download", spec 009 REQ-AC-033) a sus propios empleados. El proveedor
+   solo crea/gestiona tenants. La sección §5.6 de abajo queda como evidencia
+   histórica de la implementación revocada (D-PC-09/REQ-PC-017 revocados en la
+   spec 014). Evidencia post-corrección:
+   `docs/evidencia/hermes-download-admin-console/`.
+   > **t_b8769ecb (mandato Miller)**: el desktop-client demo (:9090) fue
+   > RETIRADO por completo del stack y del repo — nunca fue el producto. El
+   > flujo real de descarga/enrolamiento es spec 023 (`/download/{slug}`) y
+   > está documentado en `docs/hermes-download.md`.
 
 ## 3. Superficie API nueva (backend, spec 014 §4)
 
@@ -79,18 +89,21 @@ data-driven, list con seeds y stats, ciclo suspend/reactivate + audit + idempote
 | Keycloak | 8080 | `idp` |
 | Admin Console (por tenant) | 3100 | `console` |
 | **Provider Console** | **3200** | `provider-console` (nuevo) |
-| Desktop client white-label | 9090 | `desktop-client` (nuevo, durable) |
+
+> El servicio `desktop-client` (:9090) fue retirado (t_b8769ecb): era un double
+> de desarrollo (spec 010), no el producto. El desktop real es Hermes Agent
+> instalado desde el bundle de `/download/{slug}/bundle` (spec 023).
 
 ```bash
 cd /root/trust-agent
-docker compose up -d          # levanta todo (provider-console + desktop-client incluidos)
-# Provider Console: http://127.0.0.1:3200  (login con TRUST_PROVIDER_TOKEN del .env)
+docker compose up -d          # levanta todo (provider-console incluido)
+# Provider Console: http://127.0.0.1:3200  (login usuario+contraseña del operador
+#   seedeado — ver docs/provider-superuser.md; la OTA se loguea UNA vez al arrancar el API)
 ```
 
-Variables del `provider-console`: `TRUST_API_BASE_URL` (8000),
-`TRUST_ADMIN_CONSOLE_URL` (3100), `TRUST_DESKTOP_APP_URL` (9090 — target del
-download link; cuando el puente Hermes real de spec 022 aterrice el app completa,
-se apunta ahí y el contrato `?org=<slug>` no cambia).
+Variables del `provider-console`: `TRUST_API_BASE_URL` (8000) y
+`TRUST_ADMIN_CONSOLE_URL` (3100). (`TRUST_DESKTOP_APP_URL` fue eliminado en la
+corrección Miller t_360a752e.)
 
 > Hallazgo de entorno: en este host `docker compose build` es silenciosamente no-op;
 > usar `docker build` directo para reconstruir imágenes.
@@ -142,8 +155,9 @@ Shot `06-tenant-detail.png` y `07-healthcheck-ok.png`: estado canónico, budget/
 ($0.00 of $750.00), botón **Run healthcheck** con resultado real — todos los checks
 `ok` (audit_chain ok, idp_discovery 200, idp_jwks 200, admin user con
 `requiredActions=['CONFIGURE_TOTP','UPDATE_PASSWORD']`, MFA LoA ok, etc.). Links:
-Admin Console `http://127.0.0.1:3100/auth/login?org=globex-industries` y Hermes
-download link `http://127.0.0.1:9090/?org=globex-industries`.
+Admin Console `http://127.0.0.1:3100/auth/login?org=globex-industries` (y, al
+momento de la captura, un Hermes download link `http://127.0.0.1:9090/?org=…`
+hoy retirado — ver §2.6).
 
 ### 5.5 Suspend → reactivate desde la UI (AC-PC-013)
 
@@ -155,7 +169,12 @@ estado final `active`. (El estado intermedio `suspended` en SQL y el corte 403
 `tests/test_provider_admin.py::test_suspend_cuts_active_sessions` y
 `test_suspend_and_reactivate_lifecycle`, 13/13 passed.)
 
-### 5.6 Hermes download link (AC-PC-017, mandato Miller)
+### 5.6 Hermes download link (AC-PC-017, mandato Miller) — **EVIDENCIA HISTÓRICA (REVOCADA)**
+
+> **CORRECCIÓN MILLER (t_360a752e, 2026-10-26)**: esta sección describe la
+> implementación ORIGINAL que fue REMOVIDA — el link de descarga ahora vive en
+> el Admin Console del cliente (spec 009 REQ-AC-033). Se conserva como registro
+> histórico; el detalle de tenant ya NO muestra este bloque.
 
 Shot `10-hermes-download-link-prefill.png`: abrir
 `http://127.0.0.1:9090/?org=globex-industries` → el desktop app muestra el login con
@@ -165,11 +184,17 @@ y el enrolamiento del dispositivo (spec 007). Extensión mínima al desktop-clie
 (spec 010): el login acepta `?org=` (solo slugs válidos; el org_code no es raíz de
 confianza — D-DEV-02).
 
-### 5.7 Login del operador (AC-PC-010)
+### 5.7 Login del operador (AC-PC-010 — supercedido por spec 025)
 
-Shot `01-login.png`. Token incorrecto → error visible con el reason real del control
-plane: "Invalid provider token. (invalid_token)", permanece en /login. Token correcto
-→ cookie httpOnly `ta_provider` + redirect a la lista. Logout → vuelve al login.
+Shot `01-login.png`. Desde el spec 025 el login es **usuario+contraseña del
+operador seedeado en la BD** (la OTA del bootstrap se loguea una vez en el log
+del API): credenciales malas → error visible con el reason real del control
+plane ("Invalid username or password."), permanece en /login. Login correcto →
+cookie httpOnly `ta_provider` + redirect (primer login → `/change-password`,
+required action). Con MFA activa el login pide el código TOTP (`401
+mfa_code_required` como prompt). Logout → vuelve al login. El viejo login por
+`TRUST_PROVIDER_TOKEN` quedó como break-glass deprecado
+(docs/provider-superuser.md).
 
 ### 5.8 Build y lint (AC-PC-015)
 
@@ -187,7 +212,10 @@ El provider token jamás aparece en cuerpos de respuesta (test
 
 ## 6. Correcciones incidentales
 
-- **desktop-client**: branding "Harper Agent" → "Trust Agent" (placeholder retirado
+> Las dos primeras bullets describen el desktop-client demo (:9090), RETIRADO
+> después por t_b8769ecb (mandato Miller). Se conservan como registro histórico.
+
+- **desktop-client** (histórico, retirado): branding "Harper Agent" → "Trust Agent" (placeholder retirado
   por D-ONB-01/DECISIONES.md; `brand.tsx`, `layout.tsx`, `enroll-flow.tsx`).
 - **desktop-client**: Dockerfile nuevo + servicio compose durable `desktop-client`
   (:9090) — antes solo corría como proceso manual efímero; ahora el download link
@@ -200,9 +228,12 @@ El provider token jamás aparece en cuerpos de respuesta (test
 ```bash
 cd /root/trust-agent && docker compose ps          # todo healthy
 # Provider Console en el navegador: http://127.0.0.1:3200
-#   login: TRUST_PROVIDER_TOKEN de .env
+#   login: usuario+contraseña del operador (spec 025; la OTA del bootstrap se
+#   loguea UNA vez en `docker logs trust-agent-api`; primer login fuerza el
+#   cambio de password). TRUST_PROVIDER_TOKEN ya no es el camino de la UI.
 #   provision → OTA panel → detalle → healthcheck → suspend/reactivate
-#   download link → http://127.0.0.1:9090/?org=<slug> (org prellenada)
+#   (sin download link — corrección Miller t_360a752e: lo envía el admin del
+#    cliente desde SU Admin Console, http://127.0.0.1:3100/hermes-download)
 # API directa:
 curl -s http://127.0.0.1:8000/api/admin/tenants     # 401 sin token
 # Tests (nota §3 sobre colisión transitoria de spec 019):

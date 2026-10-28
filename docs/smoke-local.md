@@ -201,7 +201,7 @@ BFF con CSRF, datos reales, logout.
 [PASS] PKCE S256 en el authorize
 [PASS] redirect URI del console (:3100) en el authorize
 [PASS] login #1 real (PKCE + one-time password + enrolamiento TOTP + callback mint)
-[PASS] cookies de sesión presentes (ta_session/ta_refresh/ta_csrf)
+[PASS] cookies de sesión presentes (ta_console_session/ta_console_refresh/ta_console_csrf)
 [PASS] GET /api/proxy/me → 200 whoami real (login real KC26 + step-up MFA)
 [PASS] whoami: rol org_admin
 [PASS] whoami MFA verificada (acr>=2 tras el step-up real)

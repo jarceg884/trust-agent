@@ -10,7 +10,28 @@ from conftest import (
     DEPT_A2, TENANT_A, USER_BOB, USER_CAROL, _admin, bearer_headers, mint,
 )
 
-TEST_DB = "trust_agent_platform_test"
+import os  # noqa: E402 (honor TRUST_TEST_DB como tests/conftest.py)
+import pytest  # noqa: E402
+
+TEST_DB = os.environ.get("TRUST_TEST_DB", "trust_agent_platform_test")
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _restore_seed_connector_instances():
+    """Hermeticidad (t_710f0acc): los tests de este archivo dejan instancias
+    de conector para Carol/Bob que el seed no tiene (la de vmware de Carol
+    queda ACTIVA). Sin limpieza, la revocación posterior de un device de
+    Carol (test_devices_flow) dispara el sweep de conectores de la
+    revocación integral (REQ-GOH-011) y deja una notificación
+    connector_disconnected en su inbox, que rompe test_spend_cutoff::
+    test_notifications_endpoint_scoped (inbox solo de tipos budget)."""
+    yield
+    with _admin(TEST_DB) as c:
+        c.execute(
+            "DELETE FROM connector_instances "
+            "WHERE tenant_id = %s AND user_id IN (%s, %s)",
+            (TENANT_A, USER_CAROL, USER_BOB),
+        )
 
 
 def _put_policy(client, path, key, value, tokens):

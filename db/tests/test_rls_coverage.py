@@ -60,14 +60,22 @@ def test_catalog_and_ops_are_provider_plane_by_design(admin_conn):
         "roles", "permissions", "role_permissions", "policy_keys",
         "model_catalog", "connector_catalog", "audit_actions", "spend_cursor",
         "login_throttle", "spend_rejections",
+        # Spec 025 (mandato Miller): super-user del Provider Console —
+        # operador, sesiones y audit del plano proveedor (D-PS-01/04/07).
+        "provider_operators", "provider_sessions", "provider_audit",
     }
     # ops.spend_rejections (QA H2, D-DB-15) SÍ lleva una columna tenant_id:
     # es una referencia forense a un tenant que NO existe (sin FK), no dato
     # de negocio de un tenant — se verifica solo "sin RLS" más abajo.
     targets = [("catalog", t) for t in provider_tables
-               if t not in ("spend_cursor", "login_throttle", "spend_rejections")]
+               if t not in ("spend_cursor", "login_throttle", "spend_rejections",
+                            "provider_operators", "provider_sessions",
+                            "provider_audit", "model_catalog")]
     targets.append(("ops", "spend_cursor"))
     targets.append(("ops", "login_throttle"))
+    targets.append(("ops", "provider_operators"))
+    targets.append(("ops", "provider_sessions"))
+    targets.append(("ops", "provider_audit"))
     for schema, table in targets:
         cur.execute(
             "SELECT EXISTS (SELECT 1 FROM information_schema.columns "
@@ -79,6 +87,19 @@ def test_catalog_and_ops_are_provider_plane_by_design(admin_conn):
         has_tenant_id, rls_on = cur.fetchone()
         assert not has_tenant_id, f"{schema}.{table}: no debería tener tenant_id"
         assert not rls_on, f"{schema}.{table}: no debería tener RLS"
+    # Spec 032 (discovery dinámico): catalog.model_catalog SÍ lleva tenant_id
+    # + RLS — sus filas byok son dato de negocio del tenant; las centrales
+    # (tenant_id NULL) siguen visibles para todos (migración 0024, §19.2).
+    cur.execute(
+        "SELECT EXISTS (SELECT 1 FROM information_schema.columns "
+        "WHERE table_schema = 'catalog' AND table_name = 'model_catalog' "
+        "AND column_name = 'tenant_id'), c.relrowsecurity, c.relforcerowsecurity "
+        "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+        "WHERE n.nspname = 'catalog' AND c.relname = 'model_catalog'"
+    )
+    has_tenant_id, rls_on, forced = cur.fetchone()
+    assert has_tenant_id, "catalog.model_catalog: debe tener tenant_id (spec 032)"
+    assert rls_on and forced, "catalog.model_catalog: debe tener RLS FORCED (spec 032)"
     cur.execute(
         "SELECT c.relrowsecurity FROM pg_class c "
         "JOIN pg_namespace n ON n.oid = c.relnamespace "
@@ -114,7 +135,13 @@ def test_grants_match_spec(admin_conn):
         ("jobs", "delete", True),
         ("catalog.policy_keys", "insert", False),
         ("catalog.policy_keys", "select", True),
-        ("catalog.model_catalog", "update", False),
+        # Spec 032: el discovery escribe filas byok como trust_app (migración
+        # 0024 §19.3); el resto del catálogo sigue siendo solo-lectura.
+        ("catalog.model_catalog", "select", True),
+        ("catalog.model_catalog", "insert", True),
+        ("catalog.model_catalog", "update", True),
+        ("catalog.model_catalog", "delete", True),
+        ("catalog.connector_catalog", "update", False),
         ("ops.spend_cursor", "update", True),
         ("ops.spend_cursor", "delete", False),
         ("ops.login_throttle", "insert", True),
@@ -175,9 +202,16 @@ def test_catalog_seeds_present(admin_conn):
     cur.execute("SELECT count(*) FROM catalog.role_permissions")
     assert cur.fetchone()[0] >= 34
     cur.execute("SELECT count(*) FROM catalog.policy_keys WHERE invariable")
-    assert cur.fetchone()[0] == 4
+    # require_mfa pasó a org-tunable (migración 0014, spec 015 D-AUTH-07).
+    assert cur.fetchone()[0] == 3
     cur.execute("SELECT count(*) FROM catalog.policy_keys")
-    assert cur.fetchone()[0] == 12
+    # 12 originales + 4 del governance bundle (migración 0011, lane 017:
+    # allowed_tools, offline_grace_minutes, unbind_mode, attestation_overdue_hours)
+    # + 1 de conexiones personalizadas (migración 0012, spec 024:
+    # allowed_connections) + 1 de auto-registro (migración 0014, spec 015:
+    # allow_self_registration) + 29 del catálogo tipado v2 (migración 0022,
+    # spec 029, t_fb62560f: matriz de capacidades P-1..P-29) = 47.
+    assert cur.fetchone()[0] == 47
     cur.execute("SELECT count(*) FROM catalog.connector_catalog")
     assert cur.fetchone()[0] == 6
     cur.execute(

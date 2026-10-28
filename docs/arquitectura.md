@@ -397,6 +397,27 @@ Reglas: imágenes **siempre pineadas** (nunca `:latest` — hallazgo alto de la 
 - **Alternativas**: realm compartido con claim de tenant — rechazada: un misconfigured mapper filtra tokens entre tenants; un IdP externo por cliente (Okta/Entra) — fuera de alcance v1 (spec §7).
 - **Consecuencias**: N realms en un solo Keycloak (aceptable en local; revisar quotas al escalar); el aprovisionamiento debe limpiar realms en rollback.
 
+### ADR-016 — Gobernanza sobre Hermes: bundle de policy firmado + plugin oficial + gates remotos (cero parches)
+
+- **Contexto**: feedback Miller #2 — las policies gobernaban la plataforma (invoke vía API) pero no al agente Hermes del dispositivo; el `SOUL.md`/`config.yaml` locales podían conceder lo que la policy prohíbe. Aclaración Miller (2026-10-26): el modelo es **app→organización** — la aplicación completa descargada vía el link de la org (`/d/{org_code}`) queda ligada a esa org desde la instalación; NO es un modelo gateway→gateway.
+- **Decisión**: enforcement en capas (spec 019 §2.1): **L0** binding app→org horneado en la instalación (`org_code` → issuer/control plane/branding; el tenant de confianza siempre es el claim firmado `tenant_id`, nunca el binding local); **L1** aprovisionamiento del perfil Hermes (config.yaml → LiteLLM del tenant con virtual key, `plugins.enabled`, sin `fallback_model`); **L2** plugin `trust-agent-governance` v2 que enforce el **governance bundle** — policy efectiva compilada (deny-overrides + invariables) viajando como **JWS firmado (RS256/ES256, `aud=device_id`, `jti` anti-replay)**, con veto `pre_tool_call` (`{"action":"block"}`), contexto por turno `pre_llm_call`, system prompt section cache-safe (≤4000 chars) con cláusula de precedencia sobre el SOUL.md, tool `governance_status` y attestation por sesión; **L3** gate duro remoto en LiteLLM (modelos/presupuesto); **L4** control plane (device token, vault server-side de conectores, revocación, audit). El SOUL.md queda subordinado: es voz, no permisos.
+- **Alternativas**: plugin que consulta el control plane en cada turno — descartado como mecanismo único (latencia + offline); inyección de policy estática sin firma — descartada (falsificable localmente); parche al core para vetar en el loop — prohibido (lección C6); enforcement solo en LiteLLM — insuficiente (no ve tools ni conectores).
+- **Consecuencias**: nueva clave de firma de bundles en el control plane + JWKS (`/.well-known/policy-jwks.json`) y rotación vía profile distribution; 4 policy keys nuevas (`allowed_tools`, `offline_grace_minutes`, `unbind_mode`, `attestation_overdue_hours`); el plugin v2 extiende al v1 (spec 010). APIs verificadas contra `hermes_cli` instalado: `register_system_prompt_section` (solo posición `after_memory`), `pre_tool_call` con acciones `block`/`approve`/`modify` (block > approve, gate fail-closed del core), `pre_llm_call` solo contexto.
+
+### ADR-017 — Offline y desligado: fail-closed con gracia acotada, nunca fail-open
+
+- **Contexto**: el agente corre en el dispositivo del usuario; la red y la voluntad del usuario no están bajo control de la org. ¿Qué pasa si el control plane no responde, o el dispositivo se desliga/revoca?
+- **Decisión**: el bundle trae su propia gracia (`offline_grace_minutes`, default 60, piso 15 — policy del tenant). **Offline**: dentro de la gracia el plugin opera con el último bundle firmado; fuera de ella entra en **modo restringido** — todas las tools externas bloqueadas por `pre_tool_call`, aviso por `pre_llm_call`; el gate de modelos/presupuesto sigue siendo LiteLLM (sin red no hay LLM). **Desligado/revocado** (401/403 en sync): modo restringido **inmediato, sin gracia**, grado según `unbind_mode` (`readonly` default | `lock`); el control plane además desconecta los conectores del usuario en ese dispositivo (credenciales solo en vault server-side) y bloquea la virtual key — la revocación corta el acceso real, no solo la UI. Jamás fail-open: sin bundle válido no hay tools.
+- **Alternativas**: fail-open con warning — descartado (viola el principio de gobernanza: la política no puede relajarse por indisponibilidad); gracia infinita — descartada (un dispositivo clonado conservaría policy para siempre); confiar solo en LiteLLM para el offline — insuficiente (no cubre tools).
+- **Consecuencias**: el usuario técnico puede seguir conversando con el modelo dentro de la gracia sin sync (aceptado: la policy vigente es la última firmada, nunca más permisiva); UX debe explicar el modo restringido con claridad (REQ-GOH-008/009).
+
+### ADR-018 — Threat model honesto: garantías duras remotas; el enforcement local es defensa en profundidad + detección
+
+- **Contexto**: el home del perfil Hermes es editable por el usuario del SO (plugins.enabled, config.yaml, SOUL.md). Prometer imposibilidad de bypass local sería simulación (constitution I).
+- **Decisión**: documentar y sostener el modelo explícito: las **garantías duras** son remotas — modelos/presupuesto (virtual key en LiteLLM: imposible evadir sin salir del gateway de la org), credenciales de conectores (vault server-side), device token, audit — y la **detección** es por attestation (`on_session_start` → `device.attestation`; dispositivo `active` sin attestation > `attestation_overdue_hours` → notificación al admin). El enforcement local (plugin) es defensa en profundidad y UX. Si el usuario deshabilita el plugin o repunta el modelo a una key personal, pierde acceso a los recursos de la org (vault, conectores, agentes compartidos, presupuesto) y queda detectable; la org revoca el dispositivo. Falsificar attestation exige la clave privada del control plane.
+- **Alternativas**: vender "imposible de bypasear" — descartado (falso y viola constitution I); sandbox del agente — fuera de alcance v1 (Hermes profiles no son sandbox; `allowed_tools` gobierna `terminal`/browser como tools).
+- **Consecuencias**: el pitch de producto y la UI deben comunicar el modelo tal cual (REQ-GOH-015); la detección por attestation es un feature de venta (visibilidad CIO), no una admisión de debilidad.
+
 ---
 
 ## 5. Contratos entre componentes
@@ -571,6 +592,7 @@ Justificación de diseño: todo lo que puede cortarse en el camino de datos (gat
 | ADR-010, §3.5 | REQ-DTK-001, REQ-ORG-007, REQ-SEC-011 | C5, I3 |
 | ADR-011, ADR-012, §5.4 | REQ-PRF-001…006, REQ-SEC-001/002/007/008, REQ-DTK-008 | C6, P1 |
 | ADR-015, §5.1 | REQ-TEN-005, REQ-SEC-001/002, REQ-ONB-001/008 | spec §9.10 |
+| ADR-016, ADR-017, ADR-018 | REQ-GOH-001…021 (spec 019 — gobernanza sobre Hermes) | feedback Miller #2 + aclaración app→org |
 | §5.2 | REQ-DTK-007 + todos los reason codes | spec §9.8 |
 | §5.7 | REQ-POL-001…007 | spec §9.3 |
 
@@ -587,7 +609,7 @@ python3 -c "import re,pathlib; [pathlib.Path(f'/tmp/mmd{i}.mmd').write_text(b) f
 for f in /tmp/mmd*.mmd; do npx -y @mermaid-js/mermaid-cli -p /tmp/pptr.json -i "$f" -o "${f%.mmd}.svg"; done
 
 # Trazabilidad: cada ADR cita D#/C#/REQ- y cada seccion tiene fuente:
-grep -c "ADR-" docs/arquitectura.md        # 15 ADRs numerados
+grep -c "ADR-" docs/arquitectura.md        # 18 ADRs numerados
 grep -c "REQ-" docs/arquitectura.md        # referencias a la spec maestra
 
 # Fuentes vivas que sustentan las decisiones (probadas en t_31934ca5):

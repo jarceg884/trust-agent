@@ -1,0 +1,36 @@
+Trust Agent
+
+= rneote 4 7
+Trust Agent demo-org | Connected + Invite user Download desktop app © A. Alex Morgan
+GOVERNANCE
+28 Overview Shared Agents
+
+Organization agents with explicit, auditable access grants.
+‘i Organization
+§® Departments Default profiles
+
+Product-curated agent profiles your organization can adopt. Adoption creates a tenant instance you own — explicit grants, tenant policy (deny-overrides) applies lke any
+&& Users & Roles other agent.
+
+& Budgets Effective polley
+®@ Model Access PROFILE SUGGESTED STATUS
+Shared Agents
+
+Analyst
+
+Research and data analysis: summarization, report drafting, spreadsheet reasoning and models: glm-&2 =
+© Devices tied thangs ‘connectors: email table
+
+web: data-analysis-report-wrting citation
+
+& Hermes Download
+Coder
+P Credentials Software development: code review, refactoring, tests and technical documentation models: glm-8.2
+. available
+inside the repo. connectors: —
+B Audit Log even refactoring test-driven-development -debuoging
+© Branding ops
+operations: incident triage, infrastructure health checks, log analysis and operational models: glm-8.2
+TT operat ident triage, infrastructure health checks, og analysis and operational a avaliable
+
+reporting. connectors: vmware, email, slack

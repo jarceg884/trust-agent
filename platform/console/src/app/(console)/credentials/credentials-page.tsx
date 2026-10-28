@@ -14,6 +14,9 @@ import type {
   CredentialList,
   CredentialMeta,
   CredentialSecretResult,
+  CustomConnectionList,
+  CustomConnectionMeta,
+  CustomConnectionSecretResult,
   InstanceList,
 } from "@/lib/types";
 import { dateTime, timeAgo } from "@/lib/format";
@@ -34,6 +37,7 @@ import {
   Table,
   TableSkeleton,
   Td,
+  Textarea,
   Th,
   useToast,
 } from "@/components/ui";
@@ -43,6 +47,7 @@ export function CredentialsPage() {
   const credentials = useApi<CredentialList>("/api/vault/credentials");
   const connectors = useApi<ConnectorList>("/api/connectors");
   const instances = useApi<InstanceList>("/api/connectors/instances");
+  const customConnections = useApi<CustomConnectionList>("/api/vault/connections");
   const { push } = useToast();
 
   // Crear
@@ -62,6 +67,154 @@ export function CredentialsPage() {
   // Conectar conector
   const [connectFor, setConnectFor] = useState<string | null>(null);
   const [disconnectFor, setDisconnectFor] = useState<ConnectorInstance | null>(null);
+
+  // Conexiones personalizadas (spec 024): CRUD del org_admin
+  const [connCreateOpen, setConnCreateOpen] = useState(false);
+  const [connName, setConnName] = useState("");
+  const [connKind, setConnKind] = useState<"database" | "api_key" | "custom">("database");
+  const [connSecret, setConnSecret] = useState("");
+  // metadata database
+  const [dbType, setDbType] = useState("postgresql");
+  const [dbHost, setDbHost] = useState("");
+  const [dbPort, setDbPort] = useState("5432");
+  const [dbName, setDbName] = useState("");
+  const [dbUser, setDbUser] = useState("");
+  // metadata api_key
+  const [akService, setAkService] = useState("");
+  const [akAuth, setAkAuth] = useState<"bearer" | "header">("bearer");
+  const [akHeader, setAkHeader] = useState("");
+  // metadata custom (JSON libre NO-secreto)
+  const [customJson, setCustomJson] = useState("{}");
+  const [connSubmitting, setConnSubmitting] = useState(false);
+  const [connOneTime, setConnOneTime] = useState<{ value: string; label: string } | null>(null);
+  const [connEditFor, setConnEditFor] = useState<CustomConnectionMeta | null>(null);
+  const [connRotateFor, setConnRotateFor] = useState<CustomConnectionMeta | null>(null);
+  const [connRevokeFor, setConnRevokeFor] = useState<CustomConnectionMeta | null>(null);
+
+  function connMetadata(): Record<string, unknown> {
+    if (connKind === "database") {
+      return {
+        type: dbType,
+        host: dbHost,
+        port: Number(dbPort),
+        database: dbName,
+        username: dbUser,
+      };
+    }
+    if (connKind === "api_key") {
+      const meta: Record<string, unknown> = { service: akService, auth: akAuth };
+      if (akAuth === "header") meta.header_name = akHeader;
+      return meta;
+    }
+    return JSON.parse(customJson || "{}") as Record<string, unknown>;
+  }
+
+  function resetConnForm() {
+    setConnName("");
+    setConnKind("database");
+    setConnSecret("");
+    setDbType("postgresql");
+    setDbHost("");
+    setDbPort("5432");
+    setDbName("");
+    setDbUser("");
+    setAkService("");
+    setAkAuth("bearer");
+    setAkHeader("");
+    setCustomJson("{}");
+  }
+
+  async function createConnection() {
+    setConnSubmitting(true);
+    try {
+      let metadata: Record<string, unknown>;
+      try {
+        metadata = connMetadata();
+      } catch {
+        push("error", "Custom metadata must be valid JSON.");
+        return;
+      }
+      const result = await api<CustomConnectionSecretResult>("/api/vault/connections", {
+        method: "POST",
+        body: { name: connName, kind: connKind, metadata, secret_value: connSecret },
+      });
+      setConnOneTime({ value: result.secret_value ?? "", label: `Secret for connection "${connName}"` });
+      setConnCreateOpen(false);
+      resetConnForm();
+      customConnections.refetch();
+    } catch (cause) {
+      push("error", cause instanceof ApiError ? cause.message : "Creation failed.");
+    } finally {
+      setConnSubmitting(false);
+    }
+  }
+
+  async function updateConnection(rotate: boolean) {
+    const target = connEditFor;
+    if (!target) return;
+    setConnSubmitting(true);
+    try {
+      let metadata: Record<string, unknown>;
+      try {
+        metadata = connMetadata();
+      } catch {
+        push("error", "Custom metadata must be valid JSON.");
+        return;
+      }
+      const body: Record<string, unknown> = { name: connName, kind: connKind, metadata };
+      if (rotate) body.new_secret_value = connSecret;
+      const result = await api<CustomConnectionSecretResult>(
+        `/api/vault/connections/${target.id}`,
+        { method: "PUT", body },
+      );
+      if (result.secret_value) {
+        setConnOneTime({ value: result.secret_value, label: `New secret for "${target.name}"` });
+      } else {
+        push("success", `Connection "${connName}" updated.`);
+      }
+      setConnEditFor(null);
+      setConnRotateFor(null);
+      resetConnForm();
+      customConnections.refetch();
+    } catch (cause) {
+      push("error", cause instanceof ApiError ? cause.message : "Update failed.");
+    } finally {
+      setConnSubmitting(false);
+    }
+  }
+
+  async function revokeConnection() {
+    if (!connRevokeFor) return;
+    setConnSubmitting(true);
+    try {
+      await api(`/api/vault/connections/${connRevokeFor.id}/revoke`, { method: "POST" });
+      push("success", `Connection "${connRevokeFor.name}" revoked. Its uses are cut off (410).`);
+      setConnRevokeFor(null);
+      customConnections.refetch();
+    } catch (cause) {
+      push("error", cause instanceof ApiError ? cause.message : "Revoke failed.");
+    } finally {
+      setConnSubmitting(false);
+    }
+  }
+
+  function openEdit(c: CustomConnectionMeta, rotate: boolean) {
+    setConnEditFor(c);
+    setConnRotateFor(rotate ? c : null);
+    setConnName(c.name);
+    setConnKind(c.kind);
+    setConnSecret("");
+    const m = c.metadata ?? {};
+    setDbType(String(m.type ?? "postgresql"));
+    setDbHost(String(m.host ?? ""));
+    setDbPort(String(m.port ?? 5432));
+    setDbName(String(m.database ?? ""));
+    setDbUser(String(m.username ?? ""));
+    setAkService(String(m.service ?? ""));
+    setAkAuth(m.auth === "header" ? "header" : "bearer");
+    setAkHeader(String(m.header_name ?? ""));
+    setCustomJson(JSON.stringify(m, null, 2));
+  }
 
   async function createCredential() {
     setSubmitting(true);
@@ -292,6 +445,93 @@ export function CredentialsPage() {
         )}
       </Card>
 
+      <Card>
+        <CardHeader
+          title="Custom connections"
+          description="Organization-defined connections beyond the catalog (spec 024): databases, generic API keys or free-form metadata. Secrets are encrypted and shown exactly once; usage is governed by the allowed_connections policy."
+          actions={
+            <Button variant="primary" size="sm" onClick={() => setConnCreateOpen(true)}>
+              <IconPlus size={13} /> Add connection
+            </Button>
+          }
+        />
+        {customConnections.loading ? (
+          <TableSkeleton rows={3} cols={5} />
+        ) : customConnections.error ? (
+          customConnections.error.status === 403 ? (
+            <EmptyState
+              title="Only organization admins manage custom connections"
+              description="Creating, updating and revoking connections requires the connections.manage permission (org_admin)."
+            />
+          ) : (
+            <ErrorState error={customConnections.error} onRetry={customConnections.refetch} context="GET /api/vault/connections" />
+          )
+        ) : (customConnections.data?.connections.length ?? 0) === 0 ? (
+          <EmptyState
+            title="No custom connections"
+            description="Define a database, a generic API key or any other connection for your organization. Allowed users and agents consume it through the policy."
+          />
+        ) : (
+          <Table>
+            <thead>
+              <tr>
+                <Th>Name</Th>
+                <Th>Kind</Th>
+                <Th>Metadata</Th>
+                <Th>Status</Th>
+                <Th>Rotated</Th>
+                <Th>Used</Th>
+                <Th className="w-44" />
+              </tr>
+            </thead>
+            <tbody>
+              {customConnections.data!.connections.map((c) => (
+                <tr key={c.id} className="hover:bg-surface-alt/50">
+                  <Td>
+                    <p className="font-medium">{c.name}</p>
+                    <p className="font-mono text-[10px] text-faint">{c.id}</p>
+                  </Td>
+                  <Td>
+                    <Badge tone={c.kind === "database" ? "info" : c.kind === "api_key" ? "accent" : "neutral"}>
+                      {c.kind}
+                    </Badge>
+                  </Td>
+                  <Td className="max-w-56">
+                    <p className="truncate font-mono text-[11px] text-muted" title={JSON.stringify(c.metadata)}>
+                      {JSON.stringify(c.metadata)}
+                    </p>
+                  </Td>
+                  <Td>
+                    <Badge tone={c.status === "active" ? "success" : "neutral"}>{c.status}</Badge>
+                  </Td>
+                  <Td className="text-xs text-muted">{timeAgo(c.last_rotated_at ?? c.created_at)}</Td>
+                  <Td className="text-xs text-muted">{timeAgo(c.last_used_at)}</Td>
+                  <Td>
+                    <div className="flex justify-end gap-1.5">
+                      {c.status === "active" ? (
+                        <>
+                          <Button variant="secondary" size="sm" onClick={() => openEdit(c, false)}>
+                            Edit
+                          </Button>
+                          <Button variant="secondary" size="sm" onClick={() => openEdit(c, true)}>
+                            Rotate
+                          </Button>
+                          <Button variant="danger" size="sm" onClick={() => setConnRevokeFor(c)}>
+                            Revoke
+                          </Button>
+                        </>
+                      ) : (
+                        <span className="text-[11px] text-faint">Revoked</span>
+                      )}
+                    </div>
+                  </Td>
+                </tr>
+              ))}
+            </tbody>
+          </Table>
+        )}
+      </Card>
+
       {/* Crear credencial */}
       <Dialog
         open={createOpen}
@@ -410,6 +650,252 @@ export function CredentialsPage() {
         title={`Disconnect ${disconnectFor?.connector_slug ?? ""}`}
         message="Agents using this connector lose access to the application immediately."
         confirmLabel="Disconnect"
+      />
+
+      {/* Conexión personalizada: crear (spec 024) */}
+      <Dialog
+        open={connCreateOpen}
+        onClose={() => setConnCreateOpen(false)}
+        title="Add custom connection"
+        description="Organization-level connection (database, API key or custom). The secret is encrypted with the platform KEK and shown back exactly once."
+        width="max-w-xl"
+        footer={
+          <>
+            <Button variant="ghost" size="sm" onClick={() => setConnCreateOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              loading={connSubmitting}
+              disabled={!connName.trim() || !connSecret}
+              onClick={createConnection}
+            >
+              Save connection
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          <Field label="Name" htmlFor="conn-name">
+            <Input id="conn-name" value={connName} onChange={(e) => setConnName(e.target.value)} placeholder="Analytics database" />
+          </Field>
+          <Field label="Kind" htmlFor="conn-kind">
+            <Select
+              id="conn-kind"
+              value={connKind}
+              onChange={(e) => setConnKind(e.target.value as "database" | "api_key" | "custom")}
+            >
+              <option value="database">Database</option>
+              <option value="api_key">API key</option>
+              <option value="custom">Custom</option>
+            </Select>
+          </Field>
+          {connKind === "database" ? (
+            <>
+              <Field label="Type" htmlFor="conn-db-type">
+                <Select id="conn-db-type" value={dbType} onChange={(e) => setDbType(e.target.value)}>
+                  <option value="postgresql">postgresql</option>
+                  <option value="mysql">mysql</option>
+                  <option value="sqlserver">sqlserver</option>
+                  <option value="oracle">oracle</option>
+                  <option value="mongodb">mongodb</option>
+                </Select>
+              </Field>
+              <div className="grid gap-4 sm:grid-cols-3">
+                <Field label="Host" htmlFor="conn-db-host">
+                  <Input id="conn-db-host" value={dbHost} onChange={(e) => setDbHost(e.target.value)} placeholder="db.internal" />
+                </Field>
+                <Field label="Port" htmlFor="conn-db-port">
+                  <Input id="conn-db-port" value={dbPort} onChange={(e) => setDbPort(e.target.value)} placeholder="5432" />
+                </Field>
+                <Field label="Database" htmlFor="conn-db-name">
+                  <Input id="conn-db-name" value={dbName} onChange={(e) => setDbName(e.target.value)} placeholder="analytics" />
+                </Field>
+              </div>
+              <Field label="Username" htmlFor="conn-db-user">
+                <Input id="conn-db-user" value={dbUser} onChange={(e) => setDbUser(e.target.value)} placeholder="reader" />
+              </Field>
+            </>
+          ) : connKind === "api_key" ? (
+            <>
+              <Field label="Service" htmlFor="conn-ak-service">
+                <Input id="conn-ak-service" value={akService} onChange={(e) => setAkService(e.target.value)} placeholder="internal-billing" />
+              </Field>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field label="Auth" htmlFor="conn-ak-auth">
+                  <Select id="conn-ak-auth" value={akAuth} onChange={(e) => setAkAuth(e.target.value as "bearer" | "header")}>
+                    <option value="bearer">Bearer token</option>
+                    <option value="header">Custom header</option>
+                  </Select>
+                </Field>
+                {akAuth === "header" ? (
+                  <Field label="Header name" htmlFor="conn-ak-header">
+                    <Input id="conn-ak-header" value={akHeader} onChange={(e) => setAkHeader(e.target.value)} placeholder="X-Api-Key" />
+                  </Field>
+                ) : null}
+              </div>
+            </>
+          ) : (
+            <Field label="Metadata (JSON, non-secret)" htmlFor="conn-custom-json" hint="Secret-looking keys (password/secret/token/…) are rejected by the control plane.">
+              <Textarea
+                id="conn-custom-json"
+                rows={5}
+                value={customJson}
+                onChange={(e) => setCustomJson(e.target.value)}
+                className="font-mono text-xs"
+              />
+            </Field>
+          )}
+          <Field label="Secret value" htmlFor="conn-secret" hint="Password, API key or token — encrypted at rest, displayed exactly once.">
+            <Input
+              id="conn-secret"
+              type="password"
+              value={connSecret}
+              onChange={(e) => setConnSecret(e.target.value)}
+              placeholder="••••••••"
+              autoComplete="new-password"
+            />
+          </Field>
+        </div>
+      </Dialog>
+
+      {/* Conexión personalizada: editar / rotar secreto */}
+      <Dialog
+        open={connEditFor !== null}
+        onClose={() => {
+          setConnEditFor(null);
+          setConnRotateFor(null);
+        }}
+        title={connRotateFor ? `Rotate secret — ${connEditFor?.name ?? ""}` : `Edit connection — ${connEditFor?.name ?? ""}`}
+        description="Metadata is non-secret; the secret lives encrypted in its own column and a new value is shown exactly once."
+        width="max-w-xl"
+        footer={
+          <>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setConnEditFor(null);
+                setConnRotateFor(null);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              loading={connSubmitting}
+              disabled={!connName.trim() || (connRotateFor !== null && !connSecret)}
+              onClick={() => updateConnection(connRotateFor !== null)}
+            >
+              {connRotateFor ? "Rotate secret" : "Save changes"}
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          <Field label="Name" htmlFor="conn-edit-name">
+            <Input id="conn-edit-name" value={connName} onChange={(e) => setConnName(e.target.value)} />
+          </Field>
+          <Field label="Kind" htmlFor="conn-edit-kind">
+            <Select
+              id="conn-edit-kind"
+              value={connKind}
+              onChange={(e) => setConnKind(e.target.value as "database" | "api_key" | "custom")}
+            >
+              <option value="database">Database</option>
+              <option value="api_key">API key</option>
+              <option value="custom">Custom</option>
+            </Select>
+          </Field>
+          {connKind === "database" ? (
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label="Type" htmlFor="conn-edit-db-type">
+                <Input id="conn-edit-db-type" value={dbType} onChange={(e) => setDbType(e.target.value)} />
+              </Field>
+              <Field label="Host" htmlFor="conn-edit-db-host">
+                <Input id="conn-edit-db-host" value={dbHost} onChange={(e) => setDbHost(e.target.value)} />
+              </Field>
+              <Field label="Port" htmlFor="conn-edit-db-port">
+                <Input id="conn-edit-db-port" value={dbPort} onChange={(e) => setDbPort(e.target.value)} />
+              </Field>
+              <Field label="Database" htmlFor="conn-edit-db-name">
+                <Input id="conn-edit-db-name" value={dbName} onChange={(e) => setDbName(e.target.value)} />
+              </Field>
+              <Field label="Username" htmlFor="conn-edit-db-user">
+                <Input id="conn-edit-db-user" value={dbUser} onChange={(e) => setDbUser(e.target.value)} />
+              </Field>
+            </div>
+          ) : connKind === "api_key" ? (
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label="Service" htmlFor="conn-edit-ak-service">
+                <Input id="conn-edit-ak-service" value={akService} onChange={(e) => setAkService(e.target.value)} />
+              </Field>
+              <Field label="Auth" htmlFor="conn-edit-ak-auth">
+                <Select id="conn-edit-ak-auth" value={akAuth} onChange={(e) => setAkAuth(e.target.value as "bearer" | "header")}>
+                  <option value="bearer">Bearer token</option>
+                  <option value="header">Custom header</option>
+                </Select>
+              </Field>
+              {akAuth === "header" ? (
+                <Field label="Header name" htmlFor="conn-edit-ak-header">
+                  <Input id="conn-edit-ak-header" value={akHeader} onChange={(e) => setAkHeader(e.target.value)} />
+                </Field>
+              ) : null}
+            </div>
+          ) : (
+            <Field label="Metadata (JSON, non-secret)" htmlFor="conn-edit-custom-json">
+              <Textarea
+                id="conn-edit-custom-json"
+                rows={5}
+                value={customJson}
+                onChange={(e) => setCustomJson(e.target.value)}
+                className="font-mono text-xs"
+              />
+            </Field>
+          )}
+          <Field
+            label={connRotateFor ? "New secret value" : "New secret value (optional)"}
+            htmlFor="conn-edit-secret"
+            hint={connRotateFor ? "The previous ciphertext dies immediately; the new value is shown exactly once." : "Leave empty to keep the current secret."}
+          >
+            <Input
+              id="conn-edit-secret"
+              type="password"
+              value={connSecret}
+              onChange={(e) => setConnSecret(e.target.value)}
+              placeholder="••••••••"
+              autoComplete="new-password"
+            />
+          </Field>
+        </div>
+      </Dialog>
+
+      {/* Conexión personalizada: secreto one-time */}
+      <Dialog
+        open={connOneTime !== null}
+        onClose={() => setConnOneTime(null)}
+        title="Connection saved"
+        description={connOneTime?.label}
+        footer={
+          <Button variant="primary" size="sm" onClick={() => setConnOneTime(null)}>
+            I stored it safely
+          </Button>
+        }
+      >
+        {connOneTime ? <OneTimeSecret value={connOneTime.value} /> : null}
+      </Dialog>
+
+      {/* Conexión personalizada: revocar */}
+      <ConfirmDialog
+        open={connRevokeFor !== null}
+        onClose={() => setConnRevokeFor(null)}
+        onConfirm={revokeConnection}
+        loading={connSubmitting}
+        title={`Revoke connection "${connRevokeFor?.name ?? ""}"`}
+        message="The connection is revoked permanently: runtime uses answer 410 and it disappears from the governance bundle at the next sync. This action is audited."
+        confirmLabel="Revoke connection"
       />
     </div>
   );

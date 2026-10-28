@@ -1,0 +1,154 @@
+Probe D-AUTH-06 contra Keycloak 26.2.5 vivo (http://127.0.0.1:8080)
+[redacción post-gate t_b62edff2: las semillas TOTP de los probes son
+credenciales — se reemplazan por [REDACTED-POST-GATE]; el resultado del
+check (code→acr='2') no cambia]
+
+[setup] realm probe-loa + cliente + usuario listos (acr.loa.map = {"1":1,"2":2})
+== copia del flujo browser (listing plano, incluye anidados) ==
+    'Cookie'                                                provider='auth-cookie'                    req=ALTERNATIVE
+    'Kerberos'                                              provider='auth-spnego'                    req=DISABLED
+    'Identity Provider Redirector'                          provider='identity-provider-redirector'   req=ALTERNATIVE
+    'probe-browser-loa Organization'                        provider=None                             req=ALTERNATIVE
+    'probe-browser-loa Browser - Conditional Organization'  provider=None                             req=CONDITIONAL
+    'Condition - user configured'                           provider='conditional-user-configured'    req=REQUIRED
+    'Organization Identity-First Login'                     provider='organization'                   req=ALTERNATIVE
+    'probe-browser-loa forms'                               provider=None                             req=ALTERNATIVE
+    'Username Password Form'                                provider='auth-username-password-form'    req=REQUIRED
+    'probe-browser-loa Browser - Conditional OTP'           provider=None                             req=CONDITIONAL
+    'Condition - user configured'                           provider='conditional-user-configured'    req=REQUIRED
+    'OTP Form'                                              provider='auth-otp-form'                  req=REQUIRED
+
+*** FINDING subflow-create: POST /flows/'probe-browser-loa forms'/executions/flow con providerId='basic-flow' requirement=CONDITIONAL -> 201
+
+
+*** FINDING subflow-requirement-priority: la creación ignora requirement y priority; PUT flows/{FLOW}/executions los fija. CRÍTICO: Password LoA debe correr ANTES que Conditional OTP (priority menor) — si no, el OTP Form evalúa con authUser==null y el authorize muere con 400 UNKNOWN_USER
+
+[flow] probe-browser-loa reestructurado y ligado (Password LoA@1 + Conditional OTP@2, user-configured eliminado)
+== flujo final ==
+    'Cookie'                                                provider='auth-cookie'                    req=ALTERNATIVE
+    'Kerberos'                                              provider='auth-spnego'                    req=DISABLED
+    'Identity Provider Redirector'                          provider='identity-provider-redirector'   req=ALTERNATIVE
+    'probe-browser-loa Organization'                        provider=None                             req=ALTERNATIVE
+    'probe-browser-loa Browser - Conditional Organization'  provider=None                             req=CONDITIONAL
+    'Condition - user configured'                           provider='conditional-user-configured'    req=REQUIRED
+    'Organization Identity-First Login'                     provider='organization'                   req=ALTERNATIVE
+    'probe-browser-loa forms'                               provider=None                             req=ALTERNATIVE
+    'Password LoA'                                          provider=None                             req=CONDITIONAL
+    'Condition - Level of Authentication'                   provider='conditional-level-of-authentication' req=REQUIRED
+    'Username Password Form'                                provider='auth-username-password-form'    req=REQUIRED
+    'probe-browser-loa Browser - Conditional OTP'           provider=None                             req=CONDITIONAL
+    'Condition - Level of Authentication'                   provider='conditional-level-of-authentication' req=REQUIRED
+    'OTP Form'                                              provider='auth-otp-form'                  req=REQUIRED
+
+== S1: login fresco acr_values='1' ==
+    [drive] página: login
+    [drive] página: code→acr='1'
+
+*** FINDING S1-acr1-sin-totp: secuencia=['login', "code→acr='1'"] → code con acr='1' (OK: sin OTP)
+
+
+== S2: login fresco acr_values=2 sin TOTP ==
+
+*** FINDING S2-acr2-sin-totp: OK: redirect a required-action CONFIGURE_TOTP (sin code) — http://127.0.0.1:8080/realms/probe-loa/login-actions/required-action?execution=CONFIGURE_T
+
+
+== S3: completar enrolamiento TOTP real → code ==
+    [drive] página: required-action:CONFIGURE_TOTP&client_id=probe-web&tab_i
+    [drive] página: configure_totp
+    [drive] enrolando TOTP secret=[REDACTED-POST-GATE] code=978977
+    [drive] página: code→acr='2'
+
+*** FINDING S3-enrolamiento: secuencia=['required-action:CONFIGURE_TOTP&client_id=probe-web&tab_i', 'configure_totp', "code→acr='2'"] → code con acr='2' (OK)
+
+
+== S4: login fresco acr_values='2' ==
+    [drive] página: login
+    [drive] página: otp
+    [drive] 2º factor OTP code=928846
+    [drive] página: code→acr='2'
+
+*** FINDING S4-acr2-con-totp: secuencia=['login', 'otp', "code→acr='2'"] → acr='2' (OK: OTP verificado)
+
+
+== S5: login fresco acr_values='1' ==
+    [drive] página: login
+    [drive] página: code→acr='1'
+
+*** FINDING S5-acr1-con-totp: secuencia=['login', "code→acr='1'"] → acr='1' (OK: password-only pese a TOTP enrolado)
+
+
+== S6: re-login SSO (cookie, sesión LoA 1) ==
+    [drive] página: code→acr='1'
+
+*** FINDING S6a-SSO-acr1: secuencia=["code→acr='1'"] → acr='1' (sesión LoA 1 + cookie: ¿code sin password?)
+
+    [drive] página: otp
+    [drive] 2º factor OTP code=928846
+    [drive] página: intermediate
+    [drive] página: otp
+    [drive] 2º factor OTP code=266781
+    [drive] página: code→acr='2'
+
+*** FINDING S6b-SSO-acr2: secuencia=['otp', 'intermediate', 'otp', "code→acr='2'"] → acr='2' fail=None (¿step-up real con OTP, o cookie short-circuit sin OTP?)
+
+    [drive] página: reauth
+    [drive] página: otp
+    [drive] 2º factor OTP code=266781
+    [drive] página: otp
+    [drive] 2º factor OTP code=022063
+    [drive] página: code→acr='2'
+
+*** FINDING S6c-SSO-acr2-prompt-login: secuencia=['reauth', 'otp', 'otp', "code→acr='2'"] → acr='2' (prompt=login: ¿password+OTP forzados sobre sesión SSO?)
+
+
+== S7: login fresco acr_values=None ==
+    [drive] página: login
+    [drive] página: code→acr='1'
+
+*** FINDING S7-bare-authorize: secuencia=['login', "code→acr='1'"] → acr='1' (SIN acr_values: impacto directo en la suite e2e)
+
+
+== S8-setup: login fresco acr_values='2' ==
+    [drive] página: login
+    [drive] página: otp
+    [drive] 2º factor OTP code=022063
+    [drive] página: otp
+    [drive] 2º factor OTP code=043352
+    [drive] página: code→acr='2'
+    [drive] página: code→acr='2'
+
+*** FINDING S8-SSO-loa2-acr2: secuencia=["code→acr='2'"] → acr='2' (sesión LoA 2 + acr=2: ¿code sin OTP por maxAge?)
+
+
+== G1: IdP google (placeholder declarado) + kc_idp_hint ==
+
+*** FINDING G1-google-idp: creado HTTP 201; botón en login=True; redirect externo=NINGUNO; hops=['http://127.0.0.1:8080/realms/probe-loa/broker/google/login?session_code=Ps_Lb3aYqwofwELMSQ', 'https://accounts.google.com/o/oauth2/v2/auth?scope=openid+profile+email&state=-c-qrh5U6gyX', '']
+
+[broker] realm doble probe-idp-double + IdP double-oidc listos
+
+== B1: primer login brokered (doble OIDC local declarado) ==
+    [drive] página: broker-hop
+    [drive] página: code→acr='1'
+
+*** FINDING B1-brokered: secuencia=['broker-hop', "code→acr='1'"] → acr='1' sub=46a26e26… email='double@probe.test' tenant_id=None usuario_auto_creado=True federado=[{'identityProvider': 'double-oidc', 'userId': '347c5d9b-66d4-428b-a352-56d69e5a297f', 'userName': 'double@probe.test'}]
+
+
+[cleanup] realms desechables eliminados
+
+======================================================================
+FINDINGS (para congelar D-AUTH-06 y actualizar el skill):
+  - subflow-create: POST /flows/'probe-browser-loa forms'/executions/flow con providerId='basic-flow' requirement=CONDITIONAL -> 201
+  - subflow-requirement-priority: la creación ignora requirement y priority; PUT flows/{FLOW}/executions los fija. CRÍTICO: Password LoA debe correr ANTES que Conditional OTP (priority menor) — si no, el OTP Form evalúa con authUser==null y el authorize muere con 400 UNKNOWN_USER
+  - S1-acr1-sin-totp: secuencia=['login', "code→acr='1'"] → code con acr='1' (OK: sin OTP)
+  - S2-acr2-sin-totp: OK: redirect a required-action CONFIGURE_TOTP (sin code) — http://127.0.0.1:8080/realms/probe-loa/login-actions/required-action?execution=CONFIGURE_T
+  - S3-enrolamiento: secuencia=['required-action:CONFIGURE_TOTP&client_id=probe-web&tab_i', 'configure_totp', "code→acr='2'"] → code con acr='2' (OK)
+  - S4-acr2-con-totp: secuencia=['login', 'otp', "code→acr='2'"] → acr='2' (OK: OTP verificado)
+  - S5-acr1-con-totp: secuencia=['login', "code→acr='1'"] → acr='1' (OK: password-only pese a TOTP enrolado)
+  - S6a-SSO-acr1: secuencia=["code→acr='1'"] → acr='1' (sesión LoA 1 + cookie: ¿code sin password?)
+  - S6b-SSO-acr2: secuencia=['otp', 'intermediate', 'otp', "code→acr='2'"] → acr='2' fail=None (¿step-up real con OTP, o cookie short-circuit sin OTP?)
+  - S6c-SSO-acr2-prompt-login: secuencia=['reauth', 'otp', 'otp', "code→acr='2'"] → acr='2' (prompt=login: ¿password+OTP forzados sobre sesión SSO?)
+  - S7-bare-authorize: secuencia=['login', "code→acr='1'"] → acr='1' (SIN acr_values: impacto directo en la suite e2e)
+  - S8-SSO-loa2-acr2: secuencia=["code→acr='2'"] → acr='2' (sesión LoA 2 + acr=2: ¿code sin OTP por maxAge?)
+  - G1-google-idp: creado HTTP 201; botón en login=True; redirect externo=NINGUNO; hops=['http://127.0.0.1:8080/realms/probe-loa/broker/google/login?session_code=Ps_Lb3aYqwofwELMSQ', 'https://accounts.google.com/o/oauth2/v2/auth?scope=openid+profile+email&state=-c-qrh5U6gyX', '']
+  - B1-brokered: secuencia=['broker-hop', "code→acr='1'"] → acr='1' sub=46a26e26… email='double@probe.test' tenant_id=None usuario_auto_creado=True federado=[{'identityProvider': 'double-oidc', 'userId': '347c5d9b-66d4-428b-a352-56d69e5a297f', 'userName': 'double@probe.test'}]
+======================================================================

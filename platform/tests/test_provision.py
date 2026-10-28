@@ -115,6 +115,12 @@ def test_provision_full_flow(client, admin_conn):
 
     assert body["created"] is True
     tenant = body["tenant"]
+    # Early handoff (order-dependency hardening, t_8f716f9f): the downstream
+    # tests of this module (idempotent / provider state / isolation) key off
+    # _state["tenant_id"] — set it as soon as the tenant exists so a failed
+    # assert LATER in this test does not cascade into 4 failures.
+    _state["tenant_id"] = tenant["id"]
+    tenant_id = tenant["id"]
     assert tenant["slug"] == SLUG
     assert tenant["status"] == "active"
     assert tenant["oidc_issuer_url"] == f"http://{KC_HOST}:{KC_PORT}/realms/{SLUG}"
@@ -172,9 +178,19 @@ def test_provision_full_flow(client, admin_conn):
             (tenant_id,),
         )
         invariable = cur.fetchall()
-        assert len(invariable) == 4
+        # Spec 015 (D-AUTH-07): require_mfa LEFT the invariable floor — only
+        # 3 provider floors remain; new tenants are born with MFA OPTIONAL
+        # (no org row -> catalog default false, the app suggests enrolling).
+        assert len(invariable) == 3
+        assert "require_mfa" not in [r[0] for r in invariable]
         for key, default, value in invariable:
             assert value == default, f"policy {key}: {value} != default {default}"
+        cur.execute(
+            "SELECT count(*) FROM policies WHERE tenant_id = %s "
+            "AND key = 'require_mfa'",
+            (tenant_id,),
+        )
+        assert cur.fetchone()[0] == 0  # born optional (banner suggests MFA)
 
         # model_plan 'standard' -> every available catalog model approved
         cur.execute(
@@ -186,10 +202,18 @@ def test_provision_full_flow(client, admin_conn):
         )
         approved = cur.fetchone()[0]
         cur.execute(
-            "SELECT count(*) FROM catalog.model_catalog WHERE status = 'available'"
+            "SELECT count(*) FROM catalog.model_catalog "
+            "WHERE status = 'available' AND source = 'central'"
         )
         available = cur.fetchone()[0]
         assert available >= 2  # catalog seeded (AC-CP-054 parity)
+        # t_e000bf40: el conteo de 'available' va filtrado por
+        # source='central' — el provisioning aprueba SOLO modelos
+        # centrales (mode='central'), pero otras suites de la sesión
+        # (test_dynamic_discovery) siembran filas byok 'available' en
+        # el catálogo global; sin el filtro el assert acopla con el
+        # orden de la suite (7 == 17 en suite completa vs 7 == 7
+        # aislado).
         assert approved == available
 
         # AC-ONB-009: provider audit trail + chain integrity
@@ -221,13 +245,23 @@ def test_provision_full_flow(client, admin_conn):
             assert cur.fetchone()[0] == 0, f"one-time password leaked via {table}"
 
     # Realm really exists and the admin user is forced into password change
-    # + TOTP enrollment on first login (AC-ONB-004).
+    # on first login (AC-ONB-004). Spec 015 (D-AUTH-06): CONFIGURE_TOTP is NO
+    # LONGER a required action — TOTP enrollment happens inline through the
+    # OTP form when the app requests acr_values=2 (probe S2/S3); MFA is
+    # optional and the console suggests it via the persistent banner.
     kc = _kc()
     assert kc.realm_exists(SLUG)
     user = kc.find_user(SLUG, ADMIN_EMAIL)
     assert user is not None and user["enabled"] is True
-    assert "CONFIGURE_TOTP" in user["requiredActions"]
+    assert "CONFIGURE_TOTP" not in user["requiredActions"]
+    assert "UPDATE_PASSWORD" in user["requiredActions"]
     assert user["attributes"]["tenant_id"] == [tenant_id]
+    # Spec 015: the realm carries the white-label theme + the optional-MFA
+    # LoA flow + the tenant_id hardcode mapper for brokered users.
+    state = kc.mfa_acr_state(SLUG)
+    assert state["acr_loa_map"] and state["loa_flow_ready"]
+    rep = kc._get_realm_rep(SLUG, "test")
+    assert rep["loginTheme"] == "trust-agent"
 
     after = _counts(admin_conn)
     assert after["tenants"] == before["tenants"] + 1
@@ -283,7 +317,7 @@ def test_provision_rollback_leaves_zero_orphans(client, admin_conn):
             "initial_budget_usd": 10,
             # nonexistent model -> fails INSIDE the DB transaction, after the
             # realm was already created (D-ONB-08)
-            "model_plan": ["qwen2.5-72b-instruct", "no-such-model-xyz"],
+            "model_plan": ["glm-5.2", "no-such-model-xyz"],
             "slug": "rollback-corp",
         },
     )
@@ -296,6 +330,44 @@ def test_provision_rollback_leaves_zero_orphans(client, admin_conn):
 
     assert _counts(admin_conn) == before  # zero orphan rows
     assert not kc.realm_exists("rollback-corp")  # realm compensated
+
+
+# ---------------------------------------------------------------------------
+# AC-ONB-001 — explicit model_plan list (regression t_c4766c4d)
+# ---------------------------------------------------------------------------
+
+def test_provision_explicit_model_plan(client, admin_conn):
+    """A VALID explicit model_plan list approves exactly those models.
+
+    Regression (found by the re-validation against a real LiteLLM,
+    t_c4766c4d): the `found` comprehension consumed the SQLAlchemy Result
+    and the INSERT loop re-iterated it — a Result does NOT support
+    re-iteration, so a valid list resolved to ZERO approved models and the
+    whole provisioning rolled back ("model_plan resolved to zero models").
+    The suite only ever used 'standard' or lists with an unknown model
+    (which fail before the loop), so the path was never exercised.
+    """
+    resp = client.post(
+        "/api/admin/tenants",
+        headers=PROVIDER,
+        json={
+            "organization_name": "Explicit Plan Corp",
+            "admin_email": "admin@explicit-plan.test",
+            "initial_budget_usd": 10,
+            "model_plan": ["glm-5.2"],
+            "slug": "explicit-plan-corp",
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    tenant_id = resp.json()["tenant"]["id"]
+    with admin_conn.cursor() as cur:
+        cur.execute(
+            "SELECT m.model_name FROM model_access ma "
+            "JOIN catalog.model_catalog m ON m.id = ma.model_id "
+            "WHERE ma.tenant_id = %s AND ma.status = 'approved'",
+            (tenant_id,),
+        )
+        assert [r[0] for r in cur.fetchall()] == ["glm-5.2"]
 
 
 # ---------------------------------------------------------------------------
@@ -343,13 +415,19 @@ def test_provider_auth_matrix(client, admin_conn):
 
 
 def test_provider_token_unconfigured_is_fail_closed(client):
-    """AC-ONB-030: without TRUST_PROVIDER_TOKEN the routes refuse (503)."""
+    """AC-ONB-030 (spec 004, actualizado por spec 025 D-PS-06): sin
+    TRUST_PROVIDER_TOKEN el camino break-glass se niega (503). El login del
+    operador (pst1…) es el camino primario y no depende del env."""
     from app.config import get_settings
 
     get_settings.cache_clear()
     saved = os.environ.pop("TRUST_PROVIDER_TOKEN")
     try:
-        resp = client.get("/api/admin/tenants/whatever")
+        # Intento break-glass (bearer no-pst1) sin el env configurado → 503.
+        resp = client.get(
+            "/api/admin/tenants/whatever",
+            headers={"Authorization": "Bearer some-break-glass-token"},
+        )
         assert resp.status_code == 503
         assert "TRUST_PROVIDER_TOKEN" in resp.json()["error"]["message"]
     finally:

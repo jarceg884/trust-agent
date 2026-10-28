@@ -22,14 +22,20 @@ type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
 type ButtonSize = "sm" | "md";
 
 const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
+  // Pulido v2 (t_3cf085b9): el primario gana profundidad (sombra sutil +
+  // inset superior) para transmitir confianza; el disabled es gris neutro —
+  // NUNCA rojo translúcido (a 40% de opacidad se leía como salmón roto).
   primary:
-    "bg-accent text-white hover:bg-accent-hover border border-transparent",
+    "bg-accent text-white hover:bg-accent-hover border border-transparent " +
+    "shadow-[inset_0_1px_0_rgba(255,255,255,0.10),0_1px_2px_rgba(16,24,40,0.12)] " +
+    "hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.10),0_2px_8px_rgba(79,70,229,0.30)] " +
+    "disabled:bg-surface-alt disabled:text-faint disabled:shadow-none",
   secondary:
-    "bg-surface text-foreground hover:bg-surface-alt border border-border-subtle",
+    "bg-surface text-foreground hover:bg-surface-alt border border-border-subtle hover:border-foreground/20 disabled:opacity-50",
   ghost:
-    "bg-transparent text-muted hover:text-foreground hover:bg-surface-alt border border-transparent",
+    "bg-transparent text-muted hover:text-foreground hover:bg-surface-alt border border-transparent disabled:opacity-50",
   danger:
-    "bg-surface text-danger hover:bg-danger-soft border border-danger/30",
+    "bg-surface text-danger hover:bg-danger-soft border border-danger/30 disabled:opacity-50",
 };
 
 const BUTTON_SIZES: Record<ButtonSize, string> = {
@@ -53,7 +59,7 @@ export function Button({
     <button
       {...props}
       disabled={props.disabled || loading}
-      className={`inline-flex items-center justify-center rounded-lg font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${BUTTON_VARIANTS[variant]} ${BUTTON_SIZES[size]} ${className}`}
+      className={`inline-flex items-center justify-center rounded-lg font-medium transition-all duration-150 ease-out active:scale-[0.98] disabled:cursor-not-allowed disabled:active:scale-100 ${BUTTON_VARIANTS[variant]} ${BUTTON_SIZES[size]} ${className}`}
     >
       {loading ? (
         <span
@@ -140,7 +146,7 @@ export function Badge({
 }) {
   return (
     <span
-      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium leading-4 ${BADGE_TONES[tone]} ${className}`}
+      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium leading-4 ta-pop ${BADGE_TONES[tone]} ${className}`}
     >
       {children}
     </span>
@@ -181,8 +187,12 @@ export function Field({
   );
 }
 
+// Pulido v2 (t_3cf085b9): focus NEUTRO estilo Stripe/Linear — el borde
+// oscurece y un ring suave del mismo tono acompaña. El acento rojo en un
+// input se reservaba para error; un focus rojo en campo vacío parecía un
+// error permanente (hallazgo #1 de la crítica visual).
 const INPUT_CLASS =
-  "w-full rounded-lg border border-border-subtle bg-surface px-3 py-2 text-sm text-foreground placeholder:text-faint focus:border-accent focus:outline-none disabled:cursor-not-allowed disabled:bg-surface-alt disabled:text-muted";
+  "w-full rounded-lg border border-border-subtle bg-surface px-3 py-2 text-sm text-foreground transition-all duration-150 placeholder:text-faint hover:border-foreground/25 focus:border-foreground/40 focus:ring-[3px] focus:ring-foreground/[0.08] focus:outline-none disabled:cursor-not-allowed disabled:bg-surface-alt disabled:text-muted";
 
 export function Input(props: React.InputHTMLAttributes<HTMLInputElement>) {
   return <input {...props} className={`${INPUT_CLASS} ${props.className ?? ""}`} />;
@@ -393,7 +403,7 @@ export function Dialog({
   if (!open) return null;
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/35 p-4"
+      className="ta-dialog-backdrop fixed inset-0 z-50 flex items-center justify-center bg-foreground/35 p-4"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
@@ -404,7 +414,7 @@ export function Dialog({
         aria-modal="true"
         aria-labelledby={titleId}
         tabIndex={-1}
-        className={`w-full ${width} rounded-xl border border-border-subtle bg-surface shadow-xl focus:outline-none`}
+        className={`ta-dialog-panel w-full ${width} rounded-xl border border-border-subtle bg-surface shadow-xl focus:outline-none`}
       >
         <header className="flex items-start justify-between gap-4 border-b border-border-subtle px-5 py-4">
           <div>
@@ -456,6 +466,20 @@ export function ConfirmDialog({
   confirmLabel?: string;
   danger?: boolean;
 }) {
+  // Atajo de teclado (estándar pro): Enter confirma salvo cuando el foco está
+  // en un botón (el Enter nativo de ese botón manda — p. ej. Cancel).
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Enter" || loading) return;
+      const el = document.activeElement;
+      if (el instanceof HTMLButtonElement) return;
+      e.preventDefault();
+      onConfirm();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open, loading, onConfirm]);
   return (
     <Dialog
       open={open}
@@ -485,11 +509,21 @@ export function ConfirmDialog({
 
 // --- Copy + one-time secret -----------------------------------------------------------
 
-export function CopyButton({ value, label }: { value: string; label?: string }) {
+export function CopyButton({
+  value,
+  label,
+  variant = "secondary",
+}: {
+  value: string;
+  label?: string;
+  /** Pulido v2 r3: en Hermes Download "Copy link" es la acción PRIMARIA
+   *  de la página (crítica visual: jerarquía de acciones). */
+  variant?: "primary" | "secondary" | "ghost";
+}) {
   const [copied, setCopied] = useState(false);
   return (
     <Button
-      variant="secondary"
+      variant={variant}
       size="sm"
       onClick={async () => {
         try {
@@ -548,7 +582,7 @@ export function Progress({ pct, tone = "accent" }: { pct: number; tone?: "accent
       aria-valuemax={100}
       className="h-1.5 w-full overflow-hidden rounded-full bg-surface-alt"
     >
-      <div className={`h-full rounded-full transition-[width] ${color}`} style={{ width: `${pct}%` }} />
+      <div className={`h-full rounded-full transition-[width] duration-500 ease-out ${color}`} style={{ width: `${pct}%` }} />
     </div>
   );
 }
@@ -655,7 +689,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
           <div
             key={t.id}
             role="status"
-            className={`pointer-events-auto flex items-start gap-2.5 rounded-lg border px-4 py-3 text-sm shadow-lg ${
+            className={`ta-toast-in pointer-events-auto flex items-start gap-2.5 rounded-lg border px-4 py-3 text-sm shadow-lg ${
               t.tone === "success"
                 ? "border-success/25 bg-surface text-foreground"
                 : "border-danger/25 bg-surface text-foreground"

@@ -1,0 +1,28 @@
+must sgent demo-org Connected + Invite user, 4 Download desktop app a ‘A Alex Morgan ~
+GOVERNANCE
+88 Overview Organization
+
+Identity, budget baseline and organization-level policies.
+‘Organization
+
+Departments Organization Identity
+Resolved from your verified session (never from client input)
+® Users & Roles
+
+© Budgets Organization code Tenant ID
+demo-org 8142bc02-0c21-4b5b-b409-a9ed492ea7d0
+@ Model Access Your roles session
+‘org_admin MFA verified - via session
+Shared Agents
+© Devices
+& Hermes Download Organization policies
+
+Baseline policies. Department and user policies can only tighten them (deny-overrides).
+
+Credentials
+
+Key VALUE VERSION uppaTeD
+B Audit Log
+
+approved_models_only ‘true ul Oct 26, 2026, 10:58 AM Remove
+© Branding

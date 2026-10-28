@@ -19,7 +19,7 @@ from sqlalchemy.engine import Connection
 
 from ..auth.rbac import dept_scope, require_permission, require_role
 from ..auth.service import Principal, get_tx, require_mfa
-from ..errors import validation_failed
+from ..errors import optional_uuid, validation_failed
 from . import service
 
 router = APIRouter(
@@ -39,13 +39,16 @@ def _filters(
     until: Optional[datetime] = Query(None),
     q: Optional[str] = Query(None),
 ) -> dict:
+    # t_378503a1: UUID filters are format-checked (422, not a SQL 500).
+    # target_id stays free-form: audit targets are not always UUIDs
+    # (e.g. budget level names like "org"/"dept").
     return {
-        "actor_id": actor_id,
+        "actor_id": optional_uuid(actor_id, "actor_id"),
         "action": action,
         "target_type": target_type,
         "target_id": target_id,
-        "device_id": device_id,
-        "department_id": department_id,
+        "device_id": optional_uuid(device_id, "device_id"),
+        "department_id": optional_uuid(department_id, "department_id"),
         "since": since,
         "until": until,
         "q": q,
