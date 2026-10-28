@@ -1,0 +1,82 @@
+[
+  {
+    "name": "AC-036-002: 9 categorías visibles",
+    "pass": true,
+    "detail": "h2=[\"Apply policies to\",\"Security & session\",\"Internet & network\",\"Agent & automation\",\"Terminal & execution\",\"Extensions & memory\",\"Data & privacy\",\"AI models\",\"Apps & messaging\",\"Users & access\",\"Provider protections\"]"
+  },
+  {
+    "name": "AC-036-002: sección Provider protections",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "name": "AC-036-002: 0 keys crudas en el DOM legible",
+    "pass": true,
+    "detail": "leaked=[]"
+  },
+  {
+    "name": "AC-036-002: org_admin VE el conmutador Technical view",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "name": "AC-036-002: Vista técnica = tabla maestra spec 033",
+    "pass": true,
+    "detail": "th=[\"Key\",\"Type\",\"Provider default\",\"Organization\",\"Value\",\"Origin\",\"\"]"
+  },
+  {
+    "name": "AC-036-005: 'Must sign in with MFA' + 'Inherited from organization'",
+    "pass": true,
+    "detail": "\"Multi-factor authentication (MFA)\\n\\nRequires a second factor (TOTP code) in addition to the password at sign-in. Defined at organization level: applies to every user.\\n\\nOrganization-wide\\n\\nCurrent state:\\nMust sign in with MFA\\n\\nInherited from organization\\nRequire MFA for everyone\\nReset to inherited\""
+  },
+  {
+    "name": "AC-036-005: '✗ Web search' (sub-toggle por ítem) + badge 'Set for this user'",
+    "pass": true,
+    "detail": "\"Agent tools\\n\\nWhich base tools the agent may use. Unchecking \\\"Web search\\\" means: this user can never search the web.\\n\\nCurrent state:\\nAvailable tools: View governance status, Read files, Write files\\n\\nSet for this user\\n✗\\nWeb search\\n✓\\nRead files\\n✓\\nWrite files\\n✓\\nView governance status\\n+ Add item\\nReset to\""
+  },
+  {
+    "name": "AC-036-004: 422 real inline (REQ-POL-007) + explicación en palabras",
+    "pass": true,
+    "detail": "\"User policy would relax a superior policy for 'max_daily_sessions' (REQ-POL-007).\\n\\nA lower level can only tighten (restrict) what a higher level already set — it cannot relax it. The control went back to the current value.\""
+  },
+  {
+    "name": "AC-036-004: el control vuelve al valor vigente (5)",
+    "pass": true,
+    "detail": "input=5"
+  },
+  {
+    "name": "AC-036-003: require_mfa org_only → badge 'Organization-wide' + nota de nivel org",
+    "pass": true,
+    "detail": "{\"orgWide\":true,\"note\":true}"
+  },
+  {
+    "name": "AC-036-003: 3 invariables con candado, badge y SIN control",
+    "pass": true,
+    "detail": "[{\"name\":\"Approved models only\",\"badge\":true,\"noSwitch\":true,\"noSelect\":true,\"noInput\":true,\"fixed\":true},{\"name\":\"Explicit grants guaranteed\",\"badge\":true,\"noSwitch\":true,\"noSelect\":true,\"noInput\":true,\"fixed\":true},{\"name\":\"Least-privilege credentials\",\"badge\":true,\"noSwitch\":true,\"noSelect\":true,\"noInput\":true,\"fixed\":true}]"
+  },
+  {
+    "name": "AC-036-002: dept_admin NO ve el conmutador Technical view",
+    "pass": true,
+    "detail": "count=0"
+  },
+  {
+    "name": "AC-036-002: dept_admin ve el panel legible por defecto",
+    "pass": true,
+    "detail": "[\"Apply policies to\",\"Security & session\",\"Internet & network\",\"Agent & automation\",\"Terminal & execution\",\"Extensions & memory\"]"
+  },
+  {
+    "name": "AC-036-002: buscador 'mfa' filtra a la card de MFA",
+    "pass": true,
+    "detail": "{\"cards\":[\"Multi-factor authentication (MFA)\"],\"sections\":[\"Apply policies to\",\"Security & session\"]}"
+  },
+  {
+    "name": "AC-036-002: buscador encuentra por texto en español ('multifactor')",
+    "pass": true,
+    "detail": "[\"Multi-factor authentication (MFA)\"]"
+  },
+  {
+    "name": "AC-036-008: Tab recorre controles reales (select/input/button, sin trampas de foco)",
+    "pass": true,
+    "detail": "[\"input#policy-search\",\"button#\",\"input#\"]"
+  }
+]

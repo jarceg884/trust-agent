@@ -23,7 +23,7 @@ export default async function Page() {
     <>
       <PageHeader
         title="Policies"
-        description="Every policy key across organization, departments and users — one place. Lower levels can only tighten (deny-overrides)."
+        description="Every policy as a plain-language card you can apply to the organization, a department or a user. Lower levels can only tighten (deny-overrides)."
       />
       <PoliciesPage me={me} />
     </>

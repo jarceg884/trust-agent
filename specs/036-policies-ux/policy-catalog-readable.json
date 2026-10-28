@@ -1,0 +1,903 @@
+{
+  "$schema_version": "1.0.0",
+  "$nota": "Catálogo legible de policies (spec 036, visión Miller). Contrato canónico: cada key de catalog.policy_keys (47) mapea a nombre humano, descripción es/en, control legible e icono lucide-react. NADA de keys crudas al usuario final. La UI JAMÁS hardcodea este archivo: lo consume del bloque `presentation` de GET /api/policies/matrix (D-36-01). La verdad de validación/combinación sigue en el control plane (422/deny-overrides).",
+  "categories": [
+    { "id": "security", "icon": "ShieldCheck", "name": { "es": "Seguridad y sesión", "en": "Security & session" } },
+    { "id": "web", "icon": "Globe", "name": { "es": "Internet y red", "en": "Internet & network" } },
+    { "id": "agent", "icon": "Bot", "name": { "es": "Agente y automatización", "en": "Agent & automation" } },
+    { "id": "code", "icon": "SquareTerminal", "name": { "es": "Terminal y ejecución", "en": "Terminal & execution" } },
+    { "id": "extensions", "icon": "Puzzle", "name": { "es": "Extensiones y memoria", "en": "Extensions & memory" } },
+    { "id": "data", "icon": "Database", "name": { "es": "Datos y privacidad", "en": "Data & privacy" } },
+    { "id": "models", "icon": "Cpu", "name": { "es": "Modelos de IA", "en": "AI models" } },
+    { "id": "integrations", "icon": "Plug", "name": { "es": "Aplicaciones y mensajería", "en": "Apps & messaging" } },
+    { "id": "access", "icon": "Users", "name": { "es": "Usuarios y acceso", "en": "Users & access" } }
+  ],
+  "keys": {
+    "require_mfa": {
+      "category": "security",
+      "icon": "ShieldCheck",
+      "org_only": true,
+      "name": { "es": "Autenticación multifactor (MFA)", "en": "Multi-factor authentication (MFA)" },
+      "description": {
+        "es": "Exige un segundo factor (código TOTP) además de la contraseña al iniciar sesión. Se define a nivel organización: aplica a todos los usuarios.",
+        "en": "Requires a second factor (TOTP code) in addition to the password at sign-in. Defined at organization level: applies to every user."
+      },
+      "control": {
+        "kind": "toggle-require",
+        "on_label": { "es": "Exigir MFA a todos", "en": "Require MFA for everyone" },
+        "off_label": { "es": "MFA opcional", "en": "MFA optional" }
+      },
+      "statement": {
+        "on": { "es": "Debe iniciar sesión con MFA", "en": "Must sign in with MFA" },
+        "off": { "es": "Puede iniciar sesión solo con contraseña", "en": "Can sign in with password only" }
+      }
+    },
+    "session_timeout_minutes": {
+      "category": "security",
+      "icon": "Timer",
+      "name": { "es": "Expiración de sesión", "en": "Session timeout" },
+      "description": {
+        "es": "Minutos de inactividad antes de que la sesión expire y haya que volver a iniciar sesión.",
+        "en": "Minutes of inactivity before the session expires and sign-in is required again."
+      },
+      "control": { "kind": "number", "unit": { "es": "minutos", "en": "minutes" }, "min": 1 },
+      "statement_template": {
+        "es": "La sesión expira tras {value} de inactividad",
+        "en": "Session expires after {value} of inactivity"
+      }
+    },
+    "offline_grace_minutes": {
+      "category": "security",
+      "icon": "WifiOff",
+      "name": { "es": "Tolerancia sin conexión", "en": "Offline grace period" },
+      "description": {
+        "es": "Cuánto tiempo puede seguir operando la app del usuario sin contactar el servidor de gobernanza. Al vencer, pasa a modo restringido.",
+        "en": "How long the user's app can keep working without contacting the governance server. Once it lapses, it drops to restricted mode."
+      },
+      "control": { "kind": "number", "unit": { "es": "minutos", "en": "minutes" }, "min": 0 },
+      "statement_template": {
+        "es": "Puede trabajar sin conexión hasta {value}",
+        "en": "Can work offline for up to {value}"
+      }
+    },
+    "attestation_overdue_hours": {
+      "category": "security",
+      "icon": "ClipboardCheck",
+      "name": { "es": "Verificación periódica del dispositivo", "en": "Device check-in interval" },
+      "description": {
+        "es": "Cada cuántas horas debe el dispositivo enrolado reportar su estado de salud. Si no reporta en ese plazo, la app pasa a modo restringido.",
+        "en": "How often an enrolled device must report its health status. If it misses the window, the app drops to restricted mode."
+      },
+      "control": { "kind": "number", "unit": { "es": "horas", "en": "hours" }, "min": 1 },
+      "statement_template": {
+        "es": "El dispositivo debe reportarse cada {value}",
+        "en": "Device must check in every {value}"
+      }
+    },
+    "unbind_mode": {
+      "category": "security",
+      "icon": "Unlink",
+      "name": { "es": "Al desligar o revocar un dispositivo", "en": "When a device is unbound or revoked" },
+      "description": {
+        "es": "Qué puede seguir haciendo la app cuando el dispositivo se desliga de la organización o es revocado.",
+        "en": "What the app can still do once the device is unlinked from the organization or revoked."
+      },
+      "control": {
+        "kind": "select",
+        "options": [
+          { "value": "readonly", "label": { "es": "Solo conversar (sin ejecutar acciones)", "en": "Chat only (no actions)" } },
+          { "value": "lock", "label": { "es": "Bloqueo total", "en": "Full lock-out" } }
+        ]
+      },
+      "statement_template": {
+        "es": "Si se desliga el dispositivo: {value}",
+        "en": "If the device is unbound: {value}"
+      }
+    },
+    "allow_self_updates": {
+      "category": "security",
+      "icon": "RefreshCw",
+      "name": { "es": "Auto-actualización de la app", "en": "App self-updates" },
+      "description": {
+        "es": "Permite que la app del usuario se descargue e instale actualizaciones por sí misma. Si se bloquea, las actualizaciones las controla TI.",
+        "en": "Lets the user's app download and install its own updates. When blocked, IT controls updates."
+      },
+      "control": {
+        "kind": "toggle-allow",
+        "on_label": { "es": "Permitir auto-actualización", "en": "Allow self-updates" },
+        "off_label": { "es": "Bloquear auto-actualización", "en": "Block self-updates" }
+      },
+      "statement": {
+        "on": { "es": "La app puede actualizarse sola", "en": "App can update itself" },
+        "off": { "es": "La app no puede actualizarse sola", "en": "App cannot update itself" }
+      }
+    },
+    "require_checkpoints": {
+      "category": "security",
+      "icon": "History",
+      "name": { "es": "Puntos de restauración de sesión", "en": "Session checkpoints" },
+      "description": {
+        "es": "Guarda puntos de restauración durante la sesión para poder auditar y revertir lo que hizo el agente.",
+        "en": "Saves restore points during the session so agent actions can be audited and rolled back."
+      },
+      "control": {
+        "kind": "toggle-require",
+        "on_label": { "es": "Exigir puntos de restauración", "en": "Require checkpoints" },
+        "off_label": { "es": "No exigirlos", "en": "Not required" }
+      },
+      "statement": {
+        "on": { "es": "Sus sesiones guardan puntos de restauración", "en": "Sessions keep restore points" },
+        "off": { "es": "Sus sesiones no guardan puntos de restauración", "en": "Sessions keep no restore points" }
+      }
+    },
+    "web_domain_policy": {
+      "category": "web",
+      "icon": "Globe",
+      "name": { "es": "Navegación web del agente", "en": "Agent web browsing" },
+      "description": {
+        "es": "Qué sitios puede visitar el agente cuando busca o lee páginas web. Ejemplo: «jamás podrá buscar en internet» se logra bloqueando la herramienta de búsqueda; aquí se afina a qué dominios puede entrar.",
+        "en": "Which sites the agent may visit when searching or reading web pages."
+      },
+      "control": {
+        "kind": "domains",
+        "mode_options": [
+          { "value": "open", "label": { "es": "Abierta — cualquier sitio", "en": "Open — any site" } },
+          { "value": "allowlist", "label": { "es": "Solo estos sitios…", "en": "Only these sites…" } },
+          { "value": "blocklist", "label": { "es": "Todos los sitios excepto…", "en": "All sites except…" } }
+        ],
+        "domains_label": { "es": "Dominios", "en": "Domains" },
+        "domains_hint": { "es": "p. ej. wikipedia.org, docs.miempresa.com", "en": "e.g. wikipedia.org, docs.mycompany.com" }
+      },
+      "statement_template": {
+        "es": "Navegación web: {value}",
+        "en": "Web browsing: {value}"
+      }
+    },
+    "allow_private_network_access": {
+      "category": "web",
+      "icon": "Network",
+      "name": { "es": "Acceso a la red interna", "en": "Private network access" },
+      "description": {
+        "es": "Permite que el agente reachée direcciones de red interna (servidores, IPs privadas del cliente).",
+        "en": "Lets the agent reach internal network addresses (servers, private IPs)."
+      },
+      "control": {
+        "kind": "toggle-allow",
+        "on_label": { "es": "Permitir red interna", "en": "Allow private network" },
+        "off_label": { "es": "Bloquear red interna", "en": "Block private network" }
+      },
+      "statement": {
+        "on": { "es": "Puede acceder a la red interna", "en": "Can reach the private network" },
+        "off": { "es": "No puede acceder a la red interna", "en": "Cannot reach the private network" }
+      }
+    },
+    "allowed_tools": {
+      "category": "agent",
+      "icon": "Wrench",
+      "name": { "es": "Herramientas del agente", "en": "Agent tools" },
+      "description": {
+        "es": "Qué herramientas base puede usar el agente. Desmarcar «Búsqueda en internet» equivale a: este usuario jamás podrá buscar en internet.",
+        "en": "Which base tools the agent may use. Unchecking \"Web search\" means: this user can never search the web."
+      },
+      "control": {
+        "kind": "multiselect-allow",
+        "item_source": "free",
+        "allow_custom_items": true,
+        "known_items": [
+          { "value": "web_search", "label": { "es": "Búsqueda en internet", "en": "Web search" } },
+          { "value": "read_file", "label": { "es": "Leer archivos", "en": "Read files" } },
+          { "value": "write_file", "label": { "es": "Escribir archivos", "en": "Write files" } },
+          { "value": "governance_status", "label": { "es": "Consultar su estado de gobernanza", "en": "View governance status" } }
+        ]
+      },
+      "statement_template": {
+        "es": "Herramientas disponibles: {value}",
+        "en": "Available tools: {value}"
+      },
+      "empty_label": { "es": "ninguna", "en": "none" }
+    },
+    "allowed_skills": {
+      "category": "agent",
+      "icon": "Sparkles",
+      "name": { "es": "Skills disponibles", "en": "Available skills" },
+      "description": {
+        "es": "Qué paquetes de habilidades (skills) puede cargar el agente. «Todas» permite el catálogo completo.",
+        "en": "Which skill packs the agent may load. \"All\" allows the full catalog."
+      },
+      "control": {
+        "kind": "multiselect-allow",
+        "item_source": "free",
+        "allow_custom_items": true,
+        "wildcard": { "value": "*", "label": { "es": "Todas las skills", "en": "All skills" } },
+        "known_items": []
+      },
+      "statement_template": {
+        "es": "Skills disponibles: {value}",
+        "en": "Available skills: {value}"
+      },
+      "empty_label": { "es": "ninguna", "en": "none" }
+    },
+    "approval_mode": {
+      "category": "agent",
+      "icon": "UserCheck",
+      "name": { "es": "Aprobación de acciones", "en": "Action approval" },
+      "description": {
+        "es": "Cuánta supervisión humana exige el agente antes de ejecutar acciones (comandos, escrituras).",
+        "en": "How much human oversight the agent requires before running actions (commands, writes)."
+      },
+      "control": {
+        "kind": "select",
+        "options": [
+          { "value": "off", "label": { "es": "Sin aprobación — el agente actúa directamente", "en": "No approval — agent acts directly" } },
+          { "value": "smart", "label": { "es": "Aprobación inteligente — solo acciones sensibles", "en": "Smart approval — sensitive actions only" } },
+          { "value": "manual", "label": { "es": "Aprobar cada acción manualmente", "en": "Approve every action manually" } }
+        ]
+      },
+      "statement_template": {
+        "es": "Aprobación de acciones: {value}",
+        "en": "Action approval: {value}"
+      }
+    },
+    "max_delegation_depth": {
+      "category": "agent",
+      "icon": "GitBranch",
+      "name": { "es": "Sub-agentes (delegación)", "en": "Sub-agents (delegation)" },
+      "description": {
+        "es": "Cuántos niveles de sub-agentes puede lanzar el agente. 0 = no puede delegar en absoluto.",
+        "en": "How many levels of sub-agents the agent may spawn. 0 = no delegation at all."
+      },
+      "control": { "kind": "number", "unit": { "es": "niveles", "en": "levels" }, "min": 0 },
+      "statement_template": {
+        "es": "Puede delegar hasta {value}",
+        "en": "Can delegate up to {value}"
+      }
+    },
+    "max_daily_sessions": {
+      "category": "agent",
+      "icon": "Gauge",
+      "name": { "es": "Sesiones diarias máximas", "en": "Max daily sessions" },
+      "description": {
+        "es": "Cuántas sesiones puede abrir el usuario por día.",
+        "en": "How many sessions the user may open per day."
+      },
+      "control": { "kind": "number", "unit": { "es": "sesiones por día", "en": "sessions per day" }, "min": 0 },
+      "statement_template": {
+        "es": "Hasta {value}",
+        "en": "Up to {value}"
+      }
+    },
+    "allow_goal_mode": {
+      "category": "agent",
+      "icon": "Target",
+      "name": { "es": "Modo objetivo autónomo", "en": "Autonomous goal mode" },
+      "description": {
+        "es": "Permite que el agente persiga objetivos de varios pasos de forma autónoma, sin aprobar paso a paso.",
+        "en": "Lets the agent pursue multi-step goals autonomously, without step-by-step approval."
+      },
+      "control": {
+        "kind": "toggle-allow",
+        "on_label": { "es": "Permitir modo objetivo", "en": "Allow goal mode" },
+        "off_label": { "es": "Bloquear modo objetivo", "en": "Block goal mode" }
+      },
+      "statement": {
+        "on": { "es": "Puede usar el modo objetivo autónomo", "en": "Can use autonomous goal mode" },
+        "off": { "es": "No puede usar el modo objetivo autónomo", "en": "Cannot use autonomous goal mode" }
+      }
+    },
+    "allow_scheduled_tasks": {
+      "category": "agent",
+      "icon": "CalendarClock",
+      "name": { "es": "Tareas programadas", "en": "Scheduled tasks" },
+      "description": {
+        "es": "Permite programar tareas para que el agente las ejecute más tarde, sin el usuario presente.",
+        "en": "Lets the user schedule tasks for the agent to run later, unattended."
+      },
+      "control": {
+        "kind": "toggle-allow",
+        "on_label": { "es": "Permitir tareas programadas", "en": "Allow scheduled tasks" },
+        "off_label": { "es": "Bloquear tareas programadas", "en": "Block scheduled tasks" }
+      },
+      "statement": {
+        "on": { "es": "Puede programar tareas del agente", "en": "Can schedule agent tasks" },
+        "off": { "es": "No puede programar tareas del agente", "en": "Cannot schedule agent tasks" }
+      }
+    },
+    "allow_recurring_prompts": {
+      "category": "agent",
+      "icon": "Repeat",
+      "name": { "es": "Prompts recurrentes", "en": "Recurring prompts" },
+      "description": {
+        "es": "Permite que el agente ejecute instrucciones de forma recurrente (p. ej. un resumen diario).",
+        "en": "Lets the agent run instructions on a recurring basis (e.g. a daily digest)."
+      },
+      "control": {
+        "kind": "toggle-allow",
+        "on_label": { "es": "Permitir prompts recurrentes", "en": "Allow recurring prompts" },
+        "off_label": { "es": "Bloquear prompts recurrentes", "en": "Block recurring prompts" }
+      },
+      "statement": {
+        "on": { "es": "Puede crear prompts recurrentes", "en": "Can create recurring prompts" },
+        "off": { "es": "No puede crear prompts recurrentes", "en": "Cannot create recurring prompts" }
+      }
+    },
+    "allow_voice_mode": {
+      "category": "agent",
+      "icon": "Mic",
+      "name": { "es": "Modo voz", "en": "Voice mode" },
+      "description": {
+        "es": "Permite hablar con el agente por voz y escuchar sus respuestas en audio.",
+        "en": "Lets the user talk to the agent by voice and hear spoken replies."
+      },
+      "control": {
+        "kind": "toggle-allow",
+        "on_label": { "es": "Permitir modo voz", "en": "Allow voice mode" },
+        "off_label": { "es": "Bloquear modo voz", "en": "Block voice mode" }
+      },
+      "statement": {
+        "on": { "es": "Puede usar el modo voz", "en": "Can use voice mode" },
+        "off": { "es": "No puede usar el modo voz", "en": "Cannot use voice mode" }
+      }
+    },
+    "allow_bot_mode": {
+      "category": "agent",
+      "icon": "MessageSquare",
+      "name": { "es": "Modo bot (responder por él)", "en": "Bot mode (answer on your behalf)" },
+      "description": {
+        "es": "Permite que el agente responda mensajes entrantes automáticamente como un bot, sin el usuario delante.",
+        "en": "Lets the agent auto-answer incoming messages like a bot, without the user present."
+      },
+      "control": {
+        "kind": "toggle-allow",
+        "on_label": { "es": "Permitir modo bot", "en": "Allow bot mode" },
+        "off_label": { "es": "Bloquear modo bot", "en": "Block bot mode" }
+      },
+      "statement": {
+        "on": { "es": "Su agente puede responder mensajes automáticamente", "en": "Agent can auto-answer messages" },
+        "off": { "es": "Su agente nunca responde mensajes automáticamente", "en": "Agent never auto-answers messages" }
+      }
+    },
+    "allowed_terminal_backends": {
+      "category": "code",
+      "icon": "SquareTerminal",
+      "name": { "es": "Dónde ejecuta comandos", "en": "Where commands run" },
+      "description": {
+        "es": "En qué entorno puede el agente ejecutar comandos de terminal. Vacío = no puede ejecutar ninguno.",
+        "en": "Which environment the agent may run terminal commands in. Empty = none."
+      },
+      "control": {
+        "kind": "multiselect-allow",
+        "item_source": "free",
+        "allow_custom_items": true,
+        "known_items": [
+          { "value": "docker", "label": { "es": "Contenedor Docker aislado", "en": "Isolated Docker container" } },
+          { "value": "local", "label": { "es": "Directo en el equipo", "en": "Directly on the machine" } },
+          { "value": "ssh", "label": { "es": "Equipo remoto (SSH)", "en": "Remote machine (SSH)" } }
+        ]
+      },
+      "statement_template": {
+        "es": "Ejecuta comandos en: {value}",
+        "en": "Runs commands in: {value}"
+      },
+      "empty_label": { "es": "ningún entorno (no puede ejecutar comandos)", "en": "no environment (cannot run commands)" }
+    },
+    "allowed_command_patterns": {
+      "category": "code",
+      "icon": "ListChecks",
+      "name": { "es": "Comandos permitidos", "en": "Allowed commands" },
+      "description": {
+        "es": "Patrones de comandos que el agente puede ejecutar (p. ej. «git *», «ls *»). Vacío = ningún comando permitido.",
+        "en": "Command patterns the agent may run (e.g. \"git *\", \"ls *\"). Empty = no commands allowed."
+      },
+      "control": {
+        "kind": "multiselect-allow",
+        "item_source": "free",
+        "allow_custom_items": true,
+        "items_hint": { "es": "patrones tipo glob, p. ej. git status", "en": "glob patterns, e.g. git status" },
+        "known_items": []
+      },
+      "statement_template": {
+        "es": "Comandos permitidos: {value}",
+        "en": "Allowed commands: {value}"
+      },
+      "empty_label": { "es": "ninguno", "en": "none" }
+    },
+    "denied_command_patterns": {
+      "category": "code",
+      "icon": "Ban",
+      "name": { "es": "Comandos bloqueados", "en": "Blocked commands" },
+      "description": {
+        "es": "Comandos que el agente jamás puede ejecutar, aunque estén permitidos arriba (p. ej. «rm -rf *»).",
+        "en": "Commands the agent may never run, even if allowed above (e.g. \"rm -rf *\")."
+      },
+      "control": {
+        "kind": "multiselect-deny",
+        "item_source": "free",
+        "allow_custom_items": true,
+        "items_hint": { "es": "patrones tipo glob, p. ej. rm -rf *", "en": "glob patterns, e.g. rm -rf *" },
+        "known_items": []
+      },
+      "statement_template": {
+        "es": "Comandos bloqueados: {value}",
+        "en": "Blocked commands: {value}"
+      },
+      "empty_label": { "es": "ninguno en particular", "en": "none specifically" }
+    },
+    "require_write_sandbox": {
+      "category": "code",
+      "icon": "Box",
+      "name": { "es": "Aislamiento de escrituras (sandbox)", "en": "Write sandbox" },
+      "description": {
+        "es": "Exige que toda escritura de archivos del agente ocurra dentro de un sandbox aislado, nunca directo al disco.",
+        "en": "Requires all agent file writes to happen inside an isolated sandbox, never directly to disk."
+      },
+      "control": {
+        "kind": "toggle-require",
+        "on_label": { "es": "Exigir sandbox", "en": "Require sandbox" },
+        "off_label": { "es": "No exigir sandbox", "en": "Sandbox not required" }
+      },
+      "statement": {
+        "on": { "es": "Sus escrituras van siempre a un sandbox aislado", "en": "Writes always go to an isolated sandbox" },
+        "off": { "es": "Puede escribir fuera del sandbox", "en": "May write outside the sandbox" }
+      }
+    },
+    "allow_shell_hooks": {
+      "category": "code",
+      "icon": "Webhook",
+      "name": { "es": "Hooks de shell", "en": "Shell hooks" },
+      "description": {
+        "es": "Permite configurar disparadores automáticos que ejecutan comandos ante eventos del agente.",
+        "en": "Lets the user set up automatic triggers that run commands on agent events."
+      },
+      "control": {
+        "kind": "toggle-allow",
+        "on_label": { "es": "Permitir hooks de shell", "en": "Allow shell hooks" },
+        "off_label": { "es": "Bloquear hooks de shell", "en": "Block shell hooks" }
+      },
+      "statement": {
+        "on": { "es": "Puede configurar hooks de shell", "en": "Can set up shell hooks" },
+        "off": { "es": "No puede configurar hooks de shell", "en": "Cannot set up shell hooks" }
+      }
+    },
+    "allow_gateway_hooks": {
+      "category": "code",
+      "icon": "Zap",
+      "name": { "es": "Hooks del gateway de IA", "en": "AI gateway hooks" },
+      "description": {
+        "es": "Permite interceptar el tráfico hacia los modelos de IA con hooks (filtros, redirecciones). Uso avanzado.",
+        "en": "Lets the user intercept AI-model traffic with hooks (filters, rerouting). Advanced use."
+      },
+      "control": {
+        "kind": "toggle-allow",
+        "on_label": { "es": "Permitir hooks del gateway", "en": "Allow gateway hooks" },
+        "off_label": { "es": "Bloquear hooks del gateway", "en": "Block gateway hooks" }
+      },
+      "statement": {
+        "on": { "es": "Puede configurar hooks del gateway", "en": "Can set up gateway hooks" },
+        "off": { "es": "No puede configurar hooks del gateway", "en": "Cannot set up gateway hooks" }
+      }
+    },
+    "allowed_plugins": {
+      "category": "extensions",
+      "icon": "Puzzle",
+      "name": { "es": "Plugins", "en": "Plugins" },
+      "description": {
+        "es": "Qué plugins puede cargar el agente. Vacío = ninguno.",
+        "en": "Which plugins the agent may load. Empty = none."
+      },
+      "control": {
+        "kind": "multiselect-allow",
+        "item_source": "free",
+        "allow_custom_items": true,
+        "known_items": []
+      },
+      "statement_template": {
+        "es": "Plugins permitidos: {value}",
+        "en": "Allowed plugins: {value}"
+      },
+      "empty_label": { "es": "ninguno", "en": "none" }
+    },
+    "allowed_mcp_servers": {
+      "category": "extensions",
+      "icon": "Server",
+      "name": { "es": "Servidores MCP", "en": "MCP servers" },
+      "description": {
+        "es": "A qué servidores de herramientas externas (Model Context Protocol) puede conectarse el agente. Vacío = ninguno.",
+        "en": "Which external tool servers (Model Context Protocol) the agent may connect to. Empty = none."
+      },
+      "control": {
+        "kind": "multiselect-allow",
+        "item_source": "free",
+        "allow_custom_items": true,
+        "known_items": []
+      },
+      "statement_template": {
+        "es": "Servidores MCP permitidos: {value}",
+        "en": "Allowed MCP servers: {value}"
+      },
+      "empty_label": { "es": "ninguno", "en": "none" }
+    },
+    "allowed_memory_providers": {
+      "category": "extensions",
+      "icon": "Brain",
+      "name": { "es": "Memoria del agente", "en": "Agent memory" },
+      "description": {
+        "es": "Dónde puede guardar y recuperar memoria el agente entre sesiones.",
+        "en": "Where the agent may store and recall memory across sessions."
+      },
+      "control": {
+        "kind": "multiselect-allow",
+        "item_source": "free",
+        "allow_custom_items": true,
+        "known_items": [
+          { "value": "builtin", "label": { "es": "Memoria integrada", "en": "Built-in memory" } }
+        ]
+      },
+      "statement_template": {
+        "es": "Memoria disponible: {value}",
+        "en": "Available memory: {value}"
+      },
+      "empty_label": { "es": "ninguna (sin memoria entre sesiones)", "en": "none (no memory across sessions)" }
+    },
+    "allow_custom_personality": {
+      "category": "extensions",
+      "icon": "Palette",
+      "name": { "es": "Personalidad personalizada", "en": "Custom personality" },
+      "description": {
+        "es": "Permite que el usuario ajuste el tono y la personalidad de su agente. Si se bloquea, todos usan la personalidad estándar.",
+        "en": "Lets the user tweak their agent's tone and personality. When blocked, everyone uses the standard personality."
+      },
+      "control": {
+        "kind": "toggle-allow",
+        "on_label": { "es": "Permitir personalidad propia", "en": "Allow custom personality" },
+        "off_label": { "es": "Personalidad estándar para todos", "en": "Standard personality for everyone" }
+      },
+      "statement": {
+        "on": { "es": "Puede personalizar la personalidad de su agente", "en": "Can customize their agent's personality" },
+        "off": { "es": "Usa la personalidad estándar de la organización", "en": "Uses the organization's standard personality" }
+      }
+    },
+    "allow_profile_distributions": {
+      "category": "extensions",
+      "icon": "Package",
+      "name": { "es": "Perfiles distribuidos", "en": "Profile distributions" },
+      "description": {
+        "es": "Permite instalar perfiles distribuidos (configuraciones y temas compartidos) en la app del usuario.",
+        "en": "Lets the user install distributed profiles (shared configurations and themes) in their app."
+      },
+      "control": {
+        "kind": "toggle-allow",
+        "on_label": { "es": "Permitir perfiles distribuidos", "en": "Allow profile distributions" },
+        "off_label": { "es": "Bloquear perfiles distribuidos", "en": "Block profile distributions" }
+      },
+      "statement": {
+        "on": { "es": "Puede instalar perfiles distribuidos", "en": "Can install distributed profiles" },
+        "off": { "es": "No puede instalar perfiles distribuidos", "en": "Cannot install distributed profiles" }
+      }
+    },
+    "session_retention_days": {
+      "category": "data",
+      "icon": "Archive",
+      "name": { "es": "Cuánto se guardan las sesiones", "en": "Session retention" },
+      "description": {
+        "es": "Días que se conservan las sesiones (transcripciones) del usuario antes de eliminarse. Menor = más privado.",
+        "en": "Days a user's sessions (transcripts) are kept before deletion. Lower = more private."
+      },
+      "control": { "kind": "number", "unit": { "es": "días", "en": "days" }, "min": 1 },
+      "statement_template": {
+        "es": "Sus sesiones se guardan {value}",
+        "en": "Sessions kept for {value}"
+      }
+    },
+    "artifact_sharing": {
+      "category": "data",
+      "icon": "Share2",
+      "name": { "es": "Compartir archivos generados", "en": "Sharing generated files" },
+      "description": {
+        "es": "Quién puede ver los archivos y resultados que genera el agente del usuario.",
+        "en": "Who can see the files and results the user's agent produces."
+      },
+      "control": {
+        "kind": "select",
+        "options": [
+          { "value": "private", "label": { "es": "Privados — solo el autor", "en": "Private — author only" } },
+          { "value": "shared", "label": { "es": "Compartidos con la organización", "en": "Shared with the organization" } }
+        ]
+      },
+      "statement_template": {
+        "es": "Sus archivos generados son {value}",
+        "en": "Generated files are {value}"
+      }
+    },
+    "allowed_secret_sources": {
+      "category": "data",
+      "icon": "Lock",
+      "name": { "es": "De dónde lee secretos", "en": "Secret sources" },
+      "description": {
+        "es": "De dónde puede leer el agente secretos para conectarse a servicios.",
+        "en": "Where the agent may read secrets from to connect to services."
+      },
+      "control": {
+        "kind": "multiselect-allow",
+        "item_source": "free",
+        "allow_custom_items": true,
+        "known_items": [
+          { "value": "env", "label": { "es": "Variables de entorno del equipo", "en": "Machine environment variables" } },
+          { "value": "vault", "label": { "es": "Vault de la organización", "en": "Organization vault" } }
+        ]
+      },
+      "statement_template": {
+        "es": "Lee secretos de: {value}",
+        "en": "Reads secrets from: {value}"
+      },
+      "empty_label": { "es": "ninguna fuente", "en": "no source" }
+    },
+    "allow_credential_vault": {
+      "category": "data",
+      "icon": "KeyRound",
+      "name": { "es": "Caja fuerte de credenciales", "en": "Credential vault" },
+      "description": {
+        "es": "Permite que el usuario guarde credenciales (claves de API, cuentas) cifradas en la caja fuerte de la organización.",
+        "en": "Lets the user store credentials (API keys, accounts) encrypted in the organization's vault."
+      },
+      "control": {
+        "kind": "toggle-allow",
+        "on_label": { "es": "Permitir usar la caja fuerte", "en": "Allow vault use" },
+        "off_label": { "es": "Bloquear la caja fuerte", "en": "Block vault use" }
+      },
+      "statement": {
+        "on": { "es": "Puede guardar credenciales en la caja fuerte", "en": "Can store credentials in the vault" },
+        "off": { "es": "No puede guardar credenciales en la caja fuerte", "en": "Cannot store credentials in the vault" }
+      }
+    },
+    "vault_allowed_credential_types": {
+      "category": "data",
+      "icon": "FileKey",
+      "name": { "es": "Tipos de credencial admitidos", "en": "Allowed credential types" },
+      "description": {
+        "es": "Qué tipos de credencial pueden guardarse en la caja fuerte.",
+        "en": "Which kinds of credentials may be stored in the vault."
+      },
+      "control": {
+        "kind": "multiselect-allow",
+        "item_source": "free",
+        "allow_custom_items": true,
+        "known_items": [
+          { "value": "api_key", "label": { "es": "Claves de API", "en": "API keys" } },
+          { "value": "oauth2", "label": { "es": "Cuentas (OAuth)", "en": "Accounts (OAuth)" } },
+          { "value": "password", "label": { "es": "Contraseñas", "en": "Passwords" } },
+          { "value": "token", "label": { "es": "Tokens de acceso", "en": "Access tokens" } }
+        ]
+      },
+      "statement_template": {
+        "es": "Puede guardar: {value}",
+        "en": "May store: {value}"
+      },
+      "empty_label": { "es": "ningún tipo", "en": "no type" }
+    },
+    "allow_payment_autofill": {
+      "category": "data",
+      "icon": "CreditCard",
+      "name": { "es": "Datos de pago", "en": "Payment details" },
+      "description": {
+        "es": "Permite que el agente use tarjetas o datos de pago guardados para completar compras.",
+        "en": "Lets the agent use stored cards or payment details to complete purchases."
+      },
+      "control": {
+        "kind": "toggle-allow",
+        "on_label": { "es": "Permitir usar datos de pago", "en": "Allow payment autofill" },
+        "off_label": { "es": "Bloquear datos de pago", "en": "Block payment autofill" }
+      },
+      "statement": {
+        "on": { "es": "Puede usar datos de pago guardados", "en": "Can use saved payment details" },
+        "off": { "es": "Jamás usa datos de pago", "en": "Never uses payment details" }
+      }
+    },
+    "allowed_env_passthrough": {
+      "category": "data",
+      "icon": "Variable",
+      "name": { "es": "Variables de entorno visibles", "en": "Visible environment variables" },
+      "description": {
+        "es": "Qué variables de entorno del equipo se pasan al agente. Vacío = ninguna.",
+        "en": "Which machine environment variables are passed to the agent. Empty = none."
+      },
+      "control": {
+        "kind": "multiselect-allow",
+        "item_source": "free",
+        "allow_custom_items": true,
+        "items_hint": { "es": "nombres de variables, p. ej. HTTP_PROXY", "en": "variable names, e.g. HTTP_PROXY" },
+        "known_items": []
+      },
+      "statement_template": {
+        "es": "Variables visibles: {value}",
+        "en": "Visible variables: {value}"
+      },
+      "empty_label": { "es": "ninguna", "en": "none" }
+    },
+    "scoped_credentials": {
+      "category": "data",
+      "icon": "Crosshair",
+      "invariable": true,
+      "name": { "es": "Credenciales con alcance mínimo", "en": "Least-privilege credentials" },
+      "description": {
+        "es": "Protección fija del proveedor: toda credencial guardada debe declarar el alcance mínimo de permisos que necesita. No se puede desactivar.",
+        "en": "Provider-enforced protection: every stored credential must declare the minimum scope it needs. Cannot be turned off."
+      },
+      "control": { "kind": "locked" },
+      "statement": {
+        "on": { "es": "Sus credenciales operan siempre con alcance mínimo", "en": "Credentials always operate with least privilege" }
+      }
+    },
+    "allowed_models": {
+      "category": "models",
+      "icon": "Cpu",
+      "name": { "es": "Modelos de IA disponibles", "en": "Available AI models" },
+      "description": {
+        "es": "Limita a qué modelos de IA puede acceder. Vacío = todos los modelos aprobados por la organización.",
+        "en": "Restricts which AI models may be used. Empty = all organization-approved models."
+      },
+      "control": {
+        "kind": "multiselect-allow",
+        "item_source": "models",
+        "allow_custom_items": false,
+        "known_items": []
+      },
+      "statement_template": {
+        "es": "Modelos disponibles: {value}",
+        "en": "Available models: {value}"
+      },
+      "empty_label": { "es": "todos los aprobados", "en": "all approved models" }
+    },
+    "allowed_providers": {
+      "category": "models",
+      "icon": "Cloud",
+      "name": { "es": "Proveedores de modelos", "en": "Model providers" },
+      "description": {
+        "es": "Por dónde salen las peticiones a los modelos: el gateway central de la organización o claves propias (BYOK).",
+        "en": "Where model requests go: the organization's central gateway or the user's own keys (BYOK)."
+      },
+      "control": {
+        "kind": "multiselect-allow",
+        "item_source": "free",
+        "allow_custom_items": true,
+        "known_items": [
+          { "value": "litellm_gateway", "label": { "es": "Gateway central de la organización", "en": "Organization's central gateway" } }
+        ]
+      },
+      "statement_template": {
+        "es": "Proveedores: {value}",
+        "en": "Providers: {value}"
+      },
+      "empty_label": { "es": "ninguno", "en": "none" }
+    },
+    "approved_models_only": {
+      "category": "models",
+      "icon": "BadgeCheck",
+      "invariable": true,
+      "name": { "es": "Solo modelos aprobados", "en": "Approved models only" },
+      "description": {
+        "es": "Protección fija del proveedor: únicamente se puede acceder a modelos del catálogo aprobado por la organización. No se puede desactivar.",
+        "en": "Provider-enforced protection: only models from the organization's approved catalog may be used. Cannot be turned off."
+      },
+      "control": { "kind": "locked" },
+      "statement": {
+        "on": { "es": "Solo puede usar modelos aprobados por la organización", "en": "Can only use organization-approved models" }
+      }
+    },
+    "allowed_connectors": {
+      "category": "integrations",
+      "icon": "Plug",
+      "name": { "es": "Aplicaciones conectadas", "en": "Connected apps" },
+      "description": {
+        "es": "A qué aplicaciones puede conectarse el agente (VMware, correo, mensajerías…). Vacío = ninguna.",
+        "en": "Which apps the agent may connect to (VMware, email, messaging…). Empty = none."
+      },
+      "control": {
+        "kind": "multiselect-allow",
+        "item_source": "connector_catalog",
+        "allow_custom_items": false,
+        "known_items": []
+      },
+      "statement_template": {
+        "es": "Aplicaciones permitidas: {value}",
+        "en": "Allowed apps: {value}"
+      },
+      "empty_label": { "es": "ninguna", "en": "none" }
+    },
+    "allowed_connections": {
+      "category": "integrations",
+      "icon": "Cable",
+      "name": { "es": "Conexiones personalizadas", "en": "Custom connections" },
+      "description": {
+        "es": "Qué conexiones personalizadas (registradas por el usuario) puede usar el agente.",
+        "en": "Which user-registered custom connections the agent may use."
+      },
+      "control": {
+        "kind": "multiselect-allow",
+        "item_source": "connections",
+        "allow_custom_items": false,
+        "known_items": []
+      },
+      "statement_template": {
+        "es": "Conexiones personalizadas permitidas: {value}",
+        "en": "Allowed custom connections: {value}"
+      },
+      "empty_label": { "es": "ninguna", "en": "none" }
+    },
+    "messaging_permissions": {
+      "category": "integrations",
+      "icon": "Send",
+      "name": { "es": "Mensajerías", "en": "Messaging platforms" },
+      "description": {
+        "es": "Plataforma por plataforma, si el agente puede usarla y con qué nivel: enviar y recibir, solo responder, o solo leer.",
+        "en": "Per platform, whether the agent may use it and at what level: send & receive, reply only, or read only."
+      },
+      "control": {
+        "kind": "messaging",
+        "item_source": "connector_catalog_messaging",
+        "mode_options": [
+          { "value": "full", "label": { "es": "Enviar y recibir", "en": "Send & receive" } },
+          { "value": "reply", "label": { "es": "Solo responder", "en": "Reply only" } },
+          { "value": "read_only", "label": { "es": "Solo leer", "en": "Read only" } }
+        ]
+      },
+      "statement_template": {
+        "es": "Mensajerías: {value}",
+        "en": "Messaging: {value}"
+      },
+      "empty_label": { "es": "ninguna habilitada", "en": "none enabled" }
+    },
+    "allow_self_registration": {
+      "category": "access",
+      "icon": "UserPlus",
+      "org_only": true,
+      "name": { "es": "Auto-registro de usuarios", "en": "User self-registration" },
+      "description": {
+        "es": "Permite que nuevas personas se unan solas a la organización creando su cuenta. Si se bloquea, las cuentas las crea un administrador. Se define a nivel organización.",
+        "en": "Lets new people join the organization by creating their own account. When blocked, accounts are created by an admin. Defined at organization level."
+      },
+      "control": {
+        "kind": "toggle-allow",
+        "on_label": { "es": "Permitir auto-registro", "en": "Allow self-registration" },
+        "off_label": { "es": "Solo invitación por un admin", "en": "Admin invite only" }
+      },
+      "statement": {
+        "on": { "es": "Nuevos usuarios pueden registrarse solos", "en": "New users can self-register" },
+        "off": { "es": "Solo un admin puede crear cuentas", "en": "Only an admin can create accounts" }
+      }
+    },
+    "shared_agent_grants_mode": {
+      "category": "access",
+      "icon": "Users",
+      "name": { "es": "Agentes compartidos del equipo", "en": "Team shared agents" },
+      "description": {
+        "es": "Cómo se comparten los agentes del equipo: cualquiera del departamento puede usarlos, o solo quien recibió permiso explícito.",
+        "en": "How team agents are shared: anyone in the department may use them, or only those explicitly granted access."
+      },
+      "control": {
+        "kind": "select",
+        "options": [
+          { "value": "explicit", "label": { "es": "Solo con permiso explícito", "en": "Explicit permission only" } },
+          { "value": "open", "label": { "es": "Abiertos a todo el departamento", "en": "Open to the whole department" } }
+        ]
+      },
+      "statement_template": {
+        "es": "Agentes compartidos: {value}",
+        "en": "Shared agents: {value}"
+      }
+    },
+    "explicit_shared_agent_grants": {
+      "category": "access",
+      "icon": "Handshake",
+      "invariable": true,
+      "name": { "es": "Permisos explícitos garantizados", "en": "Explicit grants guaranteed" },
+      "description": {
+        "es": "Protección fija del proveedor: usar un agente compartido siempre queda registrado como permiso explícito auditable. No se puede desactivar.",
+        "en": "Provider-enforced protection: using a shared agent is always recorded as an auditable explicit grant. Cannot be turned off."
+      },
+      "control": { "kind": "locked" },
+      "statement": {
+        "on": { "es": "Todo uso de agentes compartidos queda auditado", "en": "All shared-agent use is audited" }
+      }
+    }
+  }
+}

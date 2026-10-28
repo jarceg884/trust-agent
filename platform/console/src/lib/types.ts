@@ -173,6 +173,9 @@ export interface PolicyMatrixDepartment {
   department_id: string;
   name: string;
   policies: PolicyEntry[];
+  /** Spec 036 (D-36-04): efectiva del depto computada con el combinator
+   *  del backend — combine(org, dept, ∅). La UI jamás re-deriva. */
+  effective: Record<string, unknown>;
 }
 
 /** Solo usuarios CON overrides activos a nivel usuario (el picker de la
@@ -186,13 +189,19 @@ export interface PolicyMatrixUser {
   policies: PolicyEntry[];
 }
 
-/** GET /api/policies/matrix (spec 033 REQ-033-001). */
+/** GET /api/policies/matrix (spec 033 REQ-033-001 + spec 036 D-36-01/04). */
 export interface PolicyMatrix {
   catalog: PolicyCatalogEntry[];
   org: PolicyEntry[];
   departments: PolicyMatrixDepartment[];
   users: PolicyMatrixUser[];
   scope: "org" | "dept";
+  /** Spec 036: catálogo legible es+en por key (contrato canónico, tal cual). */
+  presentation: Record<string, PolicyPresentation>;
+  /** Spec 036: las 9 categorías legibles. */
+  categories: PolicyCategory[];
+  /** Spec 036 (D-36-04): efectiva de la org — combine(org, ∅, ∅). */
+  org_effective: Record<string, unknown>;
 }
 
 /** GET /api/policies/effective?user_id=… — provenance por key computada
@@ -225,6 +234,99 @@ export interface PolicyEffectiveDiff {
     status: string;
   };
   keys: PolicyDiffKey[];
+}
+
+// --- Policies: capa de presentación legible (spec 036, D-36-01) ----------------
+
+/** Texto bilingüe del contrato legible (es+en completos, D-36-07). */
+export interface LocalizedText {
+  es: string;
+  en: string;
+}
+
+export interface PolicyOption {
+  value: string;
+  label: LocalizedText;
+}
+
+/** Ítem conocido de un multiselect (etiqueta legible para el slug). */
+export interface PolicyKnownItem {
+  value: string;
+  label: LocalizedText;
+}
+
+/**
+ * Control legible del contrato (spec 036). Kinds:
+ * - toggle-allow / toggle-require: boolean con on_label/off_label en palabras;
+ * - select: enum con options en palabras;
+ * - number: entero con unit legible y min;
+ * - multiselect-allow / multiselect-deny: lista como sub-toggles por ítem
+ *   (D-36-08) — known_items estáticos + item_source dinámico + custom items;
+ * - domains: web_domain_policy (modo + lista de dominios);
+ * - messaging: messaging_permissions (por plataforma: allowed + mode);
+ * - locked: invariable del proveedor, sin control (D-36-09);
+ * - raw: SOLO fallback UI para keys sin presentación (D-36-05), JSON crudo.
+ */
+export interface PolicyControl {
+  kind:
+    | "toggle-allow"
+    | "toggle-require"
+    | "select"
+    | "number"
+    | "multiselect-allow"
+    | "multiselect-deny"
+    | "domains"
+    | "messaging"
+    | "locked"
+    | "raw";
+  on_label?: LocalizedText;
+  off_label?: LocalizedText;
+  options?: PolicyOption[];
+  unit?: LocalizedText;
+  min?: number;
+  item_source?:
+    | "free"
+    | "models"
+    | "connector_catalog"
+    | "connector_catalog_messaging"
+    | "connections";
+  allow_custom_items?: boolean;
+  known_items?: PolicyKnownItem[];
+  wildcard?: { value: string; label: LocalizedText };
+  items_hint?: LocalizedText;
+  mode_options?: PolicyOption[];
+  domains_label?: LocalizedText;
+  domains_hint?: LocalizedText;
+}
+
+/** Bloque `presentation` por key (contrato canónico, spec 036 §7). */
+export interface PolicyPresentation {
+  category: string;
+  icon: string;
+  org_only?: boolean;
+  invariable?: boolean;
+  name: LocalizedText;
+  description: LocalizedText;
+  control: PolicyControl;
+  /** Frase para booleans (y pisos activos de invariables). */
+  statement?: { on?: LocalizedText; off?: LocalizedText };
+  /** Frase con {value} para el resto de tipos. */
+  statement_template?: LocalizedText;
+  /** Etiqueta legible cuando la lista efectiva está vacía. */
+  empty_label?: LocalizedText;
+}
+
+/** Categoría legible (9, spec 036 §7). */
+export interface PolicyCategory {
+  id: string;
+  icon: string;
+  name: LocalizedText;
+}
+
+/** Ítem dinámico resuelto desde un endpoint real (models/connectors/…). */
+export interface DynamicItem {
+  value: string;
+  label: string;
 }
 
 // --- Modelos (models/router.py + models/access.py) ---------------------------
@@ -277,10 +379,18 @@ export interface AccessModelRow {
   // Spec 032 (D-032-06): every connected API contributes its models —
   // rows are grouped by source in the UI (central MaaS / each BYOK
   // connection).
-  source: "central" | "byok";
+  source: "central" | "byok" | "provider";
   connection_id: string | null; // byok only
   connection_name: string | null; // byok only: vault connection name
   connection_status: string | null; // active | revoked
+  // Spec 036 (D-036-06): provider-operated model sources enabled for this
+  // tenant by the platform provider — shown as platform-included options
+  // grouped per provider (NOT the client's own BYOK key).
+  provider_id: string | null; // provider source only
+  provider_source_name: string | null; // ops.model_providers.name
+  provider_display_name: string | null;
+  provider_base_url: string | null;
+  provider_status: string | null; // active | disabled
   last_seen_at: string | null; // last refresh that saw the model upstream
 }
 
@@ -294,9 +404,21 @@ export interface CatalogRefreshConnection {
   error?: string; // unreachable upstream never blocks the other connections
 }
 
+export interface CatalogRefreshProvider {
+  provider_id?: string;
+  discovered?: number;
+  stale?: number;
+  approved?: number;
+  models?: string[];
+  error?: string;
+}
+
 export interface CatalogRefreshSummary {
   central?: { scope: "central"; stale: number; restored: number; gateway_models: number };
   connections?: Record<string, CatalogRefreshConnection>;
+  // Spec 036 (D-036-05): the provider leg of the global refresh — keyed by
+  // provider name.
+  providers?: Record<string, CatalogRefreshProvider>;
   scope?: string;
   connection_id?: string;
   discovered?: number;
@@ -336,6 +458,20 @@ export interface GrantResult {
   agent_id: string;
   grantee_user_id: string;
   permission: "invoke" | "view";
+}
+
+/** GET /api/agents/{id}/grants (agents.list_grants, spec 012 REQ-ORG-120). */
+export interface AgentGrantRow {
+  id: string;
+  grantee_user_id: string;
+  permission: "invoke" | "view";
+  granted_at: string | null;
+  granted_by: string | null;
+}
+
+/** GET /api/agents/{id}/grants → { grants: AgentGrantRow[] } */
+export interface AgentGrantsList {
+  grants: AgentGrantRow[];
 }
 
 // --- Perfiles default del producto (governance/agent_profiles.py, spec 020) ---
@@ -481,6 +617,8 @@ export interface CustomConnectionMeta {
   last_used_at: string | null;
   created_at: string | null;
   updated_at: string | null;
+  /** Spec 037 (REQ-037-010): ¿la policy efectiva del caller permite usarla? */
+  allowed_for_caller: boolean;
 }
 
 /** GET /api/vault/connections → { connections: CustomConnectionMeta[] } */
@@ -502,6 +640,8 @@ export interface ConnectorCatalogEntry {
   capabilities: string[] | null;
   required_scopes: string[] | null;
   status: string;
+  /** Spec 037 (REQ-037-009): ¿la policy efectiva del caller lo permite? */
+  allowed_for_caller: boolean;
 }
 
 /** GET /api/connectors → { connectors: ConnectorCatalogEntry[] } */

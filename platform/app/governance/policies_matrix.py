@@ -28,6 +28,10 @@ from .combinator import (
     combine,
 )
 from .policies import _canonical, list_level
+from .policy_presentation import (
+    presentation_blocks,
+    presentation_categories,
+)
 from .service import _load_level, load_policy_catalog
 
 # Espejo de permisos de GET /api/policies (list_policies): quien puede
@@ -84,11 +88,21 @@ def _catalog(conn: Connection) -> list[dict[str, Any]]:
 
 
 def matrix(conn: Connection, principal: Principal) -> dict[str, Any]:
-    """GET /api/policies/matrix — catálogo + org + deptos + usuarios."""
+    """GET /api/policies/matrix — catálogo + org + deptos + usuarios.
+
+    Spec 036 (aditivo, D-36-01/04): además incluye el bloque ``presentation``
+    (catálogo legible es+en, tal cual del contrato — el test de cobertura 1:1
+    vigila el drift), las 9 ``categories`` legibles, ``org_effective``
+    (combine(org,∅,∅)) y ``departments[].effective`` (combine(org,dept,∅)) —
+    siempre computados con el combinator del backend, nunca en la UI.
+    """
     _require_view(principal)
     scope = _scope_depts(principal)
 
     org = list_level(conn, level="org", department_id=None, user_id=None)
+    org_map = {p["key"]: p["value"] for p in org}
+    catalog_map = load_policy_catalog(conn)
+    org_effective = combine(org_map, {}, {}, catalog_map)
 
     departments: list[dict[str, Any]] = []
     users: list[dict[str, Any]] = []
@@ -106,9 +120,19 @@ def matrix(conn: Connection, principal: Principal) -> dict[str, Any]:
             {
                 "department_id": str(r["id"]),
                 "name": r["name"],
-                "policies": list_level(
-                    conn, level="dept", department_id=str(r["id"]),
-                    user_id=None,
+                "policies": (
+                    dept_policies := list_level(
+                        conn, level="dept", department_id=str(r["id"]),
+                        user_id=None,
+                    )
+                ),
+                # Efectiva del depto computada con el combinator (D-36-04):
+                # la vista por destinatario JAMÁS re-deriva client-side.
+                "effective": combine(
+                    org_map,
+                    {p["key"]: p["value"] for p in dept_policies},
+                    {},
+                    catalog_map,
                 ),
             }
             for r in dept_rows
@@ -152,6 +176,12 @@ def matrix(conn: Connection, principal: Principal) -> dict[str, Any]:
         "departments": departments,
         "users": users,
         "scope": "org" if scope is None else "dept",
+        # --- Spec 036 (aditivo): capa de presentación legible (D-36-01) ---
+        # El contrato viaja TAL CUAL: el test de cobertura 1:1 contra
+        # catalog.policy_keys (AC-036-001) convierte el drift en fallo de CI.
+        "presentation": presentation_blocks(),
+        "categories": presentation_categories(),
+        "org_effective": org_effective,
     }
 
 
