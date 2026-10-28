@@ -107,6 +107,81 @@ filas; INSERT/UPDATE cross-tenant → error de RLS. Verificado por
 - **Catálogos como datos**: policy keys, roles/permisos, conectores, modelos y
   acciones de audit son filas, no constantes de código (I10).
 
+## Convención de serialización de `migrations/versions/` (hotspot declarado)
+
+Varias lanes kanban editan este directorio concurrentemente (ya produjo heads
+paralelos en 0009, resueltos por la merge `12c08d4fb858`, y el incidente del
+migrate exit 255 — ver abajo). Hay un **mecanismo obligatorio** (ADR
+[`docs/adr-0001-serializacion-migraciones-alembic.md`](../docs/adr-0001-serializacion-migraciones-alembic.md))
+con dos barreras:
+
+### Mecanismo (ADR 0001) — uso obligatorio
+
+**Para crear una migración NO escribas el archivo a mano.** Usa el guardián:
+
+```bash
+python3 db/scripts/migration_guard.py new --slug mi_cambio
+```
+
+- Toma un `flock` exclusivo sobre `db/migrations/.versions.lock` (espera con
+  timeout de 180 s si otro worker lo retiene).
+- **Dentro del lock** lee el head REAL y el siguiente `NNNN`, y escribe
+  `YYYYMMDD_NNNN_<slug>.py` ya apilado (`down_revision` = head del instante,
+  `revision` ≤ 32 chars). Dos workers simultáneos quedan serializados: el
+  segundo se apila sobre el primero — imposible bifurcar.
+- Si la cadena ya está bifurcada, se niega a crear nada (fail-closed).
+
+**Red de seguridad**: `python3 db/scripts/migration_guard.py check` valida el
+grafo sin tocar la DB (única cabeza, sin ids duplicados, padres existentes,
+sin ciclos, ids ≤ 32 chars). El servicio `migrate` de compose lo corre ANTES
+de `alembic upgrade head`, así que un árbol bifurcado muere con el mensaje
+accionable `MULTIPLES CABEZAS — ...` en vez del críptico `exit 255`.
+Tests del guardián: `db/tests/test_migration_guard.py` (13 casos, sin DB).
+
+### Reglas obligatorias para toda migración nueva
+
+1. **Anuncia ANTES de crear el archivo**: comentario en tu card kanban con el
+   `revision` propuesto y el head actual, para que las lanes hermanas se
+   apilen detrás y no al lado.
+2. **`down_revision` = head actual** (el guardián lo garantiza; si creas a
+   mano, verifícalo con `alembic heads`, no de memoria). Una única cabeza
+   SIEMPRE; si aparecen dos heads paralelos, crea una revisión merge
+   (`down_revision = ('a', 'b')`) como
+   `12c08d4fb858_merge_parallel_0009_branches_default_.py`.
+3. **`revision` ≤ 32 caracteres**: `alembic_version.version_num` es
+   `VARCHAR(32)` (lección de `0011_gov_agent_policy_keys`).
+4. **Nombre de archivo**: `YYYYMMDD_NNNN_<slug>.py` con `NNNN` secuencial
+   sobre el head (el guardián lo calcula). Si dos lanes chocan en el número,
+   gana la que anunció primero; la otra se re-apila.
+5. **Paridad `schema.sql`**: todo cambio de DDL/catálogo va en AMBOS lados
+   (migración + `schema.sql`), exigido por `tests/test_schema_parity.py`.
+6. **La BD live solo se mueve por la vía canónica** (`alembic upgrade head`
+   vía el servicio `migrate` de compose). Nunca `alembic stamp` manual para
+   "reconciliar" sin dejar el downgrade documentado en la card.
+
+### El servicio `migrate` corre desde la IMAGEN, no desde el árbol (lección t_42131101)
+
+`docker-compose.yml` build-ea `trust-agent/platform:local` y el `Dockerfile`
+**copia** `db/migrations` en build time. Si añades una migración al árbol y NO
+reconstruyes la imagen, el siguiente `docker compose up -d` (sin `--no-deps`)
+relanza el one-shot `migrate` con migraciones VIEJAS y muere con:
+
+```
+service "migrate" didn't complete successfully: exit 255
+FAILED: Can't locate revision identified by '<rev_que_no_está_en_la_imagen>'
+```
+
+(aunque la revisión SÍ exista en el árbol — Alembic solo ve lo copiado en la
+imagen). Por eso, **toda lane que añada una migración debe cerrar con**:
+
+```bash
+cd /root/trust-agent && docker compose build migrate   # refresca la imagen
+docker compose up -d                                    # aplica y verifica en verde
+```
+
+El schema no se daña en el fallo (Alembic aborta antes de tocar nada), pero el
+`compose up` completo queda roto para todo el equipo hasta el rebuild.
+
 ## Audit log (arq. §5.6)
 
 - `INSERT`-only: `trust_app` no tiene grant `UPDATE/DELETE` y el trigger

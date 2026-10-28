@@ -1,170 +1,278 @@
 # Trust Agent — Plataforma SaaS de gobernanza de IA sobre Hermes Agent
 
-Empaquetado **local single-node** (constitution VII): un solo `docker compose up`
-levanta la plataforma completa para validación local — nada de infra cloud.
+Piloto funcional **desplegable donde sea**: un `docker compose up` levanta la
+plataforma completa en cualquier host Linux con Docker — tu laptop, tu VM en
+cualquier nube (Huawei Cloud ECS, AWS, etc.) o un servidor on-prem. Sin
+dependencias del proyecto de origen: solo este repo + un `.env`.
 
-> Contexto del proyecto: `CONTEXTO-TAREAS.md` · Vision/decisiones: `DECISIONES.md` ·
-> Constitution: `.specify/memory/constitution.md` · Arquitectura: `docs/arquitectura.md`
+> ¿Qué es? Un SaaS multi-tenant donde un **proveedor** aprovisiona clientes;
+> cada cliente gobierna su organización (usuarios, roles, presupuestos
+> jerárquicos, políticas, modelos vía LiteLLM, dispositivos enrolados, audit
+> log inmutable) y sus usuarios finales corren agentes de Hermes Agent
+> **sujetos a esa gobernanza** (veto de políticas, corte por presupuesto,
+> revocación de dispositivos). Documentación de producto: `docs/`.
 
-## Qué levanta el compose
+---
 
-| Servicio | Contenedor | Puerto (127.0.0.1) | Qué es |
-|---|---|---|---|
-| `db` | `trust-agent-db` | **55432** | PostgreSQL 17 con roles canónicos (`trust_app` sin BYPASSRLS / `trust_migrator`) y DB `trust_agent` |
-| `idp` | `trust-agent-idp` | **8080** | Keycloak 26.2 (`start-dev`); el provisioning crea el realm por tenant vía Admin REST |
-| `migrate` | `trust-agent-migrate` | — | One-shot: `alembic upgrade head` por la vía canónica (`db/migrations`, D-CP-11) |
-| `api` | `trust-agent-api` | **8000** | Control plane FastAPI (specs 003–008, 011, 012) |
-| `jobs-worker` | `trust-agent-jobs-worker` | — | Cola de jobs en PostgreSQL (invites de usuarios, spec 012) |
-| `spend-worker` | `trust-agent-spend-worker` | — | Ingest de spend + enforcement de corte (spec 005) |
-| `litellm-double` | `trust-agent-litellm-double` | **39989** | **Doble HTTP DECLARADO** de la LiteLLM Admin API (D-GOV-15, `platform/tests/litellm_fake.py`) |
-| `console` | `trust-agent-console` | **3100** | Admin Console Next.js 16 (spec 009) |
+## Requisitos
 
-Los puertos son los **canónicos del runbook** (`platform/README.md`, `db/README.md`):
-los scripts E2E y smokes funcionan sin retocar nada.
+| Requisito | Versión probada | Nota |
+|---|---|---|
+| Linux x86_64 (host) | Ubuntu 24.04 | El stack usa `network_mode: host` (Linux only) |
+| Docker Engine | 27.x | |
+| Docker Compose v2 | 2.40 | `docker compose version` |
+| OpenSSL | cualquiera | `scripts/setup.sh` genera los secretos |
+| RAM libre | ~4 GB | Keycloak + PostgreSQL + Next.js + FastAPI |
+| Disco libre | ~10 GB | imágenes + volúmenes de datos |
 
-**Nota de red**: `api`, `migrate`, workers, `litellm-double` y `console` corren con
-`network_mode: host` (Linux). Motivo: los tokens OIDC llevan issuer
-`http://127.0.0.1:8080/realms/<org>` (la URL que ve el navegador) y el API verifica
-la firma contra JWKS **en esa misma URL** — con red bridge habría que bifurcar URLs
-de issuer (frágil). Host networking mantiene una sola verdad de puertos.
+No se necesita Python, Node ni ninguna otra herramienta en el host: todo
+corre dentro de contenedores.
 
-## Arranque paso a paso
+## Instalación de UN comando
 
 ```bash
-cd /root/trust-agent
+git clone https://github.com/jarceg884/trust-agent.git
+cd trust-agent
 
-# 1) Entorno: copia la plantilla y rellena los secretos.
+# Modo dev local (todo en 127.0.0.1, zero config):
+scripts/setup.sh          # o: make setup
+
+# Modo servidor (IP/dominio público propio):
+TRUST_PUBLIC_BASE_URL=http://TU-IP-O-DOMINIO scripts/setup.sh
+```
+
+`setup.sh` es idempotente y hace TODO: crea `.env` desde la plantilla,
+**genera los secretos** que falten (nada de "change-me" en producción),
+deriva las URLs públicas, construye las imágenes, levanta el stack, corre
+las migraciones (servicio `migrate`, automático), seedea el **super-user
+del proveedor**, captura su contraseña one-time del log del API y corre el
+smoke de verificación. Al final imprime:
+
+```
+PROVIDER OPERATOR ONE-TIME PASSWORD (shown ONLY once, at bootstrap):
+username=provider-admin password=XXXXX — sign in and change it immediately
+```
+
+**Guarda esa contraseña**: es la entrada al Provider Console (el panel con
+que aprovisionas clientes) y se muestra solo esa vez. El primer login
+obliga a cambiarla.
+
+## Instalación paso a paso (equivalente)
+
+```bash
+# 1) Entorno: copia la plantilla COMPLETA y edita lo que necesites.
 cp .env.example .env
-#    Genera los dos secretos fail-closed (sin ellos el API NO arranca):
-python3 -c "import secrets;print(secrets.token_urlsafe(32))"         # → TRUST_DEVICE_TOKEN_SECRET
-python3 -c "import base64,os;print(base64.b64encode(os.urandom(32)).decode())"  # → TRUST_VAULT_KEK_B64
-#    Y define: KC_ADMIN_PASSWORD, TRUST_PROVIDER_TOKEN.
+#    Genera los secretos fail-closed (sin ellos el API NO arranca):
+python3 -c "import secrets;print(secrets.token_urlsafe(32))"          # TRUST_DEVICE_TOKEN_SECRET
+python3 -c "import base64,os;print(base64.b64encode(os.urandom(32)).decode())"  # TRUST_VAULT_KEK_B64
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 | base64 -w0  # TRUST_POLICY_JWS_PRIVATE_KEY_B64
+#    Y define: POSTGRES_PASSWORD, TRUST_APP_PASSWORD, TRUST_MIGRATOR_PASSWORD,
+#    KC_ADMIN_PASSWORD, TRUST_PROVIDER_TOKEN (todas con valores fuertes).
 
 # 2) Imágenes (primera vez ~3-5 min; luego cacheado).
 docker compose build
 
 # 3) Levanta todo. El orden lo resuelve compose:
-#    db healthy → migrate (alembic) → idp healthy → api → workers/console.
+#    db healthy → migrate (alembic, automático) → idp healthy → api → workers → consoles.
 docker compose up -d
 
-# 4) Espera a que todos estén sanos (el IdP tarda ~40-60 s la primera vez).
-docker compose ps
-#    NAME                       STATUS
-#    trust-agent-api            Up (healthy)
-#    trust-agent-console        Up (healthy)
-#    trust-agent-db             Up (healthy)
-#    trust-agent-idp            Up (healthy)
-#    trust-agent-jobs-worker    Up
-#    trust-agent-litellm-double Up (healthy)
-#    trust-agent-spend-worker   Up
+# 4) El super-user del proveedor se seedea AL ARRANQUE del API. Su contraseña
+#    one-time se loguea EXACTAMENTE una vez:
+docker logs <prefijo>-api 2>&1 | grep "ONE-TIME"
+
+# 5) Verificación (ver sección siguiente).
+scripts/smoke.sh
 ```
 
-## Verificación de salud
+## Verificar que levantó bien
+
+`scripts/smoke.sh` (o `make smoke`) corre checks REALES contra el stack
+vivo — nada de "debería funcionar":
+
+```
+== Smoke Trust Agent ==
+PASS  healthz del API (status=ok, database=up)
+PASS  IdP: discovery OIDC del realm master (200)
+PASS  Admin Console: /login responde (200)
+PASS  Provider Console: /login responde (200)
+PASS  LiteLLM double: rechaza sin master key (401)
+PASS  Login del super-user del proveedor (200 ok=true)
+== Resultado: 6 PASS / 0 FAIL ==
+```
+
+El último check (login real del super-user) corre automáticamente cuando
+`setup.sh` acaba de bootstrapear; suelto, admite `SMOKE_PROVIDER_PASSWORD=… scripts/smoke.sh`.
+
+A mano, si prefieres:
 
 ```bash
-# Control plane (fail-closed: si la DB no responde, no dice "ok")
-curl -s http://127.0.0.1:8000/healthz
-# {"status":"ok","database":"up"}
-
-# Keycloak: discovery del realm master
+docker compose ps                        # todos Up (healthy)
+curl -s http://127.0.0.1:8000/healthz    # {"status":"ok","database":"up"}
 curl -s -o /dev/null -w '%{http_code}\n' \
-  http://127.0.0.1:8080/realms/master/.well-known/openid-configuration
-# 200
-
-# Console: página de login
-curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3100/login
-# 200
-
-# Doble de LiteLLM: rechaza sin master key (401 = vivo y cerrado)
-curl -s -o /dev/null -w '%{http_code}\n' 'http://127.0.0.1:39989/key/info?key=x'
-# 401
-
-# Migraciones aplicadas (vía canónica)
-docker logs trust-agent-migrate
-# ... alembic ... (exit 0)
-
-# Workers vivos (poll cada ~2-15 s)
-docker logs --tail 5 trust-agent-jobs-worker
-docker logs --tail 5 trust-agent-spend-worker
+  http://127.0.0.1:8080/realms/master/.well-known/openid-configuration   # 200
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3100/login     # 200
 ```
 
-## Flujo demo de punta a punta (provision → admin → usuario)
+## Qué levanta el compose
 
-Evidencia real de este empaquetado: [`docs/smoke-local.md`](docs/smoke-local.md).
+| Servicio | Puerto default | Qué es |
+|---|---|---|
+| `db` | 55432 (solo 127.0.0.1) | PostgreSQL 17 con roles canónicos (`trust_app` sin BYPASSRLS / `trust_migrator`) y DB `trust_agent` |
+| `idp` | 8080 | Keycloak 26.2 (`start-dev`); el provisioning crea el realm por tenant vía Admin REST |
+| `migrate` | — | One-shot: `alembic upgrade head` (automático antes del API) |
+| `api` | 8000 | Control plane FastAPI (healthz en `/healthz`) |
+| `jobs-worker` / `spend-worker` / `attestation-worker` | — | Cola de jobs, ingest de spend + corte de presupuesto, detección de agentes sin attestation |
+| `litellm-double` | 39989 | **Doble de tests** de la Admin API de LiteLLM (solo dev — ver §Topologías) |
+| `console` | 3100 | Admin Console Next.js (el panel del cliente) |
+| `provider-console` | 3200 | Provider Console Next.js (tu panel de operador) |
+| `litellm` + `litellm-db` | 4000 / 55433 | **Perfil `litellm`** (producción): proxy LiteLLM real + su PostgreSQL dedicado |
+
+**Nota de red**: `api`, workers, `migrate`, consoles y `litellm-double`
+corren con `network_mode: host` (Linux). Motivo: los tokens OIDC llevan el
+issuer con la URL pública del IdP (la que ve el navegador) y el API verifica
+la firma contra JWKS **en esa misma URL** — host networking mantiene una
+sola verdad de URLs sin bifurcar issuer interno/externo.
+
+---
+
+## Los dos modos de despliegue
+
+### Modo (a) — Dev local (default)
+
+Todo en `127.0.0.1` con los puertos canónicos. **No toques nada**: los
+defaults del `.env.example` son exactamente este modo. Es el que valida el
+smoke tras `scripts/setup.sh` sin argumentos.
+
+### Modo (b) — Servidor con IP/dominio propio
+
+El stack es el mismo; cambian **solo variables del `.env`** (setup.sh las
+deriva solo de `TRUST_PUBLIC_BASE_URL`):
+
+| Variable | Dev (default) | Servidor propio |
+|---|---|---|
+| `TRUST_PUBLIC_BASE_URL` | `http://127.0.0.1` | `http://TU-IP` o `http://trust.tudominio.com` |
+| `TRUST_IDP_PUBLIC_URL` | `http://127.0.0.1:8080` | `http://TU-IP:8080` (issuer OIDC) |
+| `TRUST_IDP_BASE_URLS` | `…127.0.0.1:8080,127.0.0.1:8908` | `http://TU-IP:8080` (sin el IdP de test) |
+| `TRUST_CONSOLE_PUBLIC_URL` | `http://127.0.0.1:3100` | `http://TU-IP:3100` |
+| `TRUST_DOWNLOAD_BASE_URL` | `http://127.0.0.1:8000` | `http://TU-IP:8000` |
+| `TRUST_OIDC_REDIRECT_URIS` | callbacks 127.0.0.1/localhost:3100 | `http://TU-IP:3100/auth/callback,http://127.0.0.1:8765/callback` |
+| `TRUST_IDP_BIND` | `127.0.0.1` | `0.0.0.0` (el navegador del cliente debe llegar al IdP) |
+| `TRUST_API_HOST` | `127.0.0.1` | `0.0.0.0` |
+| `TRUST_COOKIE_SECURE` | `false` | `false` por ahora (http); `true` con HTTPS |
+
+Las URLs **internas** (`TRUST_API_BASE_URL`, `TRUST_KEYCLOAK_ADMIN_URL`)
+siguen apuntando a `127.0.0.1` — con host networking el stack siempre se
+habla por loopback, aunque el mundo entre por la IP pública. La DB nunca
+se publica fuera del host.
+
+### Servidor con HTTPS / proxy inverso (avanzado)
+
+Tras un proxy TLS (nginx/Caddy) cada servicio puede publicarse en su propio
+dominio, y setup.sh NO deriva nada automáticamente. Fija a mano en `.env`:
+`TRUST_IDP_PUBLIC_URL=https://idp.tudominio.com`,
+`TRUST_CONSOLE_PUBLIC_URL=https://admin.tudominio.com`,
+`TRUST_DOWNLOAD_BASE_URL=https://api.tudominio.com`,
+`TRUST_IDP_BASE_URLS=https://idp.tudominio.com`,
+`TRUST_OIDC_REDIRECT_URIS=https://admin.tudominio.com/auth/callback,http://127.0.0.1:8765/callback`,
+`TRUST_COOKIE_SECURE=true`, y en el servicio `idp` agrega
+`KC_HOSTNAME=idp.tudominio.com`. Los binds pueden quedarse en `127.0.0.1`
+(el proxy es el único que entra). Recomendado para producción real.
+
+---
+
+## Topologías del plano de control de modelos (LiteLLM)
+
+El control plane gobierna el acceso a modelos y el spend a través de un
+proxy LiteLLM (Admin API). Hay dos topologías:
+
+**1. Dev/tests (default): `litellm-double`.** Un doble HTTP declarado de la
+Admin API (`platform/tests/litellm_fake.py`). Costo cero, sin credenciales —
+pero NO sirve para gobernar spend real: es solo para el stack de pruebas.
+
+**2. Producción: proxy LiteLLM REAL (perfil `litellm`).** El compose trae el
+proxy real (imagen pineada `v1.106.3`) con el catálogo y precios reales de
+`litellm-real/config.yaml` (Huawei Cloud MaaS en el piloto) y su PostgreSQL
+dedicado (los budgets del proxy sin DB fallan abiertos — inaceptable):
 
 ```bash
-cd /root/trust-agent/platform
-
-# E2E global en vivo (79 checks): proveedor crea tenant → admin PKCE+TOTP real
-# (acr=2) → usuario obrero → dispositivo → agente compartido → modelo aprobado
-# → [reinicia el API: docker compose restart api] → spend/corte/audit/revocación.
-.venv/bin/python scripts/e2e_final_live.py --phase a --state /tmp/e2e_state.json
-docker compose restart api        # desde /root/trust-agent
-.venv/bin/python scripts/e2e_final_live.py --phase b --state /tmp/e2e_state.json
-
-# Smoke del Admin Console (login PKCE+TOTP REAL por el console del compose):
-# primero aprovisiona un tenant y pasa su one-time password.
-curl -s -X POST http://127.0.0.1:8000/api/admin/tenants \
-  -H "Authorization: Bearer $TRUST_PROVIDER_TOKEN" -H 'Content-Type: application/json' \
-  -d '{"organization_name":"Console Smoke Corp","admin_email":"admin@console-smoke2.test",
-       "initial_budget_usd":500.0,"model_plan":"standard","slug":"console-smoke2"}'
-.venv/bin/python console/scripts/smoke_console.py <one_time_password>
+# 1) En .env: pon tu endpoint y key del proveedor de modelos (MaaS central
+#    del proveedor del piloto, o el que sea en topología BYOK del cliente):
+#      TRUST_MAAS_ENDPOINT=https://tu-endpoint-maas/v1
+#      TRUST_MAAS_API_KEY=<tu-key>          # el VALOR vive SOLO en .env
+#      TRUST_LITELLM_BASE_URL=http://127.0.0.1:4000
+#      TRUST_LITELLM_MASTER_KEY=<LITELLM_MASTER_KEY de tu .env>
+#    (setup.sh ya generó LITELLM_MASTER_KEY y LITELLM_DB_PASSWORD.)
+# 2) Levanta el perfil y recrea api/workers para que tomen la nueva URL:
+docker compose --profile litellm up -d
+docker compose up -d api jobs-worker spend-worker attestation-worker
+# 3) Verifica:
+curl -s http://127.0.0.1:4000/health/liveliness   # {"status":"healthy"...}
 ```
 
-El navegador también sirve: `http://127.0.0.1:3100/login` → org code del tenant
-demo (`final-e2e` o `console-smoke2`) → login Keycloak con MFA.
+- **MaaS central del proveedor**: el proveedor del SaaS pone su key MaaS;
+  los clientes consumen modelos centrales con presupuestos del control plane.
+- **BYOK total del cliente**: el cliente pone SU endpoint y SU key en las
+  mismas variables (cualquier proveedor OpenAI-compatible); el catálogo de
+  `litellm-real/config.yaml` se edita a su upstream.
+
+---
+
+## Backup y restore de los datos del cliente
+
+Los datos viven en TU PostgreSQL (volumen `trust_db_data`); la identidad
+(Keycloak: usuarios, MFA, realms) en `kc_data`. Respaldo básico de la DB:
+
+```bash
+scripts/backup.sh                 # → trust-agent-backup-<fecha>.dump (pg_dump -Fc)
+scripts/backup.sh /ruta/mi.dump   # ruta explícita
+make backup                       # equivalente
+
+scripts/restore.sh trust-agent-backup-<fecha>.dump   # PELIGRO: reemplaza TODO
+```
+
+`backup.sh` verifica que el dump sea restaurable (`pg_restore --list`).
+Sugerencia de cron diario: `0 3 * * * cd /opt/trust-agent && scripts/backup.sh /backups/$(date +\%F).dump`.
+Para respaldar también la identidad, respalda el volumen `kc_data`
+(`docker run --rm -v trust-agent_kc_data:/data -v /backups:/out alpine tar czf /out/kc_data.tgz -C /data .`).
 
 ## Operación
 
 ```bash
 docker compose ps                  # estado
 docker compose logs -f api         # logs del control plane
-docker compose restart api         # reinicio (las sesiones/jobs viven en PostgreSQL)
+docker compose restart api         # reinicio (sesiones/jobs viven en PostgreSQL)
 docker compose down                # apagar (los volúmenes persisten)
 docker compose down -v             # apagar + BORRAR datos (DB y Keycloak)
 docker compose build --no-cache    # reconstruir tras cambiar código
-```
-
-- **Datos**: volúmenes `trust-agent_trust_db_data` (PostgreSQL) y
-  `trust-agent_kc_data` (Keycloak). `down` sin `-v` los conserva.
-- **Cambios de código**: `docker compose build api console && docker compose up -d`.
-- **LiteLLM real** (opcional): el compose usa el doble declarado (D-GOV-15) —
-  costo cero y sin credenciales MaaS. Para un proxy real: levántalo aparte y
-  cambia `TRUST_LITELLM_BASE_URL` / `TRUST_LITELLM_MASTER_KEY` en los servicios
-  `api` y `spend-worker` del `docker-compose.yml`.
-
-## Rollback al runbook ad-hoc (pre-compose)
-
-El entorno anterior (procesos uvicorn/next en el host + contenedores `trust-db`
-y `keycloak`) quedó preservado:
-
-```bash
-docker compose down          # apagar el stack empaquetado
-docker start trust-db keycloak
-# y arrancar API/console a mano según platform/README.md y platform/console/README.md
+make smoke                         # verificación en cualquier momento
 ```
 
 ## Troubleshooting
 
 | Síntoma | Causa/fix |
 |---|---|
-| `api` no arranca: `TRUST_DEVICE_TOKEN_SECRET is missing or still a placeholder` | Secretos fail-closed: genera uno real en `.env` (constitution IV) |
-| Build de la console: `Cannot find module '@tailwindcss/turbopack'` | `npm ci` con `NODE_ENV=production` se salta devDeps — el Dockerfile ya usa `npm ci --include=dev` |
-| `idp` nunca pasa a healthy | Primera vez tarda ~40-60 s; revisa `docker logs trust-agent-idp` |
-| Puerto ocupado (`bind: address already in use`) | Algo del entorno ad-hoc sigue vivo: `ss -tlnp | grep -E ':(8000|3100|8080|55432|39989)'` y detén el proceso |
-| `migrate` falla | `docker logs trust-agent-migrate`; verifica `POSTGRES_PASSWORD` en `.env` |
+| `api` no arranca: `TRUST_DEVICE_TOKEN_SECRET is missing or still a placeholder` | Secretos fail-closed: `scripts/setup.sh` los genera, o pon valores reales en `.env` |
+| Build de una console: `Cannot find module '@tailwindcss/turbopack'` | Ya resuelto en el Dockerfile (`npm ci --include=dev`); si persiste, `docker compose build --no-cache console` |
+| `idp` nunca pasa a healthy | Primera vez tarda ~40-60 s; revisa `docker logs <prefijo>-idp` |
+| Puerto ocupado (`bind: address already in use`) | `ss -tlnp | grep -E ':(8000|3100|3200|8080|55432|39989)'` y libera el puerto, o cambia el puerto en `.env` (`TRUST_API_PORT`, etc.) |
+| `migrate` falla | `docker logs <prefijo>-migrate`; verifica `POSTGRES_PASSWORD` en `.env` |
+| Login del cliente rompe tras cambiar IP/dominio | Los realms existentes conservan redirect URIs viejas: actualiza `TRUST_OIDC_REDIRECT_URIS` y `TRUST_IDP_BASE_URLS` en `.env` y `docker compose up -d api` (el heal `ensure_web_client_redirect_uris` las reconcilia) |
+| Dos stacks del piloto en el mismo host (p. ej. pruebas) | `TRUST_CONTAINER_PREFIX=otro docker compose -p otro up -d` + puertos distintos en `.env` |
 
 ## Mapa del repo
 
 ```
-docker-compose.yml          # este empaquetado (8 servicios)
-.env.example                # plantilla de entorno (secretos fail-closed)
-db/                         # schema.sql + Alembic + tests (spec 002)
-platform/                   # control plane FastAPI (specs 003-008, 011, 012)
-platform/console/           # Admin Console Next.js (spec 009)
-platform/desktop-client/    # Desktop white-label (spec 010)
-platform/scripts/           # e2e_final_live.py, run_litellm_double.py, smokes
-specs/                      # 12 specs SDD (specify → plan → tasks → implement → converge)
-docs/                       # arquitectura, validación, smoke-local (evidencia)
+docker-compose.yml          # el stack completo (12 servicios, 2 perfiles)
+.env.example                # plantilla de entorno COMPLETA (secretos + URLs + puertos)
+Makefile                    # setup / smoke / backup / restore / litellm-up
+scripts/                    # setup.sh, smoke.sh, backup.sh, restore.sh (operador)
+db/                         # schema.sql + Alembic + bootstrap de roles
+platform/                   # control plane FastAPI
+platform/console/           # Admin Console Next.js (panel del cliente)
+platform/provider-console/  # Provider Console Next.js (panel del operador)
+platform/hermes/            # plugin de gobernanza + profile-template del bundle de descarga
+litellm-real/               # config del proxy LiteLLM real (catálogo + precios MaaS)
+specs/                      # specs SDD del producto (specify → plan → tasks → implement → converge)
+docs/                       # arquitectura, validación, evidencia real de cada capacidad
 skills/                     # hallazgos capturados como skills reutilizables
 ```

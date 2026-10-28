@@ -15,32 +15,67 @@ import {
   IconCredentials,
   IconDepartments,
   IconDevices,
+  IconHermesDownload,
   IconModels,
   IconOrganization,
   IconOverview,
+  IconPolicies,
+  IconPulse,
   IconUsers,
 } from "@/components/icons";
+import { TenantBrand } from "@/components/shell/tenant-brand";
 
-export const NAV_ITEMS = [
+interface NavItem {
+  href: string;
+  label: string;
+  icon: (p: { size?: number; className?: string }) => React.ReactNode;
+  /** Solo roles admin de la org (p. ej. "Hermes Download", t_360a752e). */
+  adminOnly?: boolean;
+  /** org_admin O dept_admin (p. ej. "Usage", spec 035 — el API scopea). */
+  anyAdminOnly?: boolean;
+}
+
+export const NAV_ITEMS: NavItem[] = [
   { href: "/overview", label: "Overview", icon: IconOverview },
   { href: "/organization", label: "Organization", icon: IconOrganization },
   { href: "/departments", label: "Departments", icon: IconDepartments },
   { href: "/users", label: "Users & Roles", icon: IconUsers },
   { href: "/budgets", label: "Budgets", icon: IconBudgets },
+  // Spec 035 (mandato Miller): requests y consumos por usuario sobre el
+  // ledger real. Visible para org_admin Y dept_admin (el API scopea).
+  {
+    href: "/usage",
+    label: "Usage",
+    icon: IconPulse,
+    anyAdminOnly: true,
+  },
   { href: "/models", label: "Model Access", icon: IconModels },
+  { href: "/policies", label: "Policies", icon: IconPolicies },
   { href: "/agents", label: "Shared Agents", icon: IconAgents },
   { href: "/devices", label: "Devices", icon: IconDevices },
+  {
+    href: "/hermes-download",
+    label: "Hermes Download",
+    icon: IconHermesDownload,
+    adminOnly: true,
+  },
   { href: "/credentials", label: "Credentials", icon: IconCredentials },
   { href: "/audit", label: "Audit Log", icon: IconAudit },
   { href: "/branding", label: "Branding", icon: IconBranding },
-] as const;
+];
 
 export function Sidebar({
   open,
   onClose,
+  isAdmin,
+  isAnyAdmin = false,
 }: {
   open: boolean;
   onClose: () => void;
+  /** true si el principal tiene rol org_admin (filtra items adminOnly). */
+  isAdmin: boolean;
+  /** true si el principal es org_admin O dept_admin (items anyAdminOnly). */
+  isAnyAdmin?: boolean;
 }) {
   const pathname = usePathname();
 
@@ -69,48 +104,53 @@ export function Sidebar({
           open ? "translate-x-0" : "-translate-x-full"
         }`}
       >
-        <div className="flex h-14 items-center gap-2.5 border-b border-border-subtle px-5">
-          <span
-            aria-hidden="true"
-            className="flex size-7 items-center justify-center rounded-lg bg-accent text-[13px] font-bold text-white"
-          >
-            T
-          </span>
-          <div className="leading-tight">
-            <p className="text-sm font-semibold text-foreground">Trust Agent</p>
-            <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-faint">
-              Admin Console
-            </p>
-          </div>
-        </div>
+        <TenantBrand />
 
         <p className="px-5 pb-1 pt-5 text-[10px] font-semibold uppercase tracking-[0.18em] text-faint">
           Governance
         </p>
         <nav className="flex-1 space-y-0.5 overflow-y-auto px-3 pb-4">
-          {NAV_ITEMS.map(({ href, label, icon: Icon }) => {
-            const active = pathname === href || pathname.startsWith(`${href}/`);
-            return (
-              <Link
-                key={href}
-                href={href}
-                onClick={onClose}
-                aria-current={active ? "page" : undefined}
-                className={`flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors ${
-                  active
-                    ? "bg-accent-soft font-medium text-accent"
-                    : "text-muted hover:bg-surface-alt hover:text-foreground"
-                }`}
-              >
-                <Icon size={15} className="shrink-0" />
-                {label}
-              </Link>
-            );
-          })}
+          {/* Pulido v2 r3 (hallazgo #8): el activo usa el TINT del acento de
+              marca (bg-accent-soft + texto accent + barra) — la pill gris
+              neutra no se leía como "seleccionado" y convivía con el acento
+              violeta del logo (crítica: "bring the sidebar selected state
+              onto the same accent"). El acento sigue al branding del tenant
+              (re-tema del layout, spec 028). */}
+          {NAV_ITEMS.filter(
+            (item) =>
+              (!item.adminOnly || isAdmin) &&
+              (!item.anyAdminOnly || isAnyAdmin),
+          ).map(
+            ({ href, label, icon: Icon }) => {
+              const active = pathname === href || pathname.startsWith(`${href}/`);
+              return (
+                <Link
+                  key={href}
+                  href={href}
+                  onClick={onClose}
+                  aria-current={active ? "page" : undefined}
+                  className={`relative flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors ${
+                    active
+                      ? "bg-accent-soft font-medium text-accent"
+                      : "text-muted hover:bg-surface-alt/70 hover:text-foreground"
+                  }`}
+                >
+                  {active ? (
+                    <span
+                      aria-hidden="true"
+                      className="absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full bg-accent"
+                    />
+                  ) : null}
+                  <Icon size={15} className="shrink-0" />
+                  {label}
+                </Link>
+              );
+            },
+          )}
         </nav>
 
         <div className="border-t border-border-subtle px-5 py-3">
-          <p className="text-[10px] leading-relaxed text-faint">
+          <p className="text-[10px] leading-relaxed text-muted">
             Every action on this console is recorded in the organization&apos;s
             immutable audit log.
           </p>

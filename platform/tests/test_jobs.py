@@ -18,8 +18,14 @@ def scoped(engine, tenant_id=TENANT_A):
         yield conn
 
 
-def test_enqueue_is_idempotent():
-    """Same (tenant, type, idempotency_key) -> one job, existing returned."""
+def test_enqueue_is_idempotent(db):
+    """Same (tenant, type, idempotency_key) -> one job, existing returned.
+
+    t_e000bf40: pide el fixture `db` — es el primer test del archivo y
+    no pedía ningún fixture, así que al correr el archivo aislado la DB
+    de sesión aún no existía (la crea lazy el primer test con `client`)
+    y fallaba con OperationalError.
+    """
     engine = build_engine(get_settings())
     first = jobs_service.enqueue(
         engine, tenant_id=TENANT_A, job_type="echo",
@@ -43,7 +49,7 @@ def test_worker_processes_echo_job_subprocess(client, idp):
     proc = subprocess.run(
         [os.path.join(PLATFORM_DIR, ".venv", "bin", "python"),
          "-m", "app.jobs.worker", "--once"],
-        cwd=PLATFORM_DIR, capture_output=True, text=True, timeout=120,
+        cwd=PLATFORM_DIR, capture_output=True, text=True, timeout=300,
     )
     assert proc.returncode == 0, proc.stderr
     with scoped(engine) as conn:

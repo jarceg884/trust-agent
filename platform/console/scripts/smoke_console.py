@@ -393,8 +393,8 @@ def main(ota_password: str) -> int:
 
     check("login #1 real (PKCE + one-time password + enrolamiento TOTP + callback mint)",
           login_dance(ota_password))
-    check("cookies de sesión presentes (ta_session/ta_refresh/ta_csrf)",
-          {"ta_session", "ta_refresh", "ta_csrf"} <= set(COOKIES), str(sorted(COOKIES)))
+    check("cookies de sesión presentes (ta_console_session/refresh/csrf)",
+          {"ta_console_session", "ta_console_refresh", "ta_console_csrf"} <= set(COOKIES), str(sorted(COOKIES)))
 
     # --- 4) Datos reales por el proxy ---------------------------------------
     def proxy(path, method="GET", payload=None, extra_headers=None):
@@ -435,7 +435,7 @@ def main(ota_password: str) -> int:
     # Mutación CON CSRF → real
     st, body, _, _ = proxy("/budgets/org", method="PUT",
                            payload={"amount_cents": initial_budget + 100000, "period": "monthly"},
-                           extra_headers={"X-CSRF-Token": COOKIES.get("ta_csrf", "")})
+                           extra_headers={"X-CSRF-Token": COOKIES.get("ta_console_csrf", "")})
     check("mutación con X-CSRF-Token → 200 (presupuesto org actualizado)", st == 200, f"HTTP {st} {body[:200]}")
 
     st, body, _, _ = proxy("/budgets/overview")

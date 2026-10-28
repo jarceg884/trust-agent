@@ -20,9 +20,11 @@ from tests.conftest import (
     USER_ALICE, USER_DAVE, bearer_headers, mint,
 )
 
+import os
+
 APP_DSN = (
     "host=127.0.0.1 port=55432 user=trust_app password=trust_app_dev "
-    "dbname=trust_agent_platform_test"
+    f"dbname={os.environ.get('TRUST_TEST_DB', 'trust_agent_platform_test')}"
 )
 
 

@@ -221,9 +221,13 @@ def handle_invite(conn: Connection, job: dict) -> dict:
         "email": email.lower(),
         "one_time_password": one_time_password,
         "instructions": (
+            # Copy corregido (QA Pilar 1, t_ccf901f4): mismo contrato que el
+            # provisioning — password forzado en el primer login; TOTP solo
+            # forzado si la policy de la org require_mfa=true (spec 015).
             "Delivered to the inviting admin (tenant-scoped job result). "
-            "Temporary: Keycloak forces a new password and TOTP enrollment "
-            "on first login; it is invalid afterwards."
+            "Temporary: Keycloak forces a new password on first login; "
+            "TOTP (MFA) enrollment is enforced only if the organization's "
+            "policy require_mfa is enabled. It is invalid afterwards."
         ),
     }
 

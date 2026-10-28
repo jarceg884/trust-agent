@@ -33,6 +33,7 @@ def _target_principal(conn: Connection, tenant_id: str, user_id: str) -> Princip
     return Principal(
         tenant_id=tenant_id,
         tenant_slug="",
+        tenant_name="",
         user_id=str(row["id"]),
         email=row["email"],
         display_name=row["display_name"],

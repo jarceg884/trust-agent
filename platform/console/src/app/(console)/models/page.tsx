@@ -3,7 +3,7 @@ import { PageHeader } from "@/components/ui";
 import { ModelsPage } from "./models-page";
 
 export const metadata: Metadata = {
-  title: "Model Access — Trust Agent Admin Console",
+  title: "Model Access",
 };
 
 export default function Page() {

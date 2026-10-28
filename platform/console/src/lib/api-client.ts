@@ -3,8 +3,8 @@
  * proxy BFF del console (/api/proxy/*). El navegador jamás conoce las URLs
  * del control plane ni los tokens (httpOnly).
  *
- * Mutaciones: el proxy exige X-CSRF-Token (lo toma de la cookie ta_csrf que
- * el propio navegador envía); el control plane valida el hash (REQ-SEC-010).
+ * Mutaciones: el proxy exige X-CSRF-Token (lo toma de la cookie ta_console_csrf
+ * que el propio navegador envía); el control plane valida el hash (REQ-SEC-010).
  */
 export class ApiError extends Error {
   status: number;
@@ -42,7 +42,8 @@ export interface RequestOptions {
 
 function csrfFromCookie(): string | null {
   if (typeof document === "undefined") return null;
-  const m = document.cookie.match(/(?:^|;\s*)ta_csrf=([^;]+)/);
+  // ta_console_csrf (prefijo por app — F2: no colisiona con otras apps del host).
+  const m = document.cookie.match(/(?:^|;\s*)ta_console_csrf=([^;]+)/);
   return m ? decodeURIComponent(m[1]) : null;
 }
 
@@ -121,4 +122,58 @@ export async function downloadBlob(path: string, filename: string): Promise<void
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
+}
+
+/** URL del proxy BFF para una ruta API del control plane (p. ej. assets de
+ *  branding en <img src> — la cookie httpOnly de sesión viaja sola). */
+export function proxyUrl(apiPath: string): string {
+  return `/api/proxy${apiPath}`;
+}
+
+/** Upload multipart (spec 028: POST /api/branding/assets) vía el proxy BFF.
+ *  El navegador fija el Content-Type multipart con el boundary; el proxy
+ *  reenvía el cuerpo y el header tal cual. CSRF igual que api(). */
+export async function apiUpload<T = unknown>(
+  path: string,
+  form: FormData,
+): Promise<T> {
+  const headers: Record<string, string> = {};
+  const csrf = csrfFromCookie();
+  if (csrf) headers["X-CSRF-Token"] = csrf;
+
+  let res: Response;
+  try {
+    res = await fetch(`/api/proxy${path}`, {
+      method: "POST",
+      headers,
+      body: form,
+      cache: "no-store",
+    });
+  } catch (cause) {
+    if (cause instanceof DOMException && cause.name === "AbortError") throw cause;
+    throw new ApiError(
+      503,
+      "unreachable",
+      "The Admin Console server is unreachable. Check your connection and try again.",
+      null,
+    );
+  }
+
+  let payload: unknown = null;
+  try {
+    payload = await res.json();
+  } catch {
+    // respuesta no-JSON
+  }
+  if (!res.ok) {
+    const env = (payload ?? {}) as ErrorEnvelope;
+    const err = env.error ?? {};
+    throw new ApiError(
+      res.status,
+      err.reason ?? "error",
+      err.message ?? `Upload failed (HTTP ${res.status}).`,
+      err.request_id ?? null,
+    );
+  }
+  return payload as T;
 }

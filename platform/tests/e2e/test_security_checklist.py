@@ -13,7 +13,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tests.conftest import (
-    PLATFORM_DIR, TENANT_A, TENANT_B, USER_ALICE, bearer_headers, mint,
+    PLATFORM_DIR, TENANT_A, TENANT_B, TEST_DB, USER_ALICE, bearer_headers,
+    mint,
 )
 
 APP_DIR = os.path.join(PLATFORM_DIR, "app")
@@ -180,7 +181,10 @@ def test_c1_c4_secrets_one_time_and_never_in_db(client, idp, admin_conn):
 
     # C4: NINGUNO de los dos plaintext vive en la DB (cifrado / hash only)
     dsn = ("host=127.0.0.1 port=55432 user=postgres "
-           "password=trustlocal dbname=trust_agent_platform_test")
+           "password=trustlocal "
+           # t_e000bf40: conftest.TEST_DB (import-time) — os.environ
+           # ['TRUST_TEST_DB'] ya fue purgado por el fixture env (H6)
+           f"dbname={TEST_DB}")
     with psycopg.connect(dsn) as c, c.cursor() as cur:
         for table, col in [
             ("vault_credentials", "ciphertext_secret::text"),

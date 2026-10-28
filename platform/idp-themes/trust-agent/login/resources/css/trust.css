@@ -1,0 +1,118 @@
+/* Trust Agent white-label brand (spec 015 D-AUTH-01).
+ *
+ * Layers on top of keycloak.v2 (PatternFly v5). Palette mirrors the Admin
+ * Console (platform/console/src/app/globals.css) so the Keycloak surface is
+ * indistinguishable from the app: the user never notices the IdP.
+ * All rules are additive overrides — no PatternFly class is redefined.
+ */
+
+/* Page background: the console's soft gray instead of KC's default. */
+body#keycloak-bg {
+  background-color: #f8f9fb;
+  background-image: radial-gradient(
+      circle at 12% 18%,
+      rgba(201, 1, 4, 0.05) 0%,
+      transparent 42%
+    ),
+    radial-gradient(circle at 88% 82%, rgba(29, 78, 216, 0.04) 0%, transparent 45%);
+}
+
+/* Header brand: the realm displayNameHtml ("Trust Agent") as a wordmark. */
+#kc-header-wrapper.pf-v5-c-brand {
+  font-size: 1.35rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: #111827;
+  padding: var(--pf-v5-global--spacer--lg, 2rem) 0 0;
+}
+#kc-header-wrapper.pf-v5-c-brand::before {
+  content: "";
+  display: inline-block;
+  width: 0.55rem;
+  height: 0.55rem;
+  margin-right: 0.5rem;
+  margin-bottom: 0.06rem;
+  border-radius: 2px;
+  background: #c90104;
+  transform: rotate(45deg);
+}
+
+/* Card: same elevation/border language as the console panels. */
+.pf-v5-c-login__main {
+  border-radius: 14px;
+  border: 1px solid #e5e8ee;
+  box-shadow: 0 1px 2px rgba(17, 24, 39, 0.05),
+    0 12px 32px -12px rgba(17, 24, 39, 0.12);
+}
+
+/* Titles/labels: console typography. */
+h1#kc-page-title {
+  color: #111827;
+  letter-spacing: -0.01em;
+}
+.pf-v5-c-form__label-text {
+  color: #374151;
+  font-weight: 500;
+}
+
+/* Primary action: the console accent red. */
+.pf-v5-c-button.pf-m-primary {
+  --pf-v5-c-button--m-primary--BackgroundColor: #c90104;
+  --pf-v5-c-button--m-primary--hover--BackgroundColor: #a80103;
+  --pf-v5-c-button--m-primary--focus--BackgroundColor: #a80103;
+  --pf-v5-c-button--m-primary--Color: #ffffff;
+  border-radius: 8px;
+  font-weight: 600;
+  transition: background-color 160ms ease;
+}
+.pf-v5-c-button.pf-m-primary:hover {
+  transform: translateY(-1px);
+}
+.pf-v5-c-button.pf-m-secondary {
+  border-radius: 8px;
+}
+
+/* Inputs: console field styling. */
+.pf-v5-c-form-control {
+  border-radius: 8px;
+  border-color: #e5e8ee;
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+.pf-v5-c-form-control:focus {
+  border-color: #c90104;
+  box-shadow: 0 0 0 3px rgba(201, 1, 4, 0.12);
+}
+
+/* "Sign in with Google" row: align with the app's secondary buttons. */
+.pf-v5-c-login__main-footer-links-item-link {
+  border-radius: 8px;
+}
+
+/* Links (e.g. "Register" / "Forgot password?"): accent, no underline until
+ * hover — same affordance as the console. */
+.pf-v5-c-login__main-footer a,
+#kc-form-buttons a,
+a.pf-v5-c-button.pf-m-link {
+  color: #c90104;
+}
+.pf-v5-c-login__main-footer a:hover {
+  color: #a80103;
+  text-decoration: underline;
+}
+
+/* Alerts (errors): softer red, console danger tone. */
+.pf-v5-c-alert.pf-m-inline.pf-m-danger {
+  --pf-v5-c-alert--m-danger--BackgroundColor: rgba(185, 28, 28, 0.08);
+  border-radius: 8px;
+}
+
+/* Reduced motion: hover lift is decoration only. */
+@media (prefers-reduced-motion: reduce) {
+  .pf-v5-c-button.pf-m-primary:hover {
+    transform: none;
+  }
+  .pf-v5-c-form-control,
+  .pf-v5-c-button.pf-m-primary {
+    transition: none;
+  }
+}

@@ -1,0 +1,2 @@
+{"ts": 1793068619, "event": "attestation_skipped", "trigger": "startup", "reason": "device not enrolled"}
+{"ts": 1793068638, "pid": 854655, "event": "auto_enroll_attempt", "org_code": "hermes-dl-e2e", "outcome": "pending", "detail": ""}

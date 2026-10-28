@@ -12,7 +12,7 @@ from sqlalchemy.engine import Connection
 
 from ..audit import service as audit
 from ..auth.service import Principal
-from ..errors import not_found, permission_denied, validation_failed
+from ..errors import budget_cutoff, not_found, permission_denied, validation_failed
 
 
 def _actor_role(principal: Principal) -> str:
@@ -269,12 +269,21 @@ def list_for_user(conn: Connection, principal: Principal) -> list[dict]:
 
 
 def invoke_gate(
-    conn: Connection, principal: Principal, agent_id: str
+    conn: Connection, principal: Principal, agent_id: str,
+    model_name: str | None = None,
 ) -> dict:
     """POST /api/agents/{id}/invoke: authorize + audit (REQ-AGT-004/005).
 
     Model consumption is billed to the INVOKER because the desktop calls
     the gateway with the invoker's virtual key.
+
+    Spec 020 (REQ-020-003): the SAME policy engine that governs any
+    agent applies here — deny-overrides, no exceptions for adopted
+    default profiles. When the caller names a model, it must be in his
+    effective approved set (org∩dept∩user ∩ policy allowed_models);
+    a cut-off budget refuses authorization outright (the gateway would
+    reject the call anyway — the blocked virtual key remains the
+    primary cutoff, D-GOV-07).
     """
     agent, access = visible_agent(conn, principal, agent_id)
     if access not in ("own", "invoke"):
@@ -293,14 +302,42 @@ def invoke_gate(
             if access == "view"
             else "You cannot invoke this agent."
         )
+
+    from . import budgets
+
+    status = budgets.status_for_user(
+        conn, principal.tenant_id, principal.user_id,
+        principal.department_id,
+    )
+    if status["cutoff"]:
+        audit.emit(
+            conn, tenant_id=principal.tenant_id,
+            actor_role=_actor_role(principal),
+            action="agent.invoke_denied", actor_id=principal.user_id,
+            target_type="agent", target_id=agent_id,
+            payload={"reason": "budget_cutoff",
+                     "cutoff_level": status["cutoff_level"]},
+        )
+        conn.commit()
+        raise budget_cutoff()
+
+    if model_name is not None:
+        # 403 model_not_approved + audit model.access_denied; commits its
+        # own denial audit before raising (D-CP-04).
+        from ..models.access import assert_model_allowed
+
+        assert_model_allowed(conn, principal, model_name)
+
     audit.emit(
         conn, tenant_id=principal.tenant_id, actor_role=_actor_role(principal),
         action="agent.invoked", actor_id=principal.user_id,
         target_type="agent", target_id=agent_id,
-        payload={"billed_to_user_id": principal.user_id},
+        payload={"billed_to_user_id": principal.user_id,
+                 **({"model_name": model_name} if model_name else {})},
     )
     return {
         "agent_id": agent_id,
         "billed_to_user_id": principal.user_id,
         "access": access,
+        **({"model_name": model_name} if model_name else {}),
     }

@@ -24,7 +24,7 @@ Esta spec define el **flujo de enrolamiento de dispositivos de primera clase** (
 - Revocación con **invalidación inmediata**: `status=revoked` + revocación de las sesiones del dispositivo en la misma transacción (REQ-DEV-004 ≤ 60 s por construcción).
 - `GET /api/devices/me` — dispositivos propios del usuario (dashboard del desktop).
 - `last_seen_at` por dispositivo, actualizado por `DeviceGate` con throttle.
-- Integración con `audit_log`: `device.enrolled` / `device.approved` / `device.revoked` con `device_id` (REQ-DEV-006).
+- Integración con `audit_log`: `device.enrolled` / `device.approved` / `device.rejected` / `device.revoked` con `device_id` (REQ-DEV-006).
 - **Evolución de la capa de datos**: columna `devices.enrollment_token_hash` (migración Alembic `0003_devices_enrollment_token` — re-apilada sobre `0002_login_throttle` de la lane hermana de rate limiting, única cabeza; paridad `schema.sql` ↔ migración intacta, D-DB-12).
 
 **Fuera de alcance**:
@@ -47,7 +47,7 @@ Esta spec define el **flujo de enrolamiento de dispositivos de primera clase** (
 | D-DEV-07 | **Revocación sincrónica e inmediata**: `revoke` hace `UPDATE devices SET status='revoked'` + `UPDATE sessions SET status='revoked' WHERE device_id=...` + audit en LA MISMA transacción; el siguiente request con ese device token → 401 `device_not_authorized` (sin cache, D-CP-13). REQ-DEV-004 (≤ 60 s) se cumple por construcción. | REQ-DEV-004, D-CP-13 |
 | D-DEV-08 | **RBAC de administración**: permiso `devices.manage` (org_admin + dept_admin, matriz §2.1 en datos). `dept_admin` solo administra dispositivos de usuarios de SUS departamentos (fuera de scope → 404, D-CP-09); cross-tenant → 404. La aprobación registra `approved_by` + `approved_at`. | REQ-DEV-002, D-CP-08/09 |
 | D-DEV-09 | **`last_seen_at` con throttle**: `DeviceGate` actualiza `devices.last_seen_at` solo si el valor almacenado tiene > 60 s (máx. una escritura por minuto por dispositivo; el gate sigue siendo lectura de estado en cada request). | REQ-DEV-005 |
-| D-DEV-10 | **Audit con `device_id`**: `device.enrolled` (actor = usuario que enrola), `device.approved` (actor = admin que aprueba), `device.revoked` (reject y revoke); `actor_role` = rol del principal que actúa, `target_type='device'`, `target_id=device_id`, `device_id` en el evento (REQ-DEV-006). | REQ-AUD-003, catálogo `audit_actions` |
+| D-DEV-10 | **Audit con `device_id`**: `device.enrolled` (actor = usuario que enrola), `device.approved` (actor = admin que aprueba), `device.rejected` (reject de un pending) y `device.revoked` (revoke con corte de sesiones) — acciones DISTINTAS para que el trail distinga ambas decisiones de gobernanza (F4, QA t_877b0cb5); `actor_role` = rol del principal que actúa, `target_type='device'`, `target_id=device_id`, `device_id` en el evento (REQ-DEV-006). | REQ-AUD-003, catálogo `audit_actions` |
 | D-DEV-11 | **Evolución de capa de datos por la línea canónica**: nueva columna `devices.enrollment_token_hash text` (nullable) vía migración Alembic `0003_devices_enrollment_token` en `db/migrations` (única línea, D-CP-11; re-apilada sobre `0002_login_throttle` — lane hermana t_4da60ada — para mantener una única cabeza) + edición de `db/schema.sql` manteniendo la paridad pg_dump (test db/tests/test_schema_parity.py en verde). El test de versión de Alembic calcula el head con `alembic heads` (sin hardcodear). | D-DB-12, D-CP-11 |
 
 ## 3. Requisitos (formato EARS)
@@ -61,7 +61,7 @@ Trazabilidad con spec 001 §4.7 (REQ-DEV-001…006); los requisitos nuevos ampl�
 > **AC-DEV-001a**: org_code equivocado → 422 `validation_failed` y 0 filas nuevas; JWT sin evidencia MFA (sin `amr` con `mfa`/`otp` y `acr` < `TRUST_MFA_MIN_ACR` — D-MFA-01, spec 011) → 403 `mfa_required`; `public_key` inválida → 422; JWT con firma inválida → 401 `invalid_token`.
 
 **REQ-DEV-002** (M) [spec 001, I5] — Cuando un admin con permiso `devices.manage` aprueba un dispositivo `pending` de su scope, el sistema lo pasa a `active` registrando `approved_at`/`approved_by` y emite (en el canje) un device token firmado; si lo rechaza o revoca, pasa a `rejected`/`revoked`, pierde el `enrollment_token` y todo acceso.
-> **AC-DEV-002**: approve sobre pending → 200 `{status:"active"}` con `approved_at`/`approved_by` persistidos y evento `device.approved`; reject sobre pending → 200 `{status:"rejected"}` y evento `device.revoked`; approve sobre no-pending → 409 `conflict`.
+> **AC-DEV-002**: approve sobre pending → 200 `{status:"active"}` con `approved_at`/`approved_by` persistidos y evento `device.approved`; reject sobre pending → 200 `{status:"rejected"}` y evento `device.rejected` (NO `device.revoked` — el trail distingue reject de revoke, F4); approve sobre no-pending → 409 `conflict`.
 
 **REQ-DEV-003** (M) [spec 001] — Cuando un dispositivo no enrolado, pendiente, rechazado o revocado envía una petición a una ruta con `DeviceGate`, el sistema la rechaza con 401 `reason=device_not_authorized` (ya implementado en spec 003; esta spec añade `last_seen_at`).
 > **AC-DEV-003**: request con device token de dispositivo `active` → 200 y `devices.last_seen_at` avanza (throttle 60 s); dispositivo revocado → 401 en el request siguiente.
@@ -73,7 +73,7 @@ Trazabilidad con spec 001 §4.7 (REQ-DEV-001…006); los requisitos nuevos ampl�
 > **AC-DEV-005**: org_admin lista todos los del tenant; dept_admin solo los de sus deptos (dispositivo de otro depto → ausente de la lista y 404 en detail); user sin `devices.manage` → 403; cross-tenant → 404/ausente.
 
 **REQ-DEV-006** (M) [spec 001, I9] — Cuando se registra un evento de audit del flujo de dispositivos, el sistema incluye `device_id`, el actor y su rol.
-> **AC-DEV-006**: tras el flujo completo existen eventos `device.enrolled`, `device.approved`, `device.revoked` con `device_id` no nulo y `actor_id` del principal actuante.
+> **AC-DEV-006**: tras el flujo completo existen eventos `device.enrolled`, `device.approved`, `device.revoked` con `device_id` no nulo y `actor_id` del principal actuante; un reject emite `device.rejected` (nunca `device.revoked`).
 
 **REQ-DEV-007** (M) [ADR-006, D-DEV-03/04] — Cuando el desktop canjea el `enrollment_token`, el sistema responde según estado: `pending` → 202 sin consumir; `active` + hash válido → 200 con device token firmado (consume el hash); hash consumido/inválido o dispositivo `rejected`/`revoked` → 410 `gone`; nunca revela cuál fue la causa.
 > **AC-DEV-007**: canje en pending → 202 `{status:"pending"}` (repetible); tras approve, canje → 200 `{device_token}`; segundo canje → 410 `gone`; canje con token de otro dispositivo → 410; el device token canjeado pasa el `DeviceGate`.

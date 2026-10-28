@@ -13,11 +13,59 @@ from typing import Any
 from ..config import get_settings
 from ..db import build_engine, tenant_tx
 from ..org.invite import register as register_invite_handler
-from .service import _HANDLERS, build_migrator_engine, claim_next, complete, fail
+from .service import (
+    _HANDLERS,
+    build_migrator_engine,
+    claim_next,
+    complete,
+    enqueue,
+    fail,
+    register_handler,
+)
 
 # Spec 012: the worker knows how to run "user.invite" jobs (Keycloak Admin
 # REST side lives in the handler, D-ORG-02).
 register_invite_handler()
+
+
+# Spec 032 (D-032-03): periodic catalog refresh job — re-syncs the model
+# catalog of the tenant from its connected APIs (central gateway + every
+# active llm connection). Real fetches, audited per refresh.
+def _handle_catalog_refresh(conn, job) -> dict:
+    from ..models import discovery
+
+    return discovery.refresh_tenant(
+        conn, str(job["tenant_id"]), actor_role="system"
+    )
+
+
+register_handler("model.catalog_refresh", _handle_catalog_refresh)
+
+
+def enqueue_periodic_refresh(app_engine, migrator_engine, hours: float) -> int:
+    """Idempotently enqueue one refresh job per window for EVERY active
+    tenant (restart-safe: the idempotency key dedupes within the window;
+    nothing critical lives in this process, C2).
+
+    Spec 018 §5 (D-018-07): the refresh covers all active tenants — the
+    central leg reconciles the catalog against the live upstream /models,
+    and central drift affects every tenant, not only those with llm
+    connections (spec 032 behavior).
+    """
+    window = int(time.time() // (max(hours, 0.1) * 3600))
+    from ..models import discovery
+
+    count = 0
+    for tenant_id in discovery.active_tenants(migrator_engine):
+        enqueue(
+            app_engine,
+            tenant_id=tenant_id,
+            job_type="model.catalog_refresh",
+            payload={"scope": "tenant", "window": window},
+            idempotency_key=f"catalog-refresh-{window}",
+        )
+        count += 1
+    return count
 
 
 def run_once(app_engine, migrator_engine) -> int:
@@ -69,12 +117,34 @@ def main(argv: list[str] | None = None) -> int:
     signal.signal(signal.SIGTERM, _stop)
     signal.signal(signal.SIGINT, _stop)
 
+    # Spec 032: periodic catalog-refresh enqueue (idempotent per window).
+    next_refresh_enqueue = 0.0
+
     while not stop["flag"]:
         ran = run_once(app_engine, migrator_engine)
         if args.once and ran == 0:
             return 0
         if ran == 0:
             time.sleep(args.interval)
+        if time.time() >= next_refresh_enqueue:
+            try:
+                enqueued = enqueue_periodic_refresh(
+                    app_engine, migrator_engine,
+                    settings.catalog_refresh_hours,
+                )
+                if enqueued:
+                    print(
+                        f"[jobs-worker] catalog refresh enqueued for "
+                        f"{enqueued} tenant(s)",
+                        flush=True,
+                    )
+            except Exception as exc:  # scheduling never kills the loop
+                print(
+                    f"[jobs-worker] catalog refresh enqueue failed: "
+                    f"{type(exc).__name__}: {exc}",
+                    flush=True,
+                )
+            next_refresh_enqueue = time.time() + 900.0
     return 0
 
 

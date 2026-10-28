@@ -1,0 +1,50 @@
+│  ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠿⣿⣦⣤⣈⠁⢠⣴⣿⠿⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀  file: patch, read_file, search_files, write_file                                                                                                                    │
+│  ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠉⠻⢿⣿⣦⡉⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀  image_gen: image_generate                                                                                                                                           │
+│  ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠘⢷⣦⣈⠛⠃⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀  memory: memory                                                                                                                                                      │
+│  ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢠⣴⠦⠈⠙⠿⣦⡄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀  (and 6 more toolsets...)                                                                                                                                            │
+│  ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠸⣿⣤⡈⠁⢤⣿⠇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀                                                                                                                                                                      │
+│  ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠉⠛⠷⠄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀  Available Skills                                                                                                                                                    │
+│  ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣀⠑⢶⣄⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀  autonomous-ai-agents: claude-code, codex, computer-use, hermes-agent, opencode                                                                                      │
+│  ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣿⠁⢰⡆⠈⡿⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀  creative: architecture-diagram, ascii-video, baoyu-infographic, claude-design, design-md, humanizer, +4 more                                                        │
+│  ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠳⠈⣡⠞⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀  devops: sdlc-review                                                                                                                                                 │
+│  ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀  email: email-inbox-triage, himalaya                                                                                                                                 │
+│                                  media: gif-search, songsee, youtube-content                                                                                                                         │
+│  glm-5.2 · Nous Research         note-taking: obsidian                                                                                                                                               │
+│  /root/trust-agent/platform      productivity: airtable, box, document-to-action-items, docx, google-workspace, maps, +8 more                                                                        │
+│  Session: b9e8a154               research: arxiv, competitor-news-monitor, grounded-citations, llm-wiki                                                                                              │
+│                                  social-media: xurl                                                                                                                                                  │
+│                                  software-development: codebase-inspection, dogfood, github, hermes-agent-skill-authoring, +8 more                                                                   │
+│                                  web: blocked-page-recovery                                                                                                                                          │
+│                                                                                                                                                                                                      │
+│                                  21 tools · 54 skills · /help for commands                                                                                                                           │
+│                                  ⚠ update available                                                                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+Welcome to Hermes Agent! Type your message or /help for commands.
+⚠  Secret redaction is DISABLED (HERMES_REDACT_SECRETS=false). API keys and tokens may appear verbatim in chat output, session JSONs, and logs. Set security.redact_secrets: true in config.yaml to
+re-enable.
+✦ Tip: Cron supports relative delays (30m), intervals (every 2h), cron expressions, and ISO timestamps.
+
+
+────────────────────────────────────────
+● Run the governance_status tool and show me its complete output.
+Run the governance_status tool and show me its complete output.
+Initializing agent...
+────────────────────────────────────────
+
+⚠️   Attempt 1/3, not retryable failed: HTTP 401: Authentication Error, Key is blocked. Update via `/key/unblock` if you're an admin.
+❌ custom rejected the request and retrying won't help: HTTP 401: Authentication Error, Key is blocked. Update via `/key/unblock` if you're an admin.
+   💡 Your API key was rejected by the provider. Check:
+      • Is the key valid? Run: hermes setup
+      • Does your account have access to glm-5.2?
+ ─  ☤ Hermes  ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+ custom rejected your API key, so the model can't be reached. Update it in Settings → Providers, or run hermes setup in a terminal.
+
+ Provider said: HTTP 401: Authentication Error, Key is blocked. Update via /key/unblock if you're an admin.
+
+ ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ☤ glm-5.2 │ 0/1M │ [░░░░░░░░░░] 0% │ 4m │ ⏲ 1s │ ✓ 0s                                                                                                                   ─ Run the governance_status...
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ Plan a feature, then build it step by step
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

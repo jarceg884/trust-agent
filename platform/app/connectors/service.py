@@ -28,6 +28,14 @@ from ..governance.service import effective_policy_for_user
 _FORBIDDEN_CONFIG_KEYS = ("password", "secret", "token", "api_key", "credential")
 
 
+def connection_tokens_allow(tokens: set[str], connector_slug: str) -> bool:
+    """Spec 024 (REQ-024-008, D-24-03): a catalog connector is usable iff its
+    slug is covered by the effective ``allowed_connections`` tokens — the
+    wildcard ``*`` (default) means "whole catalog, still gated by
+    allowed_connectors"; anything else must list the slug explicitly."""
+    return "*" in tokens or connector_slug in tokens
+
+
 def _to_uuid(value: str) -> str:
     try:
         _uuid.UUID(value)
@@ -160,6 +168,10 @@ def sweep_after_policy_change(
             conn, user_id=owner_id, department_id=owner_dept
         )
         allowed = set(policy.get("allowed_connectors") or [])
+        # Spec 024 (REQ-024-008): the combined rule — a catalog slug is
+        # usable iff it is in allowed_connectors AND covered by the
+        # allowed_connections tokens (wildcard default = whole catalog).
+        tokens = set(policy.get("allowed_connections") or [])
         messaging = policy.get("messaging_permissions") or {}
         instances = conn.execute(
             text("SELECT id, connector_slug FROM connector_instances "
@@ -175,13 +187,17 @@ def sweep_after_policy_change(
             ).mappings().first()
             # Same rule as _check_instance_governance (D-VC-03): the
             # allow-list for everything, the messaging map on top for
-            # messaging platforms.
+            # messaging platforms — and the spec 024 combined
+            # allowed_connections rule on top of BOTH.
             if cat and cat["category"] == "messaging":
                 still_allowed = bool(
                     (messaging.get(slug) or {}).get("allowed", False)
-                )
+                ) and connection_tokens_allow(tokens, slug)
             else:
-                still_allowed = slug in allowed
+                still_allowed = (
+                    slug in allowed
+                    and connection_tokens_allow(tokens, slug)
+                )
             if still_allowed:
                 continue
             cut = disconnect_connector_instances(
@@ -225,6 +241,7 @@ def list_available(conn: Connection, principal: Principal) -> list[dict]:
     (REQ-CON-003: the desktop shows only what policy allows)."""
     policy = effective_policy_for_user(conn, principal)
     allowed = set(policy.get("allowed_connectors") or [])
+    tokens = set(policy.get("allowed_connections") or [])
     messaging = policy.get("messaging_permissions") or {}
     rows = conn.execute(
         text(
@@ -237,6 +254,8 @@ def list_available(conn: Connection, principal: Principal) -> list[dict]:
     for r in rows:
         if r["slug"] not in allowed:
             continue
+        if not connection_tokens_allow(tokens, r["slug"]):
+            continue  # spec 024: not covered by allowed_connections
         item = dict(r)
         if r["category"] == "messaging":
             perm = messaging.get(r["slug"]) or {}
@@ -265,11 +284,21 @@ def _check_instance_governance(
     connector_slug: str,
     mode: str | None,
 ) -> str:
-    """Connector allow-list + messaging map gates (D-VC-03). -> final mode."""
+    """Connector allow-list + messaging map gates (D-VC-03). -> final mode.
+
+    Spec 024 (REQ-024-008): the effective ``allowed_connections`` tokens
+    apply on top of the allow-list (wildcard default = whole catalog)."""
     policy = effective_policy_for_user(conn, principal)
     if connector_slug not in (policy.get("allowed_connectors") or []):
         raise connector_not_allowed(
             f"Connector '{connector_slug}' is not allowed by policy."
+        )
+    if not connection_tokens_allow(
+        set(policy.get("allowed_connections") or []), connector_slug
+    ):
+        raise connector_not_allowed(
+            f"Connector '{connector_slug}' is not covered by the "
+            "allowed_connections policy."
         )
     cat = conn.execute(
         text(

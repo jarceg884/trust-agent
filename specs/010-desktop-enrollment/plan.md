@@ -18,7 +18,7 @@ Navegador (usuario final)          Servidor Next.js (local, :9090)         Contr
 5. GET /auth/callback       ─────► route handler: canje code→tokens (server-side,
                                    con verifier de la cookie) ─────────────────────────────────────────────►  token endpoint
                                    POST /api/auth/session {id_token, kind:"desktop"} ──────────►  mint sesión
-                                   set cookies httpOnly: ta_session, ta_refresh, ta_csrf, ta_idtoken
+                                   set cookies httpOnly: ta_desktop_session, ta_desktop_refresh, ta_desktop_csrf, ta_desktop_idtoken
 6. GET /dashboard           ◀───── RSC: fetch server-side /api/me, /api/me/budget,
                                    /api/me/policies, /api/models/allowed-for-me,
                                    /api/devices/me (Bearer desde la cookie)
@@ -45,7 +45,7 @@ src/
   lib/
     config.ts                   # env: API base, IdP base, client_id, redirect_uri, port
     control-plane.ts            # fetch server-side con Bearer + envelope §5.2 + ApiError
-    session.ts                  # cookies httpOnly (ta_session, ta_refresh, ta_csrf, ta_idtoken)
+    session.ts                  # cookies httpOnly (ta_desktop_session/refresh/csrf/idtoken — prefijo por app, F2)
     oidc.ts                     # PKCE S256 (verifier/challenge), authorize URL, token exchange
     format.ts                   # USD centavos → display, fechas ISO → relativas
   components/

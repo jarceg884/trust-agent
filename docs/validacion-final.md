@@ -191,9 +191,12 @@ Leyenda: ✅ verificado con evidencia real (test suite / E2E en vivo / probe).
 1. **KEK del vault por env**: cada lanzamiento debe recibir la MISMA `TRUST_VAULT_KEK_B64`
    o las credenciales cifradas previas son indecifrables (fail-closed, pero sin runbook de
    rotación). El empaquetado (t_d36b3f31) debe fijar esto.
-2. **Doble de LiteLLM**: toda la validación de gasto/corte usa el doble declarado con la
-   semántica documentada. Contra un LiteLLM real hay que re-validar ingesta de spend,
-   bloqueo de keys y 403 de modelos no aprobados (solo cambia `TRUST_LITELLM_BASE_URL`).
+2. **Doble de LiteLLM**: toda la validación de gasto/corte usaba el doble declarado con la
+   semántica documentada. **RESUELTO (2026-10-24, t_c4766c4d)**: re-validación completa
+   contra un proxy LiteLLM REAL v1.106.3 con upstream Huawei MaaS — ver §9. El doble se
+   conserva para la suite pytest (D-GOV-15); el stack compose queda apuntando al gateway
+   real vía `.env` (reversible: quitar `TRUST_LITELLM_BASE_URL`/`TRUST_LITELLM_MASTER_KEY`
+   de `.env` y `docker compose up -d --no-deps --force-recreate api spend-worker`).
 3. **Job worker y spend worker como procesos `--once`**: en la demo corren on-demand;
    el empaquetado debe supervisarlos (REQ-SEC-009) con healthcheck.
 4. **Sin VCS** (H7) — el riesgo operativo mayor del proyecto hoy.
@@ -243,3 +246,153 @@ docker exec trust-db psql -U trust_agent -U postgres -d trust_agent \
 - **Nueva tarea dev (H2+H3+H6)**: robustez del pipeline de gasto y de tests.
 - **Nueva tarea dev (H4+H5)**: gaps de spec 001 con severidad.
 - **t_d36b3f31** (deploy, todo): empaquetado single-node — debe absorber los riesgos §6.
+
+---
+
+## 9. Re-validación contra un proxy LiteLLM REAL (t_c4766c4d, 2026-10-24, dev)
+
+> Cierra el riesgo 2 de §6: la validación de gasto/corte/model-access corría solo contra
+> el doble declarado (D-GOV-15). Esta sección re-valida el MISMO plano de gobernanza
+> contra un gateway verdadero. Evidencia completa:
+> `docs/evidencia/litellm-real/revalidate_litellm_real_2026-10-24.log` (**47 PASS, 0 FAIL**),
+> generada por `platform/scripts/revalidate_litellm_real.py`.
+
+### 9.1 Infraestructura real levantada
+
+| Pieza | Detalle |
+|---|---|
+| Proxy LiteLLM | **v1.106.3** (pinneada, ver §9.5), venv propio en `litellm-real/`, escucha SOLO en `127.0.0.1:4000` |
+| DB de budgets | PostgreSQL 17 DEDICADO (contenedor `trust-agent-litellm-db`, `127.0.0.1:55433`, DB `litellm`) — sin DB los budgets fallan abiertos; verificado `LiteLLM_BudgetTable` presente (106 tablas) |
+| Upstream | Huawei Cloud MaaS ap-southeast-1 (OpenAI-compatible), modelo **glm-5.2** (verificado en vivo: aparece en `/openai/v1/models` y responde chat/completions), key 'Inforum' vía env fuera del repo (`litellm-real/.env`, chmod 600, gitignore) |
+| Pricing | REAL MaaS GLM-5.2 Period 1: **$1.40/M input, $4.40/M output, $0.26/M cache-hit** (support.huaweicloud.com price-maas-0002), fijado vía `model_info` en `litellm-real/config.yaml` |
+| Stack | `api`+`spend-worker` del compose apuntando al gateway real vía `TRUST_LITELLM_BASE_URL`/`TRUST_LITELLM_MASTER_KEY` de `.env` (compose ahora env-driven, default = doble 39989) |
+
+### 9.2 Qué se re-validó (todo en vivo, nada simulado)
+
+- **(a) Ingesta de spend** — el spend worker del stack contra `/spend/logs/v2` del proxy
+  real: TODOS los logs de la key quedaron en el ledger (5/5: 3 éxitos con costo + 2
+  intentos fallidos a $0 que el gateway también loguea), cada fila calca su log
+  (costo redondeado), counters y overview descontados, idempotencia demostrada
+  (re-ciclos con `ingested: 0`).
+- **(b) Virtual key + corte NATIVO** — key por usuario con `max_budget=0.02 USD` y
+  `budget_duration='30d'` heredados del presupuesto; el gateway CORTA solo
+  (HTTP 422 `budget_exceeded`, "Current cost: 0.0277, Max budget: 0.02") con el
+  control plane detenido. Bloqueo/desbloqueo POR HASH sha256 verificados
+  (`/key/info`, `/key/block`, `/key/unblock`, `/key/update` aceptan el hash; la DB
+  guarda solo `sha256(key)`).
+- **(c) Model access** — modelo no aprobado (`deepseek-v3`, en catálogo global pero no
+  aprobado para el tenant) → **403 del gateway real** ("not available for this API key");
+  el check de modelos ocurre antes de rutear.
+- **(d) Pricing real** — el costo de cada log sigue la fórmula MaaS GLM-5.2 ±5%
+  (28 logs verificados, con cache-hit a $0.26/M); `POST /reload/model_cost_map` → 200
+  ("4260 models updated") y NO pisa los overrides de `model_info`; invocación
+  post-reload sigue preciada.
+- **(e) Loop e2e completo** — key → invocación REAL MaaS 200 → ingest → corte del
+  control plane (budget < gasto con `force`, auditable) → key BLOQUEADA por hash →
+  **401** del gateway → notificación `budget_cutoff` → `/api/budgets/me cutoff=true
+  level=user` → audit `budget.cutoff` → recuperación (subir budget) → key rehabilitada
+  → **200**. Cadena de audit íntegra (CLI exit 0), 13 acciones en el trail.
+
+### 9.3 Bugs REALES encontrados por la re-validación (corregidos)
+
+1. **`model_plan` explícito resolvía CERO modelos** (`app/tenants/provision.py`): la
+   comprensión `found = {...}` consumía el `Result` de SQLAlchemy (no admite
+   re-iteración) y el loop de INSERT veía 0 filas → rollback total. Nunca detectado
+   porque la suite solo usaba `'standard'` o listas con modelo inválido (fallan antes
+   del loop). Fix + test de regresión `test_provision_explicit_model_plan`.
+2. **`_parse_log` leía campos que no existen en el proxy real** (`app/models/litellm.py`):
+   el hash viaja en `api_key` (no `user_api_key_hash`) y el modelo público en
+   `model_group` (no `model`, que es el interno `openai/glm-5.2`). El worker descartaba
+   el 100% de los logs reales. Fix con cadena de fallback (compatible con el doble).
+3. **`spend_logs_metadata` NO se estampa** en v1.106.3 (llega `null`): la resolución
+   log→tenant/usuario POR HASH es el único camino — ya existía como fallback y es
+   ahora el mecanismo primario documentado.
+4. **`max_budget` fosilizado en la key** (divergencia de gobernanza): al SUBIR el
+   presupuesto, desbloquear la key no basta — el gateway sigue cortando con el
+   `max_budget` nativo estampado al emitir. Fix: el enforcement re-sincroniza con
+   `POST /key/update {"key": "<hash>", "max_budget": <actual>}` cuando el budget
+   difiere del estampado (`app/governance/spend.py`, `budget_syncs` visible en la
+   salida del worker; doble con `/key/update`).
+
+### 9.4 Hallazgos de comportamiento del gateway real
+
+- Budget excedido → **422** por defecto (no 429); key bloqueada → **401**; modelo no
+  permitido → **403** antes de rutear.
+- La última llamada puede completarse POR ENCIMA del max (el check es `spend < max`
+  antes de la request): el corte llega en la siguiente.
+- Los intentos fallidos (403/422) también se loguean con `spend: 0.0` — telemetría
+  honesta que el ledger conserva.
+- `/key/generate` devuelve `key` + `token`(=sha256); `/key/info` anida la info bajo
+  `"info"`.
+- MaaS cobra pricing diferencial por horario (Period 1/2 GMT+8) y cache-hit; el cost
+  map es estático → se fija Period 1 (peor caso) y el costo real puede ser MENOR.
+
+### 9.5 Seguridad / supply chain (contexto del operador, 2026-10-24)
+
+- **litellm PINNEADO a 1.106.3** (`litellm-real/requirements.txt`): v1.107.0 (21-oct)
+  se publicó con malware en PyPI/Docker (retirada); 1.106.3 es post-containment y cubre
+  CVE-2026-114612 (escalada a proxy admin) y CVE-2026-49468 (auth bypass por Host
+  header). JAMÁS `latest` ni tags flotantes.
+- **PENDIENTE 2026-10-27**: disclosure EMBARGOADA — re-check obligatorio antes de
+  cualquier upgrade (anotado en el skill `litellm-proxy-governance` §8).
+- El gateway escucha SOLO en 127.0.0.1; master key y key MaaS fuera del repo.
+
+### 9.6 Suites tras los cambios (todas en verde)
+
+```
+platform: 261 passed (pytest tests/)      # incluye test_provision_explicit_model_plan
+db:       174 passed + 2 parity (TRUST_DB_CONTAINER=trust-agent-db)
+e2e core: 28 passed  (pytest tests/e2e/)
+re-validación real: 47 PASS / 0 FAIL (scripts/revalidate_litellm_real.py --slug <nuevo>)
+```
+
+El doble declarado (D-GOV-15) se conserva para la suite pytest; el skill
+`skills/llm-gateway/litellm-proxy-governance` (v1.1.0) captura todos los hallazgos
+de §9.3–§9.5.
+
+## 10. Model Access sobre doc oficial MaaS + policy (spec 018, t_e0943bd8, 2026-10-26)
+
+Feedback Miller #6 cerrado: el catálogo dejó de ser genérico de LiteLLM y se
+reconstruyó sobre los **6 deployments REALES** del endpoint MaaS internacional
+(`api-ap-southeast-1.modelarts-maas.com/openai/v1`, verificado en vivo con la key
+"Inforum"): `glm-5.3`, `glm-5.2`, `glm-5.1`, `deepseek-v4.1-flash`,
+`deepseek-v4-flash`, `qwen3-32b`. Los nombres genéricos `qwen2.5-72b-instruct` y
+`deepseek-v3` se retiraron (migración `0009_model_catalog_maas` + espejo §3.3 de
+`db/schema.sql`, paridad AC-DB-040 en verde).
+
+- **Precios USD/M oficiales** (peor caso P1/tier≥32K/reasoning, fuentes
+  price-maas-0002 y price-modelarts-0047): columnas `numeric(12,3)` + límites de
+  contexto/output nuevos (`context_tokens`, `max_output_tokens`; `qwen3-32b` NULL
+  porque el Model List intl no lo documenta — la UI renderiza "—").
+- **La aprobación de modelos ES policy** (D-018-02): `GET /api/policies?level=…`
+  expone `model_approvals` por nivel; `GET /api/models/access` expone la sección
+  `policy` (`approved_models_only: true` invariable + `allowed_models` vigente);
+  la UI Model Access muestra el bloque "Governance policy" y la columna Context.
+  El conjunto efectivo sigue siendo `org ∩ dept ∩ user ∩ policy` (deny-overrides).
+- **LiteLLM alineado** (D-018-03): `litellm-real/config.yaml` declara los 6
+  deployment names con pricing real; `GET /v1/models` del proxy == `GET /models`
+  de MaaS (verificado 1:1 en vivo).
+- **Skill**: `skills/llm-gateway/huawei-maas-models` — catálogo, precios con
+  fuente, rate limits (TPM/RPM), pricing diferencial por horario y verificación
+  en vivo (regla 3 de CONTEXTO-TAREAS).
+
+### 10.1 Evidencia (2026-10-26, `docs/evidencia/model-access-maas/`)
+
+```
+01-models-maas-vs-proxy.txt   MaaS /models == proxy /v1/models (6 deployments, 1:1)
+02-invoke-glm52-real.txt      chat/completions glm-5.2 vía proxy → MaaS real ("ok")
+03-api-policy-live.txt        scripts/evidence_model_access_maas.py: 21 PASS / 0 FAIL
+                              (catálogo, policy.approved_models_only/allowed_models,
+                              model_approvals en /api/policies, deny-overrides con
+                              verify 403, invocación real con key virtual del tenant)
+```
+
+### 10.2 Suites tras los cambios (2026-10-26)
+
+```
+platform: 399+ passed (pytest tests/, TRUST_TEST_DB aislado por lane)
+db:       176 passed (TRUST_DB_CONTAINER=trust-agent-db) — paridad restaurada
+e2e core: 10 passed (tests/e2e/test_control_plane_flow.py; montos dinámicos con
+          litellm_fake.per_call_cents tras el pricing real MaaS)
+```
+

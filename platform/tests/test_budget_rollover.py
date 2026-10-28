@@ -16,8 +16,9 @@ from conftest import (
     TENANT_A, USER_ALICE, _admin, bearer_headers, mint,
 )
 
-TEST_DB = "trust_agent_platform_test"
-QWEN = "qwen2.5-72b-instruct"
+import os  # noqa: E402 (honor TRUST_TEST_DB como tests/conftest.py)
+TEST_DB = os.environ.get("TRUST_TEST_DB", "trust_agent_platform_test")
+QWEN = "glm-5.2"
 
 
 def _issue_key(client, tokens, user_id):
@@ -109,8 +110,11 @@ def test_daily_rollover_resets_counter_and_unblocks(
     assert spent_today and spent_today > 0
 
     # Bajar el presupuesto al gasto exacto → enforcement corta (key blocked).
+    # D-GOV-17: _user_counter devuelve Decimal (milli-centavo); el contrato
+    # del API es amount_cents entero → coerción (el gasto ingestado aquí es
+    # entero, la coerción es exacta).
     resp = client.put(f"/api/budgets/user/{USER_ALICE}",
-                      json={"amount_cents": spent_today, "period": "daily",
+                      json={"amount_cents": int(spent_today), "period": "daily",
                             "force": True},
                       headers=bearer_headers(alice))
     assert resp.status_code == 200, resp.text

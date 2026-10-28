@@ -1,8 +1,20 @@
 /* Tema claro enterprise del mockup Admin (upload_iaadt_lh.png):
-   fondo #f8f9fb, superficies #ffffff, acento rojo #c90104 (spec 009 D-AC-04). */
+   fondo #f8f9fb, superficies #ffffff. Pulido v2 (t_3cf085b9):
+   - El acento por defecto es el PROVIDER DEFAULT del branding (spec 004,
+     #4F46E5 indigo) — el mismo que devuelve GET /api/branding para tenants
+     sin branding propio. El layout re-tematiza estas vars con el
+     accent_color PUBLICADO del tenant (spec 028 white-label).
+   - El ROJO queda reservado para error/destructivo (--color-danger): un
+     acento rojo en botones/estados seleccionados se leía como alarma
+     (crítica visual r1+r2: "reserve red strictly for destructive").
+   - Los focus de input son NEUTRALES (hallazgo #1): nunca acento.
+   - NOTA Tailwind v4: @theme SIN `inline` — las utilidades referencian
+     var(--color-*) en vez de valores literales, que es lo que permite el
+     re-tema runtime del tenant desde el layout (con `inline` el override
+     de :root no cambiaba nada: bug hallado en la r3 de esta tarea). */
 @import "tailwindcss";
 
-@theme inline {
+@theme {
   --color-background: #f8f9fb;
   --color-surface: #ffffff;
   --color-surface-alt: #f2f4f7;
@@ -10,10 +22,11 @@
   --color-foreground: #111827;
   --color-muted: #6b7280;
   --color-faint: #9ca3af;
-  --color-accent: #c90104;
-  --color-accent-hover: #a80103;
-  --color-accent-soft: rgba(201, 1, 4, 0.08);
-  --color-accent-border: rgba(201, 1, 4, 0.25);
+  --color-accent: #4f46e5;
+  --color-accent-hover: #4338ca;
+  --color-accent-soft: rgba(79, 70, 229, 0.08);
+  --color-accent-border: rgba(79, 70, 229, 0.24);
+  --color-accent-ring: rgba(79, 70, 229, 0.16);
   --color-success: #15803d;
   --color-success-soft: rgba(21, 128, 61, 0.1);
   --color-warning: #b45309;
@@ -36,11 +49,19 @@ body {
   background: var(--color-accent-soft);
 }
 
-/* Focus visible accesible en toda la app (REQ-AC-031) */
-:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
-  border-radius: 4px;
+/* Focus visible accesible en toda la app (REQ-AC-031).
+   FIX t_3cf085b9 (hallazgo #1): esta regla debe vivir en @layer base —
+   sin capa, le gana a TODAS las utilidades de Tailwind (las utilidades
+   viven en @layer utilities y el CSS sin capa tiene preferencia sobre
+   cualquier capa), de modo que `focus:outline-none` de los inputs NUNCA
+   la pisaba y el outline ROJO del focus se veía en cada input como un
+   error falso. En base, los inputs la sobreescriben con su ring neutro. */
+@layer base {
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
 }
 
 /* Scrollbars discretos */
@@ -65,4 +86,101 @@ body {
   animation: ta-shimmer 1.4s ease-in-out infinite;
   background: var(--color-surface-alt);
   border-radius: 6px;
+}
+
+/* Capa de fluidez — estándar UI pro (t_7cd4f40e, docs/ui-standard.md).
+   Keyframes cortos y con propósito (150–250ms), SIEMPRE bajo
+   prefers-reduced-motion: no-preference. Diálogos: scale+fade ~180ms;
+   toasts: entrada deslizante; badges: pop de aparición; página: fade sutil. */
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes ta-fade-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+  @keyframes ta-dialog-in {
+    from {
+      opacity: 0;
+      transform: scale(0.96) translateY(6px);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1) translateY(0);
+    }
+  }
+  @keyframes ta-toast-in {
+    from {
+      opacity: 0;
+      transform: translateX(18px);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
+  }
+  @keyframes ta-pop {
+    0% {
+      opacity: 0;
+      transform: scale(0.6);
+    }
+    60% {
+      opacity: 1;
+      transform: scale(1.06);
+    }
+    100% {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+  .ta-fade-in {
+    animation: ta-fade-in 0.18s ease-out both;
+  }
+  .ta-dialog-backdrop {
+    animation: ta-fade-in 0.15s ease-out both;
+  }
+  .ta-dialog-panel {
+    animation: ta-dialog-in 0.18s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  .ta-toast-in {
+    animation: ta-toast-in 0.22s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  .ta-pop {
+    animation: ta-pop 0.25s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  /* Transición sutil de página: fade al montar el contenido principal. */
+  main {
+    animation: ta-fade-in 0.25s ease-out both;
+  }
+}
+
+/* Filas de tabla fluidas: hover con transición de color (sin movimiento,
+   sin saltos de layout). Aplica a todas las tablas del design system. */
+tbody tr {
+  transition: background-color 150ms ease;
+}
+tbody tr:hover {
+  background-color: rgba(242, 244, 247, 0.55);
+}
+
+/* Entrada escalonada con propósito (estándar UI pro, t_7cd4f40e):
+   guía la lectura de arriba a abajo en páginas de flujo (p. ej. Hermes
+   Download: link → enviar → disponibilidad → pasos). Respeta
+   prefers-reduced-motion. */
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes ta-rise {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  .ta-rise {
+    animation: ta-rise 0.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
 }

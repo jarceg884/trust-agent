@@ -1,0 +1,4 @@
+{"ts": 1793125301, "pid": 2315635, "event": "batch1_active", "keys": ["approval_mode", "allowed_terminal_backends", "require_write_sandbox", "allowed_env_passthrough", "web_domain_policy", "allow_private_network_access", "allowed_providers", "allow_self_updates"]}
+{"ts": 1793125301, "pid": 2315635, "event": "plugin_tool_scan", "tools": 1}
+{"ts": 1793125303, "event": "attestation_skipped", "trigger": "startup", "reason": "device not enrolled"}
+{"ts": 1793125304, "pid": 2315635, "event": "auto_enrolled", "org_code": "hermes-dl-e2e", "device_id": "87dcf5e1-6482-42af-9cbf-cab2b405f809", "token_path": "/root/trust-agent/.e2e/hermes-dl-home-renewal/trust-agent/device-token.json"}

@@ -28,7 +28,9 @@ KC_HOST = "127.0.0.1"
 KC_PORT = 8080
 REALM = "trust-agent-cp"
 CLIENT_ID = "trust-agent-web"
-REDIRECT_URI = "http://127.0.0.1:9090/auth/callback"
+# Callback del helper trust-login del bundle de descarga (spec 023 D-023-13):
+# el flujo real de desktop. Retirado el demo :9090 (t_b8769ecb).
+REDIRECT_URI = "http://127.0.0.1:8765/callback"
 KC_USER = "cp-e2e-user"
 KC_PASSWORD = "CpE2ePass2026!"
 ADMIN_USER = "admin"
@@ -106,6 +108,14 @@ def kc_realm():
     clients = json.loads(raw) if status == 200 else []
     if clients:
         client_uuid = clients[0]["id"]
+        # Heal redirect URIs of pre-existing clients (t_b8769ecb: the demo
+        # :9090 callback was retired; the real-flow callback is :8765).
+        if REDIRECT_URI not in clients[0].get("redirectUris", []):
+            status, raw = _json_request(
+                "PUT", f"/admin/realms/{REALM}/clients/{client_uuid}",
+                {"redirectUris": [REDIRECT_URI]}, token,
+            )
+            assert status == 204, raw
     else:
         status, raw = _json_request(
             "POST", f"/admin/realms/{REALM}/clients",
@@ -288,12 +298,19 @@ def e2e_user_row(kc_realm):
     return sub
 
 
-def test_pkce_flow_mints_session_and_requires_mfa(client, e2e_user_row):
+def test_pkce_flow_mints_session_and_gate_is_policy_aware(
+    client, e2e_user_row,
+):
     """The full real flow: PKCE -> id_token with signed tenant_id -> session.
 
-    The Keycloak user has NO OTP enrolled, so the minted session carries
-    mfa_verified=false and business routes answer 403 mfa_required —
-    exactly REQ-ORG-007 asserted end to end.
+    Spec 015 (D-AUTH-07): the MfaGate is POLICY-AWARE. The Keycloak user has
+    NO OTP enrolled, so the minted session carries mfa_verified=false:
+
+      - tenant-b has NO org require_mfa row (how NEW tenants are born,
+        migration 0014 default false) -> the session reaches the business
+        API (200) and the app suggests MFA via the persistent banner;
+      - with an explicit org row require_mfa=true (what EXISTING tenants
+        carry) -> 403 mfa_required, the spec-011 behavior intact.
     """
     id_token = _pkce_login()
 
@@ -311,9 +328,33 @@ def test_pkce_flow_mints_session_and_requires_mfa(client, e2e_user_row):
     assert tokens["session_token"].startswith("sts1.")
 
     headers = {"Authorization": f"Bearer {tokens['session_token']}"}
+    # (a) policy false (default): password-only session is usable.
     resp = client.get("/api/me", headers=headers)
-    assert resp.status_code == 403
-    assert resp.json()["error"]["reason"] == "mfa_required"
+    assert resp.status_code == 200
+    assert resp.json()["mfa_verified"] is False
+
+    # (b) policy true (existing tenants): same session shape -> 403.
+    import psycopg
+
+    with psycopg.connect(ADMIN_DSN.format(db=TEST_DB), autocommit=True) as c:
+        c.execute(
+            "INSERT INTO policies (id, tenant_id, level, key, value) "
+            "VALUES (gen_random_uuid(), %s, 'org', 'require_mfa', "
+            "'true'::jsonb)",
+            (TENANT_B,),
+        )
+    try:
+        resp = client.get("/api/me", headers=headers)
+        assert resp.status_code == 403
+        assert resp.json()["error"]["reason"] == "mfa_required"
+    finally:
+        with psycopg.connect(ADMIN_DSN.format(db=TEST_DB),
+                             autocommit=True) as c:
+            c.execute(
+                "DELETE FROM policies WHERE tenant_id = %s "
+                "AND key = 'require_mfa' AND level = 'org'",
+                (TENANT_B,),
+            )
 
 
 def test_tampered_keycloak_token_rejected(client, e2e_user_row):

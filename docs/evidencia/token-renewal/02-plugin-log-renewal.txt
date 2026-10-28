@@ -1,0 +1,131 @@
+{"ts": 1793125301, "pid": 2315635, "event": "batch1_active", "keys": ["approval_mode", "allowed_terminal_backends", "require_write_sandbox", "allowed_env_passthrough", "web_domain_policy", "allow_private_network_access", "allowed_providers", "allow_self_updates"]}
+{"ts": 1793125301, "pid": 2315635, "event": "plugin_tool_scan", "tools": 1}
+{"ts": 1793125303, "event": "attestation_skipped", "trigger": "startup", "reason": "device not enrolled"}
+{"ts": 1793125304, "pid": 2315635, "event": "auto_enrolled", "org_code": "hermes-dl-e2e", "device_id": "87dcf5e1-6482-42af-9cbf-cab2b405f809", "token_path": "/root/trust-agent/.e2e/hermes-dl-home-renewal/trust-agent/device-token.json"}
+{"ts": 1793125331, "event": "bundle_synced", "policy_version": 6, "expires_at": 1793128931, "offline_grace_minutes": 60}
+{"ts": 1793125331, "event": "heartbeat_ok", "applied_policy_version": 6, "current_policy_version": 6, "policy_update_available": false}
+{"ts": 1793125331, "event": "device_token_renewed", "expires_in": 900}
+{"ts": 1793125361, "event": "bundle_synced", "policy_version": 6, "expires_at": 1793128961, "offline_grace_minutes": 60}
+{"ts": 1793125361, "event": "heartbeat_ok", "applied_policy_version": 6, "current_policy_version": 6, "policy_update_available": false}
+{"ts": 1793125361, "event": "device_token_renewed", "expires_in": 900}
+{"ts": 1793125392, "event": "bundle_synced", "policy_version": 6, "expires_at": 1793128991, "offline_grace_minutes": 60}
+{"ts": 1793125392, "event": "heartbeat_ok", "applied_policy_version": 6, "current_policy_version": 6, "policy_update_available": false}
+{"ts": 1793125392, "event": "device_token_renewed", "expires_in": 900}
+{"ts": 1793125422, "event": "bundle_synced", "policy_version": 6, "expires_at": 1793129022, "offline_grace_minutes": 60}
+{"ts": 1793125422, "event": "heartbeat_ok", "applied_policy_version": 6, "current_policy_version": 6, "policy_update_available": false}
+{"ts": 1793125422, "event": "device_token_renewed", "expires_in": 900}
+{"ts": 1793125452, "event": "bundle_synced", "policy_version": 6, "expires_at": 1793129052, "offline_grace_minutes": 60}
+{"ts": 1793125452, "event": "heartbeat_ok", "applied_policy_version": 6, "current_policy_version": 6, "policy_update_available": false}
+{"ts": 1793125452, "event": "device_token_renewed", "expires_in": 900}
+{"ts": 1793125482, "event": "bundle_synced", "policy_version": 6, "expires_at": 1793129082, "offline_grace_minutes": 60}
+{"ts": 1793125482, "event": "heartbeat_ok", "applied_policy_version": 6, "current_policy_version": 6, "policy_update_available": false}
+{"ts": 1793125482, "event": "device_token_renewed", "expires_in": 900}
+{"ts": 1793125512, "event": "bundle_synced", "policy_version": 6, "expires_at": 1793129112, "offline_grace_minutes": 60}
+{"ts": 1793125512, "event": "heartbeat_ok", "applied_policy_version": 6, "current_policy_version": 6, "policy_update_available": false}
+{"ts": 1793125512, "event": "device_token_renewed", "expires_in": 900}
+{"ts": 1793125542, "event": "bundle_synced", "policy_version": 6, "expires_at": 1793129142, "offline_grace_minutes": 60}
+{"ts": 1793125542, "event": "heartbeat_ok", "applied_policy_version": 6, "current_policy_version": 6, "policy_update_available": false}
+{"ts": 1793125542, "event": "device_token_renewed", "expires_in": 900}
+{"ts": 1793125572, "event": "bundle_synced", "policy_version": 6, "expires_at": 1793129172, "offline_grace_minutes": 60}
+{"ts": 1793125572, "event": "heartbeat_ok", "applied_policy_version": 6, "current_policy_version": 6, "policy_update_available": false}
+{"ts": 1793125572, "event": "device_token_renewed", "expires_in": 900}
+{"ts": 1793125602, "event": "bundle_synced", "policy_version": 6, "expires_at": 1793129202, "offline_grace_minutes": 60}
+{"ts": 1793125602, "event": "heartbeat_ok", "applied_policy_version": 6, "current_policy_version": 6, "policy_update_available": false}
+{"ts": 1793125602, "event": "device_token_renewed", "expires_in": 900}
+{"ts": 1793125632, "event": "bundle_synced", "policy_version": 6, "expires_at": 1793129232, "offline_grace_minutes": 60}
+{"ts": 1793125632, "event": "heartbeat_ok", "applied_policy_version": 6, "current_policy_version": 6, "policy_update_available": false}
+{"ts": 1793125632, "event": "device_token_renewed", "expires_in": 900}
+{"ts": 1793125662, "event": "bundle_synced", "policy_version": 6, "expires_at": 1793129262, "offline_grace_minutes": 60}
+{"ts": 1793125662, "event": "heartbeat_ok", "applied_policy_version": 6, "current_policy_version": 6, "policy_update_available": false}
+{"ts": 1793125662, "event": "device_token_renewed", "expires_in": 900}
+{"ts": 1793125692, "event": "bundle_synced", "policy_version": 6, "expires_at": 1793129292, "offline_grace_minutes": 60}
+{"ts": 1793125692, "event": "heartbeat_ok", "applied_policy_version": 6, "current_policy_version": 6, "policy_update_available": false}
+{"ts": 1793125692, "event": "device_token_renewed", "expires_in": 900}
+{"ts": 1793125722, "event": "bundle_synced", "policy_version": 6, "expires_at": 1793129322, "offline_grace_minutes": 60}
+{"ts": 1793125722, "event": "heartbeat_ok", "applied_policy_version": 6, "current_policy_version": 6, "policy_update_available": false}
+{"ts": 1793125722, "event": "device_token_renewed", "expires_in": 900}
+{"ts": 1793125753, "event": "bundle_synced", "policy_version": 6, "expires_at": 1793129352, "offline_grace_minutes": 60}
+{"ts": 1793125753, "event": "heartbeat_ok", "applied_policy_version": 6, "current_policy_version": 6, "policy_update_available": false}
+{"ts": 1793125753, "event": "device_token_renewed", "expires_in": 900}
+{"ts": 1793125783, "event": "bundle_synced", "policy_version": 6, "expires_at": 1793129383, "offline_grace_minutes": 60}
+{"ts": 1793125783, "event": "heartbeat_ok", "applied_policy_version": 6, "current_policy_version": 6, "policy_update_available": false}
+{"ts": 1793125783, "event": "device_token_renewed", "expires_in": 900}
+{"ts": 1793125813, "event": "bundle_synced", "policy_version": 6, "expires_at": 1793129413, "offline_grace_minutes": 60}
+{"ts": 1793125813, "event": "heartbeat_ok", "applied_policy_version": 6, "current_policy_version": 6, "policy_update_available": false}
+{"ts": 1793125813, "event": "device_token_renewed", "expires_in": 900}
+{"ts": 1793125843, "event": "bundle_synced", "policy_version": 6, "expires_at": 1793129443, "offline_grace_minutes": 60}
+{"ts": 1793125843, "event": "heartbeat_ok", "applied_policy_version": 6, "current_policy_version": 6, "policy_update_available": false}
+{"ts": 1793125843, "event": "device_token_renewed", "expires_in": 900}
+{"ts": 1793125873, "event": "bundle_synced", "policy_version": 6, "expires_at": 1793129473, "offline_grace_minutes": 60}
+{"ts": 1793125873, "event": "heartbeat_ok", "applied_policy_version": 6, "current_policy_version": 6, "policy_update_available": false}
+{"ts": 1793125873, "event": "device_token_renewed", "expires_in": 900}
+{"ts": 1793125903, "event": "bundle_synced", "policy_version": 6, "expires_at": 1793129503, "offline_grace_minutes": 60}
+{"ts": 1793125903, "event": "heartbeat_ok", "applied_policy_version": 6, "current_policy_version": 6, "policy_update_available": false}
+{"ts": 1793125903, "event": "device_token_renewed", "expires_in": 900}
+{"ts": 1793125933, "event": "bundle_synced", "policy_version": 6, "expires_at": 1793129533, "offline_grace_minutes": 60}
+{"ts": 1793125933, "event": "heartbeat_ok", "applied_policy_version": 6, "current_policy_version": 6, "policy_update_available": false}
+{"ts": 1793125933, "event": "device_token_renewed", "expires_in": 900}
+{"ts": 1793125963, "event": "bundle_synced", "policy_version": 6, "expires_at": 1793129563, "offline_grace_minutes": 60}
+{"ts": 1793125963, "event": "heartbeat_ok", "applied_policy_version": 6, "current_policy_version": 6, "policy_update_available": false}
+{"ts": 1793125963, "event": "device_token_renewed", "expires_in": 900}
+{"ts": 1793125993, "event": "bundle_synced", "policy_version": 6, "expires_at": 1793129593, "offline_grace_minutes": 60}
+{"ts": 1793125993, "event": "heartbeat_ok", "applied_policy_version": 6, "current_policy_version": 6, "policy_update_available": false}
+{"ts": 1793125993, "event": "device_token_renewed", "expires_in": 900}
+{"ts": 1793126023, "event": "bundle_synced", "policy_version": 6, "expires_at": 1793129623, "offline_grace_minutes": 60}
+{"ts": 1793126023, "event": "heartbeat_ok", "applied_policy_version": 6, "current_policy_version": 6, "policy_update_available": false}
+{"ts": 1793126023, "event": "device_token_renewed", "expires_in": 900}
+{"ts": 1793126053, "event": "bundle_synced", "policy_version": 6, "expires_at": 1793129653, "offline_grace_minutes": 60}
+{"ts": 1793126053, "event": "heartbeat_ok", "applied_policy_version": 6, "current_policy_version": 6, "policy_update_available": false}
+{"ts": 1793126053, "event": "device_token_renewed", "expires_in": 900}
+{"ts": 1793126083, "event": "bundle_synced", "policy_version": 6, "expires_at": 1793129683, "offline_grace_minutes": 60}
+{"ts": 1793126083, "event": "heartbeat_ok", "applied_policy_version": 6, "current_policy_version": 6, "policy_update_available": false}
+{"ts": 1793126083, "event": "device_token_renewed", "expires_in": 900}
+{"ts": 1793126114, "event": "bundle_synced", "policy_version": 6, "expires_at": 1793129713, "offline_grace_minutes": 60}
+{"ts": 1793126114, "event": "heartbeat_ok", "applied_policy_version": 6, "current_policy_version": 6, "policy_update_available": false}
+{"ts": 1793126114, "event": "device_token_renewed", "expires_in": 900}
+{"ts": 1793126144, "event": "bundle_synced", "policy_version": 6, "expires_at": 1793129744, "offline_grace_minutes": 60}
+{"ts": 1793126144, "event": "heartbeat_ok", "applied_policy_version": 6, "current_policy_version": 6, "policy_update_available": false}
+{"ts": 1793126144, "event": "device_token_renewed", "expires_in": 900}
+{"ts": 1793126174, "event": "bundle_synced", "policy_version": 6, "expires_at": 1793129774, "offline_grace_minutes": 60}
+{"ts": 1793126174, "event": "heartbeat_ok", "applied_policy_version": 6, "current_policy_version": 6, "policy_update_available": false}
+{"ts": 1793126174, "event": "device_token_renewed", "expires_in": 900}
+{"ts": 1793126204, "event": "bundle_synced", "policy_version": 6, "expires_at": 1793129804, "offline_grace_minutes": 60}
+{"ts": 1793126204, "event": "heartbeat_ok", "applied_policy_version": 6, "current_policy_version": 6, "policy_update_available": false}
+{"ts": 1793126204, "event": "device_token_renewed", "expires_in": 900}
+{"ts": 1793126234, "event": "bundle_synced", "policy_version": 6, "expires_at": 1793129834, "offline_grace_minutes": 60}
+{"ts": 1793126234, "event": "heartbeat_ok", "applied_policy_version": 6, "current_policy_version": 6, "policy_update_available": false}
+{"ts": 1793126234, "event": "device_token_renewed", "expires_in": 900}
+{"ts": 1793126264, "event": "bundle_synced", "policy_version": 6, "expires_at": 1793129864, "offline_grace_minutes": 60}
+{"ts": 1793126264, "event": "heartbeat_ok", "applied_policy_version": 6, "current_policy_version": 6, "policy_update_available": false}
+{"ts": 1793126264, "event": "device_token_renewed", "expires_in": 900}
+{"ts": 1793126294, "event": "bundle_synced", "policy_version": 6, "expires_at": 1793129894, "offline_grace_minutes": 60}
+{"ts": 1793126294, "event": "heartbeat_ok", "applied_policy_version": 6, "current_policy_version": 6, "policy_update_available": false}
+{"ts": 1793126294, "event": "device_token_renewed", "expires_in": 900}
+{"ts": 1793126324, "event": "bundle_synced", "policy_version": 6, "expires_at": 1793129924, "offline_grace_minutes": 60}
+{"ts": 1793126324, "event": "heartbeat_ok", "applied_policy_version": 6, "current_policy_version": 6, "policy_update_available": false}
+{"ts": 1793126324, "event": "device_token_renewed", "expires_in": 900}
+{"ts": 1793126339, "event": "startup_from_cache", "policy_version": 6, "expires_at": 1793129924}
+{"ts": 1793126339, "pid": 2351207, "event": "batch1_active", "keys": ["approval_mode", "allowed_terminal_backends", "require_write_sandbox", "allowed_env_passthrough", "web_domain_policy", "allow_private_network_access", "allowed_providers", "allow_self_updates"]}
+{"ts": 1793126339, "pid": 2351207, "event": "plugin_tool_scan", "tools": 1}
+{"ts": 1793126339, "pid": 2351207, "event": "mode_change", "mode": "normal", "cause": ""}
+{"ts": 1793126339, "event": "bundle_synced", "policy_version": 6, "expires_at": 1793129939, "offline_grace_minutes": 60}
+{"ts": 1793126339, "event": "heartbeat_ok", "applied_policy_version": 6, "current_policy_version": 6, "policy_update_available": false}
+{"ts": 1793126339, "event": "device_token_renewed", "expires_in": 900}
+{"ts": 1793126341, "event": "attestation_sent", "trigger": "startup", "bundle_hash": "be4eed23696daa2ecbed6df2dd1e070e1bbe8e3b56d4b5ed024ff1fab2ab1cf1", "policy_version": 6, "mode": "normal", "veto_counts": {}, "escalated_tools": []}
+{"ts": 1793126342, "pid": 2351207, "event": "retention_prune", "days": 30, "status": "ok", "pruned": null}
+{"ts": 1793126342, "pid": 2351207, "event": "capability_findings", "warnings": {"plugins_not_allowed": {"count": 1, "detail": "installed plugins not in allowed_plugins: ['trust-agent-governance']"}}}
+{"ts": 1793126354, "event": "bundle_synced", "policy_version": 6, "expires_at": 1793129954, "offline_grace_minutes": 60}
+{"ts": 1793126354, "event": "heartbeat_ok", "applied_policy_version": 6, "current_policy_version": 6, "policy_update_available": false}
+{"ts": 1793126354, "event": "device_token_renewed", "expires_in": 900}
+{"ts": 1793126369, "event": "bundle_synced", "policy_version": 6, "expires_at": 1793129969, "offline_grace_minutes": 60}
+{"ts": 1793126369, "event": "heartbeat_ok", "applied_policy_version": 6, "current_policy_version": 6, "policy_update_available": false}
+{"ts": 1793126369, "event": "device_token_renewed", "expires_in": 900}
+{"ts": 1793126384, "event": "bundle_synced", "policy_version": 6, "expires_at": 1793129984, "offline_grace_minutes": 60}
+{"ts": 1793126384, "event": "heartbeat_ok", "applied_policy_version": 6, "current_policy_version": 6, "policy_update_available": false}
+{"ts": 1793126384, "event": "device_token_renewed", "expires_in": 900}
+{"ts": 1793126399, "event": "bundle_synced", "policy_version": 6, "expires_at": 1793129999, "offline_grace_minutes": 60}
+{"ts": 1793126399, "event": "heartbeat_ok", "applied_policy_version": 6, "current_policy_version": 6, "policy_update_available": false}
+{"ts": 1793126399, "event": "device_token_renewed", "expires_in": 900}
+{"ts": 1793126414, "event": "bundle_synced", "policy_version": 6, "expires_at": 1793130014, "offline_grace_minutes": 60}
+{"ts": 1793126414, "event": "heartbeat_ok", "applied_policy_version": 6, "current_policy_version": 6, "policy_update_available": false}
+{"ts": 1793126414, "event": "device_token_renewed", "expires_in": 900}

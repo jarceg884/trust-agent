@@ -1,0 +1,70 @@
+# CI mínimo del piloto (t_b62edff2): valida el compose y escanea secretos.
+# 1. compose-config: docker-compose.yml parsea en ambos perfiles (dev + litellm).
+# 2. gitleaks (pineado 8.24.3 = versión de la auditoría pre-push):
+#    a) commits NUEVOS del PR/push (rango vs base), y
+#    b) árbol completo del repo (--no-git: exactamente lo que un clone ve).
+#    Nota: el historial PRE-EXISTENTE (commit 0c9458c, ya publicado antes de
+#    esta tarea) contiene el token dev falso "live-provider-token" en un
+#    script de verificación — documentado como no-secreto (solo coincide con
+#    el .env de dev local; los despliegues reales generan tokens aleatorios
+#    con setup.sh). No se reescribe historia publicada por eso; los commits
+#    nuevos y el árbol actual sí se exigen 100% limpios.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+jobs:
+  compose-config:
+    name: compose config valida (dev + litellm)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate docker-compose.yml
+        env:
+          # Secretos obligatorios sin default: dummies SOLO para validar el
+          # parseo (el stack real exige valores fuertes, fail-closed).
+          TRUST_DEVICE_TOKEN_SECRET: ci-dummy-not-a-secret
+          TRUST_VAULT_KEK_B64: ci-dummy-not-a-secret
+          TRUST_POLICY_JWS_PRIVATE_KEY_B64: ci-dummy-not-a-secret
+          TRUST_PROVIDER_TOKEN: ci-dummy-not-a-secret
+          KC_ADMIN_PASSWORD: ci-dummy-not-a-secret
+        run: |
+          docker compose config -q
+          docker compose --profile litellm config -q
+          echo "compose config OK (default + litellm)"
+
+  gitleaks:
+    name: secret scan (gitleaks 8.24.3)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install gitleaks 8.24.3 (pinned = versión de la auditoría local)
+        run: |
+          curl -sSL -o /tmp/gitleaks.tgz \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz
+          tar xzf /tmp/gitleaks.tgz -C /usr/local/bin gitleaks
+          gitleaks version
+      - name: Scan commits nuevos del PR/push (rango vs base)
+        run: |
+          git fetch origin main --depth=1000 || true
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            RANGE="origin/main..HEAD"
+          else
+            BEFORE="${{ github.event.before }}"
+            if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+              RANGE="-1"
+            else
+              RANGE="$BEFORE..HEAD"
+            fi
+          fi
+          echo "gitleaks detect --log-opts=$RANGE"
+          gitleaks detect --log-opts="$RANGE" --redact --exit-code 1
+      - name: Scan árbol completo del repo (lo que un clone ve)
+        run: |
+          gitleaks detect --no-git --redact --exit-code 1

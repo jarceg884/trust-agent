@@ -1,10 +1,8 @@
 """REQ-GOV-040…044 — agentes compartidos con grants explícitos (spec 005 §3.4)."""
 from conftest import (
-    TENANT_A, USER_ALICE, USER_BOB, USER_CAROL, USER_DAVE, _admin,
+    TENANT_A, TEST_DB, USER_ALICE, USER_BOB, USER_CAROL, USER_DAVE, _admin,
     bearer_headers, mint,
 )
-
-TEST_DB = "trust_agent_platform_test"
 
 
 def _publish(client, tokens, name="ops-agent"):

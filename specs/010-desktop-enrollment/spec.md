@@ -2,7 +2,7 @@
 
 | Campo | Valor |
 |---|---|
-| **Estado** | Fase *specify* → *plan* → *tasks* → *implement* → *converge* (SDD) |
+| **Estado** | **RETIRADA (t_b8769ecb, mandato Miller, 2026-10-26)** — el desktop-client demo (:9090) fue un double de desarrollo, nunca el producto. El flujo real es link de descarga → bundle de Hermes real → enrolamiento automático zero-UI (specs 022 y 023, `docs/desktop-flow.md`). Este documento se conserva como registro histórico; los contratos de API de dispositivos (spec 007) que ejercitó siguen vigentes. |
 | **Versión** | 1.0.0 |
 | **Fecha** | 2026-10-23 |
 | **Autor** | ui (tarea t_d3768316) |

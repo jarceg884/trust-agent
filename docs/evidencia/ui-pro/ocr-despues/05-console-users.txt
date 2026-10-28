@@ -1,0 +1,25 @@
+Trust Agent ' neote 4 nm L
+Trust Agent demo-org | Connected + Invteuser <b Download desktopapp Alex Morgen
+GOVERNANCE
+Users & Roles
+88 Overview
+Who belongs to the organization and what they can govern.
+Organization
+§ Departments Users & roles
+Directory of the organization's users, their departments and role assignments. Role changes are aucited (roleassigned / role.revoked)
+& Users & Roles
+USER DEPARTMENT ROLES status
+© Budgets
+{@ Model Access en ora atest IT Operations 7g_admin active
+Shared Agents
+Governance — only organization admins hold roles .assign; role changes, department moves and status transitions are written to the immutable audit log You can never modify your
+© Devices ‘own roles orcisable your own account
+& Hermes Download
+
+Credentials
+
+Audit Log
+
+9 8 Dd
+
+Branding

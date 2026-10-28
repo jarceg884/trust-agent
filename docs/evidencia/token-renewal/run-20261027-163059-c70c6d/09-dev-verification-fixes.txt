@@ -1,0 +1,19 @@
+Verificación dev (t_43a66a14) de los 5 fixes del harness — 2026-10-27 16:36:31
+
+#1 orden de limpieza en setup: setup live 10/10 PASS (kill tmux + kill por
+   /proc/environ ANTES del rm -rf; sin race "Directory not empty").
+#2 gateways residuales: REPRODUCIDO en vivo — tras tmux kill-session el
+   gateway sobrevivió (pid 2822496, cmdline 'gateway' sin HERMES_HOME visible); kill_home_processes lo terminó por environ y
+   home_pids quedó vacío.
+#3 race del primer mensaje: REPRODUCIDA en vivo — ask_agent intento 1/3 se
+   perdió (boot lazy), intento 2 obtuvo governance_status Mode: NORMAL
+   (84 s). Sin fix, R7/E7 habrían fallado.
+#4 V3 vía mode_change del plugin.log: parser validado contra el log REAL de
+   QA (06-plugin-log-revocation.txt): 5 eventos mode_change, el restricted
+   con cause "device not authorized by the organization" — V3 lo detecta.
+#5 evidence por corrida: esta corrida escribió en run-20261027-163059-c70c6d/
+   sin pisar los artefactos 00-08 de QA en el directorio base; symlink
+   'latest' actualizado.
+
+Higiene: device d4a7f1fd-a95d-48f5-902b-17fca012e4bb REVOKED tras la verificación (estado final
+estándar del suite); procesos del home terminados (0 vivos).

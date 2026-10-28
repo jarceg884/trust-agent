@@ -1,0 +1,34 @@
+Trust Agent
+PROVIDER CONSOLE
+
+OPERATIONS
+
+Tenants
+
+Provision New Client
+
+Provider Console | Operator
+
+Provision new client
+
+Creates a complete tenant: Keycloak realm, initial admin, seed departments, org budget, default policies and approved models.
+
+New customer organization
+All fields are validated by the control plane; the operation is atomic (full rollback on failure).
+
+Organization name Initial admin email
+
+Globex Industries
+
+Display name of the customer (e.g. Globex Industries). ‘The first org admin; receives one-time credentials.
+
+Monthly org budget (USD) Slug (optionat)
+500 globex-industries
+Organization-level budget for the current period, Defaults to a slug derived from the name. Also the Keycloak realm.
+Product name (optional)
+Globex Al
+White-label branding; defautts to Trust Agent.
+
+MODEL PLAN
+
+© Sign out

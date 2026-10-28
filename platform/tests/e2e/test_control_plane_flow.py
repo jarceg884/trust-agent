@@ -22,12 +22,16 @@ DOBLES DECLARADOS (constitution I — nada simulado sin declararlo):
   doble porque Keycloak 26 NO permite enrolar TOTP vía Admin REST (probe
   real: POST /users/{id}/credentials → 404) y el scraping de HTML está
   prohibido por diseño (hallazgo C5 de la auditoría AIDLC).
-- MFA vía `acr` (D-MFA-01): KC26 nunca emite `amr`. El aprovisionamiento
-  cablea cada realm con `ensure_mfa_acr` (acr.loa.map + condición LoA en el
-  flujo browser), así que un login password-only YA NO completa: el OTP Form
-  deriva inline a CONFIGURE_TOTP (assert de los pasos 2 y 3). El camino real
+- MFA vía `acr` (D-MFA-01): KC26 nunca emite `amr`. Spec 015 (D-AUTH-06): el
+  aprovisionamiento cablea cada realm con `ensure_mfa_acr` (acr.loa.map
+  {"1":1,"2":2} + subflows condicionales Password LoA@1 / Conditional OTP@2),
+  así que el OTP es CONDICIONAL al `acr_values` pedido: acr 1 → password-only
+  → code con acr "1"; acr 2 sin TOTP → el OTP Form deriva inline a
+  CONFIGURE_TOTP sin code (assert de los pasos 2 y 3). El camino real
   password+TOTP → acr "2" → sesión mfa_verified se verifica en vivo con el
-  probe del skill `identity/keycloak26-amr-mfa`.
+  probe del skill `identity/keycloak26-amr-mfa`. La puerta MFA del control
+  plane es policy-aware (D-AUTH-07): require_mfa=false deja pasar sesiones
+  sin MFA (banner persistente en la UI); true → 403 mfa_required (spec 011).
 """
 import base64
 import hashlib
@@ -48,13 +52,15 @@ from tests.conftest import PLATFORM_DIR, bearer_headers
 
 KC_HOST, KC_PORT = "127.0.0.1", 8080
 CLIENT_ID = "trust-agent-web"
-REDIRECT_URI = "http://127.0.0.1:9090/auth/callback"
+# Callback del helper trust-login del bundle de descarga (spec 023 D-023-13):
+# el flujo real de desktop. Retirado el demo :9090 (t_b8769ecb).
+REDIRECT_URI = "http://127.0.0.1:8765/callback"
 PROVIDER = {"Authorization": "Bearer test-provider-token"}
 SLUG = "e2e-corp"
 ADMIN_EMAIL = "admin@e2e-corp.test"
 WORKER_EMAIL = "worker@e2e-corp.test"
 WORKER_PASSWORD = "E2eWorkerPass2026!"
-QWEN = "qwen2.5-72b-instruct"
+QWEN = "glm-5.2"
 
 _S = {}  # estado compartido entre los pasos ordenados del flujo
 
@@ -127,11 +133,15 @@ def _b64url(raw: bytes) -> str:
     return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
 
 
-def _pkce_login(username: str, password: str):
+def _pkce_login(username: str, password: str, acr_values: str | None = None):
     """Baile authorization-code + PKCE S256 completo.
 
     -> (id_token | None, location_final) — sin code si KC exige required
     action (p. ej. password temporal o TOTP pendiente).
+
+    Spec 015 (D-AUTH-06): `acr_values` es EXPLÍCITO — el flujo LoA nuevo ya
+    no fuerza el OTP en un authorize bare (probe S7): acr 1 = password-only,
+    acr 2 = OTP (enrolamiento inline CONFIGURE_TOTP sin credencial TOTP).
     """
     verifier = _b64url(secrets.token_bytes(64))
     challenge = _b64url(hashlib.sha256(verifier.encode()).digest())
@@ -140,6 +150,8 @@ def _pkce_login(username: str, password: str):
         "redirect_uri": REDIRECT_URI, "state": "st-e2e",
         "code_challenge": challenge, "code_challenge_method": "S256",
     }
+    if acr_values:
+        params["acr_values"] = acr_values
     status, body, headers = _request(
         "GET",
         f"/realms/{SLUG}/protocol/openid-connect/auth?{urllib.parse.urlencode(params)}",
@@ -259,13 +271,18 @@ def test_01_provision_tenant(client, admin_conn):
               "WHERE tenant_id = %s AND level = 'org'", (tid,))
     assert rows[0]["amount_cents"] == 50000  # USD centavos
 
-    # El realm existe de verdad y el admin queda forzado a TOTP + password
+    # El realm existe de verdad. El admin nace con password one-time
+    # (UPDATE_PASSWORD) y SIN CONFIGURE_TOTP — spec 015 D-AUTH-06: el MFA ya
+    # no se fuerza en el aprovisionamiento (opcional + banner persistente;
+    # el enrolamiento ocurre inline vía el OTP form cuando se pide acr 2).
     from app.config import get_settings
     from app.tenants.keycloak_admin import KeycloakAdminClient
     kc = KeycloakAdminClient(get_settings())
     assert kc.realm_exists(SLUG)
     user = kc.find_user(SLUG, ADMIN_EMAIL)
-    assert user is not None and "CONFIGURE_TOTP" in user["requiredActions"]
+    assert user is not None
+    assert "UPDATE_PASSWORD" in user["requiredActions"], user["requiredActions"]
+    assert "CONFIGURE_TOTP" not in user["requiredActions"], user["requiredActions"]
 
     # Cadena de audit del tenant recién nacido: íntegra
     with admin_conn.cursor() as cur:
@@ -298,14 +315,22 @@ def test_02_real_pkce_login_and_mfa_gate(client, admin_conn, idp):
         "PUT", f"/admin/realms/{SLUG}/users/{user_uuid}", user, token=token)
     assert status in (204, 409), raw
 
-    # (c) Login PKCE REAL del admin SIN TOTP (D-MFA-01): con el realm cableado
-    # por ensure_mfa_acr el OTP Form exige un segundo factor y, sin credencial
-    # TOTP, Keycloak deriva inline a CONFIGURE_TOTP — NO hay code. Un login
-    # password-only ya no completa autenticación en el IdP (fail-closed); la
-    # verificación de que password+TOTP real → acr "2" → sesión mfa_verified
-    # está cubierta por el probe en vivo del skill identity/keycloak26-amr-mfa.
-    id_token, location = _pkce_login(ADMIN_EMAIL, "E2eAdminPass2026!")
-    assert id_token is None, "sin TOTP el login NO debe obtener un code"
+    # (c) Spec 015 D-AUTH-06 (probe S1/S2): el flujo LoA nuevo hace el OTP
+    # CONDICIONAL. acr_values=1 → password-only → code con acr "1" (SIN
+    # formulario OTP); acr_values=2 → el OTP Form corre y, sin credencial
+    # TOTP, Keycloak deriva inline a CONFIGURE_TOTP — NO hay code
+    # (fail-closed en el IdP cuando se pide el nivel 2). La verificación de
+    # password+TOTP real → acr "2" → sesión mfa_verified está cubierta por
+    # el probe en vivo del skill identity/keycloak26-amr-mfa.
+    id_token, location = _pkce_login(
+        ADMIN_EMAIL, "E2eAdminPass2026!", acr_values="1")
+    assert id_token is not None, "acr 1 password-only DEBE obtener un code"
+    payload = json.loads(base64.urlsafe_b64decode(
+        id_token.split(".")[1] + "=="))
+    assert payload.get("acr") == "1", payload.get("acr")
+    id_token, location = _pkce_login(
+        ADMIN_EMAIL, "E2eAdminPass2026!", acr_values="2")
+    assert id_token is None, "sin TOTP el login acr 2 NO debe obtener un code"
     assert "execution=CONFIGURE_TOTP" in location, location
 
     # (d) DOBLE DECLARADO: KC26 no permite enrolar TOTP vía Admin REST
@@ -318,10 +343,30 @@ def test_02_real_pkce_login_and_mfa_gate(client, admin_conn, idp):
         )
     admin_conn.commit()
 
-    # (e) Puerta MFA: token sin evidencia MFA (sin amr/acr) -> sesión sin MFA
-    # -> el negocio responde 403 mfa_required
+    # (e) Puerta MFA POLICY-AWARE (spec 015 D-AUTH-07): el tenant e2e nace
+    # con require_mfa=false (default del catálogo tras la migración 0014) →
+    # la sesión sin MFA PASA (200; la app sugiere enrolarla con el banner).
+    # Al activar la policy org require_mfa=true, el MISMO token sin MFA
+    # recibe 403 mfa_required (comportamiento spec 011 intacto).
     no_mfa = _mint_e2e(client, idp, _S["admin_sub"], amr=None)
     assert no_mfa["mfa_verified"] is False
+    resp = client.get("/api/me",
+                      headers=bearer_headers(no_mfa))
+    assert resp.status_code == 200, resp.text
+    with admin_conn.cursor() as cur:
+        # Un tenant nuevo no tiene fila require_mfa (el provisioning solo
+        # siembra claves invariables; el default del catálogo aplica).
+        # La activamos como lo haría el org_admin vía API (fila org explícita).
+        cur.execute(
+            "DELETE FROM policies WHERE tenant_id = %s AND key = 'require_mfa'",
+            (_S["tenant_id"],),
+        )
+        cur.execute(
+            "INSERT INTO policies (tenant_id, level, key, value) "
+            "VALUES (%s, 'org', 'require_mfa', 'true'::jsonb)",
+            (_S["tenant_id"],),
+        )
+    admin_conn.commit()
     resp = client.get("/api/me",
                       headers=bearer_headers(no_mfa))
     assert resp.status_code == 403
@@ -376,9 +421,10 @@ def test_03_worker_user_from_idp(client, admin_conn, idp):
     _S["worker_user_id"] = str(rows[0]["id"])
     _S["worker_sub"] = worker_uuid
 
-    # El obrero también se loguea REAL por PKCE… y sin TOTP el IdP lo manda a
-    # enrolar (D-MFA-01): el OTP Form sin credencial TOTP deriva inline a
-    # CONFIGURE_TOTP, sin code (fail-closed en el IdP, ya no solo en la puerta).
+    # El obrero también se loguea REAL por PKCE… pidiendo acr 2 sin TOTP el
+    # IdP lo manda a enrolar (D-MFA-01/D-AUTH-06): el OTP Form sin
+    # credencial TOTP deriva inline a CONFIGURE_TOTP, sin code (fail-closed
+    # en el IdP cuando se pide el nivel 2, ya no solo en la puerta).
     # (El issuer del tenant apunta al doble declarado desde el paso 2: lo
     # restauramos al realm real para este login, y lo volvemos a sustituir.)
     kc_issuer = f"http://{KC_HOST}:{KC_PORT}/realms/{SLUG}"
@@ -386,7 +432,8 @@ def test_03_worker_user_from_idp(client, admin_conn, idp):
         cur.execute("UPDATE tenants SET oidc_issuer_url = %s "
                     "WHERE id = %s", (kc_issuer, _S["tenant_id"]))
     admin_conn.commit()
-    id_token, location = _pkce_login(WORKER_EMAIL, WORKER_PASSWORD)
+    id_token, location = _pkce_login(
+        WORKER_EMAIL, WORKER_PASSWORD, acr_values="2")
     assert id_token is None, "sin TOTP el login del obrero NO debe obtener un code"
     assert "execution=CONFIGURE_TOTP" in location, location
     with admin_conn.cursor() as cur:
@@ -429,11 +476,18 @@ def test_04_policies(client):
                       headers=admin)
     assert resp.status_code == 422, resp.text
 
-    # Clave invariable del catálogo → 422
+    # Clave invariable del catálogo → 422 (spec 015 D-AUTH-07: require_mfa
+    # YA NO es invariable — la migración 0014 la hizo org-tunable).
+    resp = client.put("/api/policies/org",
+                      json={"key": "scoped_credentials", "value": False},
+                      headers=admin)
+    assert resp.status_code == 422
+    # require_mfa es org-tunable: el org_admin puede apagarla vía API
+    # (200 + audit policy.updated — el gate policy-aware reacciona en vivo).
     resp = client.put("/api/policies/org",
                       json={"key": "require_mfa", "value": False},
                       headers=admin)
-    assert resp.status_code == 422
+    assert resp.status_code == 200, resp.text
 
     # Efecto visible para el obrero (deny-overrides): solo vmware
     resp = client.get("/api/connectors/available",
@@ -543,11 +597,17 @@ def test_07_spend_cutoff_and_recovery(client, admin_conn, litellm_fake):
               "AND period_start = date_trunc('month', now())::date",
               (_S["worker_user_id"],))
     spent = rows[0]["spent_cents"]
-    assert spent >= 200  # 2 × $1 (pricing del catálogo) — BYOK? no: central
+    # Pricing REAL del catálogo MaaS (spec 018): el costo por llamada es
+    # dinámico (litellm_fake.per_call_cents) — 2 invocaciones central.
+    per_call = litellm_fake.per_call_cents(QWEN)
+    assert spent >= 2 * per_call  # BYOK? no: central
 
-    # Corte: presupuesto por debajo del gasto (force auditable)
+    # Corte: presupuesto por debajo del gasto (force auditable).
+    # D-GOV-17: spent llega como Decimal (milli-centavo); el API exige
+    # amount_cents entero → coerción (el gasto del doble es entero).
     resp = client.put(f"/api/budgets/user/{_S['worker_user_id']}",
-                      json={"amount_cents": spent - 50, "force": True},
+                      json={"amount_cents": max(1, int(spent) - int(per_call)),
+                            "force": True},
                       headers=admin)
     assert resp.status_code == 200, resp.text
 
@@ -675,6 +735,36 @@ def test_08_device_enrollment(client, admin_conn, idp):
                   (_S["tenant_id"], action, _S["device_id"]))
         assert rows, f"falta audit {action}"
 
+    # F4 (QA t_877b0cb5): rechazar un segundo enrolamiento pending emite
+    # device.rejected — NUNCA device.revoked (trail distinguible).
+    key2 = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    public_key2 = key2.public_key().public_bytes(
+        serialization.Encoding.PEM,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode()
+    id_token2 = idp.make_jwt(sub=_S["worker_sub"],
+                             tenant_id=_S["tenant_id"],
+                             issuer=idp.issuer(SLUG), amr=["mfa"])
+    resp = client.post("/api/devices/enroll", json={
+        "org_code": SLUG, "id_token": id_token2,
+        "public_key": public_key2, "fingerprint": "fp-e2e-worker-laptop-2",
+        "device_name": "e2e-laptop-2", "platform": "linux",
+    })
+    assert resp.status_code == 202, resp.text
+    rejected_id = resp.json()["device_id"]
+
+    resp = client.post(f"/api/devices/{rejected_id}/reject", headers=admin)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "rejected"
+
+    rows = _q(admin_conn,
+              "SELECT action FROM audit_log "
+              "WHERE tenant_id = %s AND device_id = %s ORDER BY seq",
+              (_S["tenant_id"], rejected_id))
+    actions = [r["action"] for r in rows]
+    assert actions == ["device.enrolled", "device.rejected"], actions
+    _S["rejected_device_id"] = rejected_id
+
 
 # ---------------------------------------------------------------------------
 # Paso 9 — conector: vault one-time + gobernanza deny-overrides
@@ -755,7 +845,8 @@ def test_10_audit_verified(client, admin_conn):
         "tenant.provisioned", "user.created", "role.assigned",
         "policy.updated", "budget.updated", "model.approved",
         "model.key_issued", "budget.cutoff", "device.enrolled",
-        "device.approved", "device.revoked", "vault.credential_created",
+        "device.approved", "device.rejected", "device.revoked",
+        "vault.credential_created",
         "vault.credential_used", "connector.connected",
     }
     found = set()

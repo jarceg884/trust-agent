@@ -1,0 +1,27 @@
+{"ts": 1793068619, "event": "attestation_skipped", "trigger": "startup", "reason": "device not enrolled"}
+{"ts": 1793068638, "pid": 854655, "event": "auto_enroll_attempt", "org_code": "hermes-dl-e2e", "outcome": "pending", "detail": ""}
+{"ts": 1793068659, "pid": 854655, "event": "auto_enrolled", "org_code": "hermes-dl-e2e", "device_id": "af768c97-aeb5-41bd-b129-5bf92f28397a", "token_path": "/root/trust-agent/.e2e/hermes-dl-home-qa3/trust-agent/device-token.json"}
+{"ts": 1793068917, "event": "bundle_synced", "policy_version": 6, "expires_at": 1793072517, "offline_grace_minutes": 60}
+{"ts": 1793068917, "event": "heartbeat_ok", "applied_policy_version": 6, "current_policy_version": 6, "policy_update_available": false}
+{"ts": 1793068938, "event": "startup_from_cache", "policy_version": 6, "expires_at": 1793072517}
+{"ts": 1793068938, "event": "bundle_synced", "policy_version": 6, "expires_at": 1793072538, "offline_grace_minutes": 60}
+{"ts": 1793068938, "event": "heartbeat_ok", "applied_policy_version": 6, "current_policy_version": 6, "policy_update_available": false}
+{"ts": 1793068940, "event": "attestation_sent", "trigger": "startup", "bundle_hash": "2a897ab33d34f1251e1dfa3bbac33ddfc95c9c1f79f7e91cf3c5b41624ce5f9a", "policy_version": 6, "mode": "normal", "veto_counts": {}, "escalated_tools": []}
+{"ts": 1793069013, "pid": 862229, "event": "mode_change", "mode": "normal", "cause": ""}
+{"ts": 1793069013, "event": "attestation_sent", "trigger": "session_start", "bundle_hash": "2a897ab33d34f1251e1dfa3bbac33ddfc95c9c1f79f7e91cf3c5b41624ce5f9a", "policy_version": 6, "mode": "normal", "veto_counts": {}, "escalated_tools": []}
+{"ts": 1793069021, "pid": 862229, "event": "veto_eval", "tool": "terminal", "mode": "normal", "cause": ""}
+{"ts": 1793069021, "pid": 862229, "event": "tool_vetoed", "tool": "terminal", "reason": "not in allowed_tools"}
+{"ts": 1793069061, "pid": 862229, "event": "veto_eval", "tool": "web_search", "mode": "normal", "cause": ""}
+{"ts": 1793069131, "pid": 862229, "event": "veto_eval", "tool": "tool_search", "mode": "normal", "cause": ""}
+{"ts": 1793069131, "pid": 862229, "event": "tool_vetoed", "tool": "tool_search", "reason": "not in allowed_tools"}
+{"ts": 1793069141, "pid": 862229, "event": "veto_eval", "tool": "tool_describe", "mode": "normal", "cause": ""}
+{"ts": 1793069141, "pid": 862229, "event": "tool_vetoed", "tool": "tool_describe", "reason": "not in allowed_tools"}
+{"ts": 1793069149, "pid": 862229, "event": "veto_eval", "tool": "governance_status", "mode": "normal", "cause": ""}
+{"ts": 1793069217, "event": "bundle_synced", "policy_version": 6, "expires_at": 1793072817, "offline_grace_minutes": 60}
+{"ts": 1793069217, "event": "heartbeat_ok", "applied_policy_version": 6, "current_policy_version": 6, "policy_update_available": false}
+{"ts": 1793069239, "event": "bundle_synced", "policy_version": 6, "expires_at": 1793072838, "offline_grace_minutes": 60}
+{"ts": 1793069239, "event": "heartbeat_ok", "applied_policy_version": 6, "current_policy_version": 6, "policy_update_available": false}
+{"ts": 1793069266, "event": "attestation_skipped", "trigger": "startup", "reason": "device not enrolled"}
+{"ts": 1793069267, "pid": 870623, "event": "auto_enrolled", "org_code": "hermes-dl-e2e", "device_id": "af768c97-aeb5-41bd-b129-5bf92f28397a", "token_path": "/root/trust-agent/.e2e/hermes-dl-home-qa3/trust-agent/device-token.json"}
+{"ts": 1793069294, "event": "bundle_synced", "policy_version": 6, "expires_at": 1793072894, "offline_grace_minutes": 60}
+{"ts": 1793069294, "event": "heartbeat_ok", "applied_policy_version": 6, "current_policy_version": 6, "policy_update_available": false}

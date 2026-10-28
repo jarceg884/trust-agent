@@ -1,0 +1,26 @@
+Trust Agent
+
+PROVIDER CONSOLE Provider Console (usin © Sign out
+
+OPERATIONS
+Tenants / final-e2e
+ren FinalE2E Corp (<x. ‘Suspend tenant
+Provision New Client
+‘Organization Budget (period)
+Canonical state from the control plane. Organization level
+slus KEYCLOAK REALM CREATED spent $4.00
+final-e2e final-e2e ct 23, 2026, 8:38 PM
+USERS DEPARTMENTS OlDC ISSUER 0 $500.00 / month ts
+3 4 hietp://327.0.0.1:6060/realm
+5/Final-e2e
+Healthcheck Entry points
+Live verification: database, ldP discovery/JWKS, admin user, budget, policies, departments, models, audit Links that bind users to this organization.
+chain,
+4 Run healthcheck ADMIN CONSOLE
+‘The customers admins sign in here (SSO + MFA
+of their realm)
+
+Run the healthcheck to verify this tenant end-to-end against the live environment.
+
+http://127.0.0.1:3100/a. © Copy
+

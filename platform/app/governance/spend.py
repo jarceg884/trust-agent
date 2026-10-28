@@ -14,6 +14,7 @@ Two phases per worker cycle:
 """
 from dataclasses import dataclass
 from datetime import date, datetime
+from decimal import Decimal, ROUND_HALF_UP
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
@@ -24,6 +25,11 @@ from ..models import access as model_access
 from . import budgets, notifications as inbox
 from .budgets import _budget_row, _spent_in_window, period_window
 
+# Milli-centavo (D-GOV-17, spec 005 / migración 0029): ledger y counters en
+# numeric(12,3) — centavos con 3 decimales. ROUND_HALF_UP en cada cuantización
+# (conservador para el corte: nunca por debajo del costo real).
+_MILLI_CENT = Decimal("0.001")
+
 
 @dataclass
 class RawSpend:
@@ -33,7 +39,7 @@ class RawSpend:
     tenant_id: str
     user_id: str | None
     model_name: str
-    cost_base_cents: int
+    cost_base_cents: Decimal | int  # milli-centavo (0.001¢); int legacy se coercen
     tokens_in: int
     tokens_out: int
     occurred_at: datetime
@@ -41,15 +47,26 @@ class RawSpend:
 
 # --- Ingest ---------------------------------------------------------------------
 
-def _apply_margin(cost_base_cents: int, mode: str, margin_bps: int) -> int:
+def _as_decimal(value: Decimal | int | float) -> Decimal:
+    return value if isinstance(value, Decimal) else Decimal(str(value))
+
+
+def _apply_margin(
+    cost_base_cents: Decimal | int, mode: str, margin_bps: int,
+) -> Decimal:
+    """`cost_billed = cost_base × (10000 + bps)/10000` en Decimal exacto,
+    re-cuantizado a 0.001¢ ROUND_HALF_UP (D-GOV-06 + D-GOV-17). BYOK sin
+    margen (REQ-BUD-011)."""
+    base = _as_decimal(cost_base_cents)
     if mode == "byok":
-        return cost_base_cents
-    return (cost_base_cents * (10_000 + margin_bps)) // 10_000
+        return base
+    billed = base * (10_000 + margin_bps) / Decimal(10_000)
+    return billed.quantize(_MILLI_CENT, rounding=ROUND_HALF_UP)
 
 
 def _bump_counters(
     conn: Connection, tenant_id: str, *, user_id: str | None,
-    department_id: str | None, billed_cents: int, when: datetime,
+    department_id: str | None, billed_cents: Decimal, when: datetime,
 ) -> None:
     """Add spent to the counters of the levels that govern the spend.
 
@@ -173,7 +190,7 @@ def _load_budgets(conn: Connection) -> dict:
     return out
 
 
-def _window_spent(conn: Connection, budget: dict, entity_id: str) -> int:
+def _window_spent(conn: Connection, budget: dict, entity_id: str) -> Decimal | int:
     # `budgets.today()` (module attribute) is the clock seam: the rollover
     # test monkeypatches it (spec 013 D-013-01) — do NOT bind it by value.
     start, end = period_window(budget["period"], budgets.today())
@@ -214,7 +231,7 @@ def enforce_tenant(engine: Engine, litellm, tenant_id: str) -> dict:
     """Synchronize key blocks + notifications with the current-window
     counters. Idempotent: only status transitions hit the gateway."""
     summary = {"blocked": 0, "unblocked": 0, "cutoff_events": 0,
-               "threshold_notifications": 0}
+               "threshold_notifications": 0, "budget_syncs": 0}
     with tenant_tx(engine, tenant_id) as conn:
         budgets = _load_budgets(conn)
         org = budgets["org"]
@@ -245,7 +262,7 @@ def enforce_tenant(engine: Engine, litellm, tenant_id: str) -> dict:
         keys = conn.execute(
             text(
                 "SELECT k.id, k.user_id, k.litellm_key_hash, k.status, "
-                "u.department_id FROM api_keys k "
+                "k.max_budget_cents, u.department_id FROM api_keys k "
                 "JOIN users u ON u.id = k.user_id "
                 "WHERE k.status IN ('active','blocked')"
             )
@@ -254,6 +271,25 @@ def enforce_tenant(engine: Engine, litellm, tenant_id: str) -> dict:
         for k in keys:
             uid = str(k["user_id"])
             dept = str(k["department_id"]) if k["department_id"] else None
+            # Native max_budget sync (D-GOV-16, re-validación t_c4766c4d):
+            # the gateway enforces the max_budget stamped at issuance; a
+            # budget change at the platform must propagate to the key or
+            # the recovery loop breaks (raise budget -> unblock -> the
+            # gateway still refuses with the OLD native max_budget).
+            user_budget = budgets["user"].get(uid)
+            if (user_budget and k["max_budget_cents"] is not None
+                    and k["max_budget_cents"] != user_budget["amount_cents"]):
+                litellm.update_key_budget(
+                    k["litellm_key_hash"],
+                    user_budget["amount_cents"] / 100.0,
+                )
+                conn.execute(
+                    text("UPDATE api_keys SET max_budget_cents = :amount, "
+                         "updated_at = now() WHERE id = CAST(:id AS uuid)"),
+                    {"amount": user_budget["amount_cents"],
+                     "id": str(k["id"])},
+                )
+                summary["budget_syncs"] += 1
             if org_cutoff:
                 level, entity = "org", tenant_id
             elif dept and dept_cutoff.get(dept):
@@ -341,7 +377,7 @@ def _role_users(conn: Connection, role_key: str, department_id: str | None) -> l
 
 def _thresholds(
     conn: Connection, tenant_id: str, *, budgets_by_level: dict,
-    org_spent: int, dept_spent: dict, user_spent: dict,
+    org_spent: Decimal | int, dept_spent: dict, user_spent: dict,
     org_cutoff: bool, dept_cutoff: dict, user_cutoff: dict,
 ) -> int:
     """80 % soft-threshold notifications (REQ-BUD-009), deduped per window.
@@ -353,19 +389,25 @@ def _thresholds(
     """
     sent = 0
 
-    def check(budget: dict, spent: int, level: str, entity: str,
+    def check(budget: dict, spent: Decimal | int, level: str, entity: str,
               recipients: list[str], extra: dict | None = None) -> None:
         nonlocal sent
         if not budget or spent <= 0:
             return
-        threshold = budget["amount_cents"] * budget["soft_threshold_pct"] / 100
+        # Umbral en Decimal exacto (D-GOV-17): la comparación contra el
+        # acumulado milli-centavo no introduce redondeo adicional.
+        threshold = (
+            Decimal(budget["amount_cents"])
+            * budget["soft_threshold_pct"] / Decimal(100)
+        )
         if spent < threshold:
             return
         start, _end = period_window(budget["period"], budgets.today())
         payload = {
             "level": level, "scope": f"{level}:{entity}",
             "period_start": start.isoformat(),
-            "budget_cents": budget["amount_cents"], "spent_cents": spent,
+            "budget_cents": budget["amount_cents"],
+            "spent_cents": float(spent),  # json.dumps no serializa Decimal
             **(extra or {}),
         }
         any_new = False
@@ -382,7 +424,7 @@ def _thresholds(
                 target_id=level,
                 payload={"level": level, "scope": f"{level}:{entity}",
                          "period_start": start.isoformat(),
-                         "spent_cents": spent,
+                         "spent_cents": float(spent),
                          "budget_cents": budget["amount_cents"]},
             )
 

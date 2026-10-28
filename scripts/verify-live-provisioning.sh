@@ -9,7 +9,7 @@ PG="host=127.0.0.1 port=55432 user=postgres password=trustlocal"
 export TRUST_DATABASE_URL="postgresql+psycopg://trust_app:trust_app_dev@127.0.0.1:55432/$DB"
 export TRUST_DATABASE_MIGRATOR_URL="postgresql+psycopg://trust_migrator:trust_migrator_dev@127.0.0.1:55432/$DB"
 export TRUST_IDP_BASE_URLS="http://127.0.0.1:8080"
-export TRUST_PROVIDER_TOKEN="live-provider-token"
+export TRUST_PROVIDER_TOKEN="${TRUST_PROVIDER_TOKEN:-live-provider-token}"  # dev default; en despliegue real viene del .env
 export TRUST_KEYCLOAK_ADMIN_PASSWORD="KeycloakDemo2026"
 export TRUST_DEVICE_TOKEN_SECRET="live-dev-secret"
 export TRUST_VAULT_KEK_B64="$(printf 'A%.0s' {1..43} | base64 -w0)"
@@ -58,7 +58,7 @@ echo "healthz: $(curl -s http://127.0.0.1:8000/healthz)"
 
 # 3. Provision through the real HTTP API
 RESP=$(curl -s -X POST http://127.0.0.1:8000/api/admin/tenants \
-  -H "Authorization: Bearer live-provider-token" \
+  -H "Authorization: Bearer $TRUST_PROVIDER_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"organization_name":"Live Corp","admin_email":"admin@live.test","initial_budget_usd":250,"model_plan":"standard","slug":"live-corp"}')
 echo "$RESP" > /tmp/live-provision.json
@@ -79,13 +79,13 @@ PY
 # 4. Idempotent re-run over real HTTP
 CODE=$(curl -s -o /tmp/live-rerun.json -w "%{http_code}" -X POST \
   http://127.0.0.1:8000/api/admin/tenants \
-  -H "Authorization: Bearer live-provider-token" -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TRUST_PROVIDER_TOKEN" -H "Content-Type: application/json" \
   -d '{"organization_name":"Live Corp","admin_email":"admin@live.test","initial_budget_usd":250,"model_plan":"standard","slug":"live-corp"}')
 echo "re-run HTTP $CODE created=$(python3 -c "import json;print(json.load(open('/tmp/live-rerun.json'))['created'])" 2>/dev/null || .venv/bin/python -c "import json;print(json.load(open('/tmp/live-rerun.json'))['created'])")"
 
 # 5. Provider state + healthcheck endpoints over real HTTP
-echo "state: $(curl -s -H "Authorization: Bearer live-provider-token" http://127.0.0.1:8000/api/admin/tenants/live-corp | head -c 220)"
-echo "healthcheck: $(curl -s -H "Authorization: Bearer live-provider-token" http://127.0.0.1:8000/api/admin/tenants/live-corp/healthcheck | head -c 120)..."
+echo "state: $(curl -s -H "Authorization: Bearer $TRUST_PROVIDER_TOKEN" http://127.0.0.1:8000/api/admin/tenants/live-corp | head -c 220)"
+echo "healthcheck: $(curl -s -H "Authorization: Bearer $TRUST_PROVIDER_TOKEN" http://127.0.0.1:8000/api/admin/tenants/live-corp/healthcheck | head -c 120)..."
 echo "no-token: $(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/api/admin/tenants/live-corp)"
 echo "bad-token: $(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer nope" http://127.0.0.1:8000/api/admin/tenants/live-corp)"
 
@@ -101,7 +101,9 @@ challenge = base64.urlsafe_b64encode(
     hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
 params = {
     "response_type": "code", "client_id": "trust-agent-web", "scope": "openid",
-    "redirect_uri": "http://127.0.0.1:9090/auth/callback",
+    # Callback del helper trust-login del bundle de descarga (spec 023
+    # D-023-13): el flujo real de desktop. Retirado el demo :9090 (t_b8769ecb).
+    "redirect_uri": "http://127.0.0.1:8765/callback",
     "state": "st-live", "code_challenge": challenge,
     "code_challenge_method": "S256",
 }

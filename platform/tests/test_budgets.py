@@ -2,11 +2,12 @@
 import psycopg
 
 from conftest import (
-    DEPT_A1, DEPT_A2, DEPT_B1, TENANT_A, USER_ALICE, USER_BOB, USER_CAROL,
-    USER_DAVE, _admin, bearer_headers, mint,
+    DEPT_A1, DEPT_A2, DEPT_B1, TENANT_A, TENANT_B, USER_ALICE, USER_BOB,
+    USER_CAROL, USER_DAVE, _admin, bearer_headers, mint,
 )
 
-TEST_DB = "trust_agent_platform_test"
+import os  # noqa: E402 (honor TRUST_TEST_DB como tests/conftest.py)
+TEST_DB = os.environ.get("TRUST_TEST_DB", "trust_agent_platform_test")
 
 
 def _put(client, path, body, tokens):
@@ -135,6 +136,39 @@ def test_overview_unassigned_remainder(client, idp):
     assert dept["members"] >= 2  # Alice, Carol (y Frank) están en IT
 
 
+def test_overview_lists_user_budgets_per_department(client, idp):
+    """t_6b40c758 (QA F3): el overview anida los presupuestos por usuario
+    bajo cada depto — vía de lectura para la UI de edición (PUT
+    /api/budgets/user/{id}) — con Σ usuarios del depto (REQ-BUD-003)."""
+    alice = mint(client, idp, "alice")
+    resp = client.get("/api/budgets/overview", headers=bearer_headers(alice))
+    assert resp.status_code == 200, resp.text
+    departments = resp.json()["departments"]
+    it = next(d for d in departments if d["name"] == "IT")
+    # Seed: Carol $1,000 + Alice $2,000 (usuarios de IT); Frank sin budget.
+    carol = next(u for u in it["users"] if u["user_id"] == USER_CAROL)
+    alice_row = next(u for u in it["users"] if u["user_id"] == USER_ALICE)
+    frank = next(u for u in it["users"] if u["email"] == "frank@tenant-a.test")
+    assert carol["budget_cents"] == 100000
+    assert alice_row["budget_cents"] == 200000
+    assert frank["budget_cents"] is None
+    assert frank["spent_cents"] == 0
+    assert it["user_budgets_total_cents"] == 300000
+    assert it["members"] == len(it["users"]) == 3
+    # Σ usuarios nunca cuenta deptos ajenos: Finance no tiene user budgets.
+    finance = next(d for d in departments if d["name"] == "Finance")
+    assert finance["user_budgets_total_cents"] == 0
+    assert all(u["budget_cents"] is None for u in finance["users"])
+    # dept_admin: el scope del router filtra deptos; los usuarios anidados
+    # viajan dentro del depto visible (Bob ve solo Finance, sin budgets).
+    bob = mint(client, idp, "bob")
+    scoped = client.get("/api/budgets/overview", headers=bearer_headers(bob))
+    assert scoped.status_code == 200
+    scoped_depts = scoped.json()["departments"]
+    assert [d["department_id"] for d in scoped_depts] == [DEPT_A2]
+    assert all(u["user_id"] != USER_CAROL for u in scoped_depts[0]["users"])
+
+
 def test_overview_rbac_and_scope(client, idp):
     """AC-GOV-060: user → 403; dept_admin ve solo su depto."""
     carol = mint(client, idp, "carol")
@@ -209,3 +243,69 @@ def test_my_budget_status(client, idp):
     assert data["cutoff"] is False
     assert data["user"]["remaining_cents"] == \
         data["user"]["budget_cents"] - data["user"]["spent_cents"]
+
+
+def test_my_budget_status_explicit_zero_budget_cutoff(client, idp):
+    """AC-GOV-012a (borde amount=0, gap B-1 t_ac2d2611): un presupuesto
+    EXPLÍCITO de 0 centavos es un presupuesto vigente — la ruta de lectura
+    aplica la misma regla que el enforcement (spent >= amount, sin guard
+    `> 0`). Con spend ≥ 1¢ y budget 0, /api/budgets/me reporta
+    cutoff=true, cutoff_level="user" (antes: remaining=-1, cutoff=false).
+    Un presupuesto AUSENTE (sin fila) sigue sin corte."""
+    alice = mint(client, idp, "alice")
+    carol = mint(client, idp, "carol")
+
+    # Gasto real en la ventana vigente para Carol (1¢, como el repro E2E).
+    with _admin(TEST_DB) as c:
+        c.execute(
+            "INSERT INTO budget_counters (tenant_id, level, entity_id, "
+            "period_start, period_end, spent_cents, budget_cents) VALUES ("
+            f"'{TENANT_A}', 'user', '{USER_CAROL}', date_trunc('month', now())::date, "
+            f"(date_trunc('month', now()) + interval '1 month - 1 day')::date, "
+            "1, 0) ON CONFLICT (tenant_id, level, entity_id, period_start) "
+            "DO UPDATE SET spent_cents = 1, budget_cents = 0"
+        )
+
+    try:
+        # Budget explícito 0 (force: 0 < 1 de gasto ya incurrido).
+        zeroed = _put(client, f"/api/budgets/user/{USER_CAROL}",
+                      {"amount_cents": 0, "force": True}, alice)
+        assert zeroed.status_code == 200, zeroed.text
+
+        # La ruta de lectura coincide con el enforcement: cortado.
+        me = client.get("/api/budgets/me", headers=bearer_headers(carol))
+        assert me.status_code == 200, me.text
+        data = me.json()
+        assert data["user"]["budget_cents"] == 0
+        assert data["user"]["spent_cents"] == 1
+        assert data["user"]["remaining_cents"] == -1
+        assert data["user"]["cutoff"] is True
+        assert data["cutoff"] is True
+        assert data["cutoff_level"] == "user"
+
+        # La misma respuesta por el alias /api/me/budget (mismo servicio).
+        alias = client.get("/api/me/budget", headers=bearer_headers(carol))
+        assert alias.status_code == 200
+        assert alias.json()["cutoff_level"] == "user"
+
+        # Presupuesto ausente ≠ presupuesto 0: Dave (tenant B, sin ningún
+        # budget) no reporta corte — budget_cents null, cutoff false.
+        dave = mint(client, idp, "dave", tenant=TENANT_B)
+        me_dave = client.get("/api/budgets/me",
+                             headers=bearer_headers(dave))
+        assert me_dave.status_code == 200, me_dave.text
+        ddata = me_dave.json()
+        assert ddata["user"]["budget_cents"] is None
+        assert ddata["user"]["cutoff"] is False
+        assert ddata["cutoff"] is False
+        assert ddata["cutoff_level"] is None
+    finally:
+        # Restaurar Carol ($1,000, seed) y limpiar el counter del test.
+        restore = _put(client, f"/api/budgets/user/{USER_CAROL}",
+                       {"amount_cents": 100000, "force": True}, alice)
+        assert restore.status_code == 200, restore.text
+        with _admin(TEST_DB) as c:
+            c.execute(
+                "DELETE FROM budget_counters "
+                f"WHERE tenant_id = '{TENANT_A}' AND entity_id = '{USER_CAROL}'"
+            )

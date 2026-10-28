@@ -138,37 +138,137 @@ CREATE TABLE IF NOT EXISTS catalog.policy_keys (
 );
 
 INSERT INTO catalog.policy_keys (key, value_type, invariable, default_value, description) VALUES
-  ('require_mfa',                 'boolean', true,  'true',  'MFA mandatory for every authenticated operation.'),
+  -- spec 015 (migración 0014): require_mfa pasa a policy variable (default
+  -- false = MFA opcional con banner que sugiere enrolarlo); los tenants
+  -- existentes conservan su fila explícita en policies.
+  ('require_mfa',                 'boolean', false, 'false', 'MFA mandatory for every authenticated operation (org-tunable; when false the app always suggests enrolling).'),
+  ('allow_self_registration',     'boolean', false, 'true',  'Users can create their own account (password self-registration or first Google login).'),
   ('approved_models_only',        'boolean', true,  'true',  'Only models approved by the organization can be used.'),
   ('explicit_shared_agent_grants','boolean', true,  'true',  'Shared agents require explicit grants; no open sharing.'),
   ('scoped_credentials',          'boolean', true,  'true',  'Connector credentials must use the minimum declared scope.'),
-  ('allowed_models',              'list',    false, '[]',    'Model names allowed beyond the approved set.'),
+  -- t_f0d3122d (migración 0019): default null = sin restricción adicional
+  -- (heredar la intersección de aprobaciones); [] = deny-all explícito.
+  ('allowed_models',              'list',    false, 'null',  'Model names allowed beyond the approved set (null = no additional restriction; [] = explicit deny-all).'),
   ('allowed_connectors',          'list',    false, '[]',    'Connector slugs the level allows.'),
   ('shared_agent_grants_mode',    'string',  false, '"explicit"', 'Grant mode for shared agents.'),
   ('vault_allowed_credential_types','list',  false, '["api_key","oauth2"]', 'Credential types users may register.'),
   ('session_timeout_minutes',     'integer', false, '60',    'Server-side session timeout.'),
   ('artifact_sharing',            'string',  false, '"private"', 'Artifact sharing mode.'),
   ('messaging_permissions',       'map',     false, '{}',    'Per messaging platform: allowed + agent mode (read_only|reply|full).'),
-  ('max_daily_sessions',          'integer', false, '10',    'Maximum agent sessions per user per day.')
+  ('max_daily_sessions',          'integer', false, '10',    'Maximum agent sessions per user per day.'),
+  -- spec 019 (governance sobre Hermes, D-GOH-08; migración 0011): keys de
+  -- gobernanza del agente. allowed_tools: default del proveedor = tools
+  -- conversacionales básicas SIN terminal/browser (governance_status es la
+  -- tool interna del plugin, siempre permitida). offline_grace_minutes tiene
+  -- piso 15 (upsert + compilación del bundle). unbind_mode enum en
+  -- combinator.STRING_RANKS (lock > readonly).
+  ('allowed_tools',               'list',    false, '["web_search", "read_file", "write_file", "governance_status"]', 'Allowlist of Hermes agent tool ids (deny-overrides across levels).'),
+  ('offline_grace_minutes',       'integer', false, '60',    'Offline grace for the signed governance bundle (provider floor 15).'),
+  ('unbind_mode',                 'string',  false, '"readonly"', 'Restricted-mode degree when unbound/revoked: readonly | lock.'),
+  ('attestation_overdue_hours',   'integer', false, '24',    'Hours without attestation before an active device is flagged overdue.'),
+  -- spec 024 (conexiones personalizadas, D-24-02/03; migración 0012): tokens
+  -- '*' (todo el catálogo, sujeto a allowed_connectors), slugs del catálogo,
+  -- o ids de conexiones personalizadas activas del tenant. Default '*' =
+  -- sin cambio de comportamiento para tenants existentes.
+  ('allowed_connections',         'list',    false, '["*"]', 'Connection tokens the level allows: ''*'' (whole catalog), catalog slugs, or custom connection ids (deny-overrides across levels).'),
+  -- spec 029 (catálogo de policies v2, t_fb62560f; migración 0022): las 29 keys
+  -- NUEVAS de la matriz de capacidades (docs/hermes-capability-matrix.md §3,
+  -- P-1..P-29) — deny-by-default. Combinación key-aware (combinator.py):
+  -- approval_mode por STRING_RANKS (manual>smart>off), denied_command_patterns
+  -- por UNIÓN, require_write_sandbox/require_checkpoints por OR (true gana),
+  -- max_delegation_depth/session_retention_days por mínimo con pisos en
+  -- policies.py::INTEGER_FLOORS, web_domain_policy por deny-overrides por modo.
+  ('approval_mode',               'string',  false, '"smart"', 'Command approval mode floor: off|smart|manual (STRING_RANKS manual>smart>off; vetoes approvals.mode:off, --yolo, /yolo, HERMES_YOLO_MODE).'),
+  ('allowed_terminal_backends',   'list',    false, '["docker"]', 'Terminal backends the level allows (local,ssh,docker,modal,daytona,vercel_sandbox,singularity,*); intersection across levels.'),
+  ('denied_command_patterns',     'list',    false, '[]',    'fnmatch globs of commands denied unconditionally; UNION across levels (deny-overrides: more denials = more restrictive).'),
+  ('allowed_command_patterns',    'list',    false, '[]',    'Ceiling for the agent''s permanent command_allowlist; intersection across levels.'),
+  ('require_write_sandbox',       'boolean', false, 'true',  'File writes confined to the write sandbox (HERMES_WRITE_SAFE_ROOT); OR across levels (true wins).'),
+  ('allowed_mcp_servers',         'list',    false, '[]',    'MCP server names the level allows (*); intersection across levels.'),
+  ('allowed_plugins',             'list',    false, '[]',    'Plugin names the level allows (*); intersection across levels.'),
+  ('allowed_skills',              'list',    false, '["*"]', 'Skill ids the level allows (*); intersection across levels (spec 001 REQ-PRF-005 — was referenced but missing from the catalog).'),
+  ('allow_scheduled_tasks',       'boolean', false, 'false', 'Agent may create cron jobs / scheduled tasks; AND across levels.'),
+  ('allow_recurring_prompts',     'boolean', false, 'false', 'Recurring prompts in-session (/loop, session heartbeat); AND across levels.'),
+  ('allow_goal_mode',             'boolean', false, 'false', 'Goal mode (LLM-judged goal loop); AND across levels.'),
+  ('max_delegation_depth',        'integer', false, '1',     'Max subagent spawn depth (provider floor 0); minimum across levels.'),
+  ('allowed_memory_providers',    'list',    false, '["builtin"]', 'Memory providers the level allows (builtin + names, *); intersection.'),
+  ('allow_custom_personality',    'boolean', false, 'false', 'User may set a custom personality (SOUL.md / agent.personalities); AND.'),
+  ('allowed_secret_sources',      'list',    false, '["env"]', 'Secret sources the level allows (env + sources, *); intersection.'),
+  ('allow_credential_vault',      'boolean', false, 'false', 'Browser credential vault (logins/cards) and external login adoption; AND.'),
+  ('allow_payment_autofill',      'boolean', false, 'false', 'Payment/card autofill prompts; AND across levels.'),
+  ('allowed_env_passthrough',     'list',    false, '[]',    'Environment variable names that may pass through to sandboxes (*); intersection across levels.'),
+  ('web_domain_policy',           'map',     false, '{"mode": "open", "domains": []}', 'Web domain policy {mode: open|allowlist|blocklist, domains: []}; deny-overrides per mode (any blocklist applies; allowlist = intersection).'),
+  ('allow_private_network_access','boolean', false, 'false', 'Agent may reach private networks/metadata endpoints (SSRF opt-out); AND.'),
+  ('allow_voice_mode',            'boolean', false, 'false', 'Voice mode (STT+TTS / full-duplex) and wake word; AND across levels.'),
+  ('allow_bot_mode',              'boolean', false, 'false', 'Bot mode (bot roster, message_agent, bot_peers); AND across levels.'),
+  ('allow_gateway_hooks',         'boolean', false, 'false', 'Gateway event hooks (~/.hermes/hooks/, trusted-by-placement); AND.'),
+  ('allow_shell_hooks',           'boolean', false, 'false', 'Shell hooks (hooks: in config.yaml); AND across levels.'),
+  ('allow_profile_distributions', 'boolean', false, 'false', 'Profile distributions (hermes profile install) and agent imports; AND.'),
+  ('allowed_providers',           'list',    false, '["litellm_gateway"]', 'Model providers the level allows (litellm_gateway + providers, *); intersection across levels (routing/fallback cannot escape the list).'),
+  ('session_retention_days',      'integer', false, '30',    'Session retention window in days (provider floor 1); minimum across levels.'),
+  ('require_checkpoints',         'boolean', false, 'true',  'Checkpoints (shadow git store / rollback) must be enabled; OR across levels (true wins).'),
+  ('allow_self_updates',          'boolean', false, 'false', 'Self-updates (hermes update, lazy installs, catalog installs); AND.')
 ON CONFLICT (key) DO NOTHING;
 
 -- 3.3 Catálogo global de modelos (LiteLLM/MaaS; pricing en centavos USD por millón de tokens.
 --     Seeds de referencia: el job pricing_sync (REQ-MDL-004) actualiza con el pricing vigente.)
+--     Spec 032 (discovery dinámico): filas por fuente — 'central' (MaaS de la
+--     plataforma, tenant_id NULL, visibles para todos) y 'byok' (una conexión
+--     llm del tenant; model_name namespaced byok:{connection_id}:{upstream_id}).
+--     El UNIQUE(model_name) global se reemplaza por índices únicos parciales
+--     por fuente (migración 0024).
 CREATE TABLE IF NOT EXISTS catalog.model_catalog (
   id                       uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  model_name               text NOT NULL UNIQUE,          -- LiteLLM model name
-  display_name             text NOT NULL,
-  provider                 text NOT NULL,                 -- e.g. huawei_maas
-  input_price_cents_per_m  bigint NOT NULL CHECK (input_price_cents_per_m >= 0),
-  output_price_cents_per_m bigint NOT NULL CHECK (output_price_cents_per_m >= 0),
-  status                   text NOT NULL DEFAULT 'available' CHECK (status IN ('available','deprecated')),
-  updated_at               timestamptz NOT NULL DEFAULT now()
+  model_name               text NOT NULL,                 -- central: MaaS deployment name; byok: byok:{conn}:{upstream_id}
+  display_name             text NOT NULL,                 -- nombre oficial MaaS (p.ej. GLM-5.2)
+  provider                 text NOT NULL,                 -- central: huawei_maas; byok: nombre de la conexión
+  -- Precios ¢/M USD (peor caso). NULL = coste desconocido (alta automática
+  -- del refresh central spec 018 §5 hasta sellado contra la doc oficial);
+  -- el CHECK >= 0 se conserva: NULL no es "gratis".
+  input_price_cents_per_m  numeric(12,3) CHECK (input_price_cents_per_m >= 0),
+  output_price_cents_per_m numeric(12,3) CHECK (output_price_cents_per_m >= 0),
+  status                   text NOT NULL DEFAULT 'available' CHECK (status IN ('available','deprecated','stale','removed')),
+  updated_at               timestamptz NOT NULL DEFAULT now(),
+  -- Columnas añadidas por la migración 0009 (spec 018) vía ADD COLUMN:
+  -- al final de la tabla para preservar la paridad schema.sql ↔ Alembic
+  -- (AC-DB-040). NULL = límite no documentado en el Model List intl.
+  context_tokens           bigint,                        -- contexto documentado (Model List intl)
+  max_output_tokens        bigint,                        -- máx. output documentado
+  -- Columnas de la migración 0024 (spec 032, discovery dinámico):
+  tenant_id                uuid,                          -- byok: tenant dueño de la conexión
+  connection_id            uuid,                          -- byok: conexión llm (FK se añade en §16)
+  source                   text NOT NULL DEFAULT 'central' CHECK (source IN ('central','byok')),
+  last_seen_at             timestamptz,                   -- último refresh que vio el modelo en la API
+  gateway_model_id         text,                          -- id del modelo en el gateway LiteLLM (/model/delete)
+  CONSTRAINT model_catalog_source_scope_check CHECK (
+    (source = 'central' AND tenant_id IS NULL AND connection_id IS NULL) OR
+    (source = 'byok'   AND tenant_id IS NOT NULL AND connection_id IS NOT NULL)
+  )
 );
+CREATE UNIQUE INDEX IF NOT EXISTS model_catalog_central_name_uidx
+  ON catalog.model_catalog (model_name) WHERE source = 'central';
+CREATE UNIQUE INDEX IF NOT EXISTS model_catalog_byok_uidx
+  ON catalog.model_catalog (connection_id, model_name) WHERE source = 'byok';
+CREATE INDEX IF NOT EXISTS model_catalog_tenant_idx
+  ON catalog.model_catalog (tenant_id, source);
 
-INSERT INTO catalog.model_catalog (model_name, display_name, provider, input_price_cents_per_m, output_price_cents_per_m) VALUES
-  ('qwen2.5-72b-instruct', 'Qwen2.5 72B Instruct', 'huawei_maas', 400, 1200),
-  ('deepseek-v3',          'DeepSeek V3',          'huawei_maas', 270, 1090)
-ON CONFLICT (model_name) DO NOTHING;
+-- Catálogo REAL de MaaS intl (migración 0009 + 0026, spec 018 §1/§5): los
+-- deployments verificados en vivo contra api-ap-southeast-1.modelarts-maas.com/openai/v1
+-- (última verificación 2026-10-27T20:55Z). Precios ¢/M USD, peor caso (P1 /
+-- tier ≥32K / reasoning); fuentes: price-maas/price-maas-0002.html (actualizada
+-- 2026-10-27) y price-modelarts/price-modelarts-0047.html (Qwen3-32B, retirado).
+-- qwen3-32b: retirado upstream (404 ModelArts.81009 en vivo) → stale (0026);
+-- deepseek-v4.1-flash-1017: alta 2026-10-27, límites del Model List intl.
+-- (ON CONFLICT sin target: el UNIQUE(model_name) global fue reemplazado por
+--  índices únicos parciales por fuente en la migración 0024, spec 032.)
+INSERT INTO catalog.model_catalog (model_name, display_name, provider, context_tokens, max_output_tokens, input_price_cents_per_m, output_price_cents_per_m, status) VALUES
+  ('glm-5.3',             'GLM-5.3',             'huawei_maas', 1000000, 128000, 140.0, 440.0, 'available'),
+  ('glm-5.2',             'GLM-5.2',             'huawei_maas', 1000000, 128000, 140.0, 440.0, 'available'),
+  ('glm-5.1',             'GLM-5.1',             'huawei_maas',  198000, 128000, 107.8, 377.4, 'available'),
+  ('deepseek-v4.1-flash-1017', 'DeepSeek-V4.1-Flash-1017', 'huawei_maas', 1000000, 384000, 30.0, 120.0, 'available'),
+  ('deepseek-v4.1-flash', 'DeepSeek-V4.1-Flash', 'huawei_maas', 1000000, 384000,  30.0, 120.0, 'available'),
+  ('deepseek-v4-flash',   'DeepSeek-V4-Flash',   'huawei_maas', 1000000, 384000,  13.5,  27.0, 'available'),
+  ('qwen3-32b',           'Qwen3-32B',           'huawei_maas',    NULL,   NULL,  27.0, 269.5, 'stale')
+ON CONFLICT DO NOTHING;
 
 -- 3.4 Catálogo global de conectores (REQ-CON-001: set inicial obligatorio de 6)
 CREATE TABLE IF NOT EXISTS catalog.connector_catalog (
@@ -201,6 +301,8 @@ INSERT INTO catalog.audit_actions (action, description) VALUES
   ('auth.login_failed',          'Failed login attempt.'),
   ('user.invited',               'User invited (provisioning job created).'),
   ('user.created',               'User provisioned.'),
+  ('user.self_registered',       'User created their own account with a password (spec 015 D-AUTH-04).'),
+  ('user.auto_provisioned',      'User auto-provisioned on first brokered login (spec 015 D-AUTH-05).'),
   ('user.updated',               'User updated.'),
   ('user.disabled',              'User disabled; access revoked.'),
   ('role.assigned',              'Role assigned to user.'),
@@ -212,7 +314,12 @@ INSERT INTO catalog.audit_actions (action, description) VALUES
   ('budget.cutoff',              'Budget cutoff applied (user/dept/org).'),
   ('device.enrolled',            'Device enrolled (pending).'),
   ('device.approved',            'Device approved.'),
-  ('device.revoked',             'Device rejected/revoked.'),
+  ('device.rejected',            'Device enrollment rejected (pending -> rejected).'),
+  ('device.revoked',             'Device revoked (sessions cut immediately).'),
+  ('device.heartbeat',           'Device heartbeat (sampled: at most one per device per audit interval).'),
+  ('policy.propagated',          'Device confirmed it applied a new policy version (heartbeat transition).'),
+  ('device.attestation',         'Agent session attestation: bundle hash, applied policy version, operating mode and veto counts.'),
+  ('device.attestation_overdue', 'Active device with no attestation beyond attestation_overdue_hours (ungoverned agent detection).'),
   ('connector.connected',        'Connector instance connected.'),
   ('connector.disconnected',     'Connector instance disconnected.'),
   ('vault.credential_created',   'Vault credential registered (ciphertext only).'),
@@ -226,10 +333,18 @@ INSERT INTO catalog.audit_actions (action, description) VALUES
   ('tenant.provisioned',         'Tenant provisioned by provider.'),
   ('tenant.suspended',           'Tenant suspended by provider.'),
   ('tenant.reactivated',         'Tenant reactivated.'),
+  ('tenant.self_registered',     'Organization created via public self-signup (spec 026, pending activation).'),
+  ('tenant.activated',           'Tenant activated by provider from pending_activation (spec 026).'),
+  ('budget.assigned',            'Initial budget assigned by the provider on activation (spec 026).'),
   ('audit.verified',             'Audit chain verification run.'),
   ('audit.purged',               'Audit retention purge executed.'),
   ('job.created',                'Async job created.'),
-  ('job.completed',              'Async job finished.')
+  ('job.completed',              'Async job finished.'),
+  ('provider.login',             'Provider operator signed in (username+password[+TOTP]).'),
+  ('provider.login_denied',      'Provider operator login denied (bad credentials, disabled or bad TOTP).'),
+  ('provider.password_changed',  'Provider operator changed their password (first-login required action or rotation).'),
+  ('provider.mfa_enrolled',      'Provider operator enrolled TOTP MFA (verified before activation).'),
+  ('provider.mfa_disabled',      'Provider operator disabled TOTP MFA (password+code confirmed).')
 ON CONFLICT (action) DO NOTHING;
 
 -- ============================================================================
@@ -265,6 +380,7 @@ CREATE TABLE IF NOT EXISTS ops.login_throttle (
 
 COMMENT ON TABLE ops.login_throttle IS 'Login rate-limit counters (REQ-SEC-006): per verified (tenant, subject) and per client IP, progressive lockout, survives API restarts. Provider plane: no tenant_id, no RLS.';
 
+
 -- ============================================================================
 -- 5. SCHEMA public — tablas de negocio (tenant_id + RLS en TODAS)
 -- ============================================================================
@@ -275,7 +391,7 @@ CREATE TABLE IF NOT EXISTS tenants (
   tenant_id        uuid GENERATED ALWAYS AS (id) STORED NOT NULL,
   name             text NOT NULL,
   slug             text NOT NULL UNIQUE,
-  status           text NOT NULL DEFAULT 'active' CHECK (status IN ('active','suspended')),
+  status           text NOT NULL DEFAULT 'active' CHECK (status IN ('active','suspended','pending_activation')),
   oidc_realm       text,
   oidc_issuer_url  text,
   oidc_client_id   text,
@@ -369,7 +485,7 @@ CREATE TABLE IF NOT EXISTS budget_counters (
   entity_id    uuid NOT NULL,   -- tenant_id (org) | department_id (dept) | user_id (user)
   period_start date NOT NULL,
   period_end   date NOT NULL,
-  spent_cents  bigint NOT NULL DEFAULT 0 CHECK (spent_cents >= 0),
+  spent_cents  numeric(12,3) NOT NULL DEFAULT 0 CHECK (spent_cents >= 0),  -- milli-centavo (D-GOV-17, migración 0029)
   budget_cents bigint NOT NULL DEFAULT 0 CHECK (budget_cents >= 0),
   updated_at   timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (tenant_id, level, entity_id, period_start),
@@ -385,8 +501,8 @@ CREATE TABLE IF NOT EXISTS spend_ledger (
   department_id     uuid,
   model_name        text NOT NULL,
   mode              text NOT NULL CHECK (mode IN ('central','byok')),
-  cost_base_cents   bigint NOT NULL CHECK (cost_base_cents >= 0),
-  cost_billed_cents bigint NOT NULL CHECK (cost_billed_cents >= 0),
+  cost_base_cents   numeric(12,3) NOT NULL CHECK (cost_base_cents >= 0),    -- milli-centavo (D-GOV-17, migración 0029)
+  cost_billed_cents numeric(12,3) NOT NULL CHECK (cost_billed_cents >= 0),  -- milli-centavo (D-GOV-17, migración 0029)
   tokens_in         bigint NOT NULL DEFAULT 0 CHECK (tokens_in >= 0),
   tokens_out        bigint NOT NULL DEFAULT 0 CHECK (tokens_out >= 0),
   occurred_at       timestamptz NOT NULL,
@@ -443,6 +559,21 @@ CREATE TABLE IF NOT EXISTS devices (
   -- sha256(secret) del enrollment_token one-time (spec 007, ADR-006);
   -- NULL = consumido o nunca emitido. El secreto jamás se persiste.
   enrollment_token_hash text,
+  -- Presencia en vivo (spec 027, D-027-06): señal de agente reportando
+  -- heartbeat, distinta del last_seen_at del DeviceGate (throttle 60 s).
+  -- Al final de la tabla: la migración 0017 las añade con add_column.
+  last_heartbeat_at       timestamptz,   -- último POST /api/me/device-heartbeat
+  applied_policy_version  integer,       -- versión de policy que el device reporta aplicar
+  agent_uptime_seconds    integer,       -- uptime del agente Hermes reportado
+  last_heartbeat_audit_at timestamptz,   -- soporte del muestreo device.heartbeat (D-027-05)
+  -- Attestation (spec 019 Inc. 3, REQ-GOH-012/013): señal de agente reportando
+  -- gobernanza por sesión; el overdue dedupe usa la ventana de la policy key.
+  last_attestation_at         timestamptz,  -- último POST /api/devices/{id}/attestation
+  last_attestation_overdue_at timestamptz,  -- dedupe notificación+audit overdue (REQ-GOH-013)
+  -- Tipo de dispositivo (spec 034, D-034-04): 'cli' = Hermes CLI instalado
+  -- vía curl|bash ligado a la org; 'desktop' = bundle desktop (default
+  -- retrocompatible — migración 0025).
+  device_type  text NOT NULL DEFAULT 'desktop' CHECK (device_type IN ('desktop','cli')),
   UNIQUE (tenant_id, id),
   UNIQUE (tenant_id, fingerprint),
   FOREIGN KEY (tenant_id, user_id) REFERENCES users (tenant_id, id)
@@ -779,6 +910,8 @@ INSERT INTO catalog.audit_actions (action, description) VALUES
   ('agent.revoked',       'Shared-agent grant revoked.'),
   ('agent.invoked',       'Shared agent invoked (billed to the invoker).'),
   ('agent.invoke_denied', 'Shared-agent invocation denied (no invoke grant).'),
+  ('agent.profile_adopted',
+   'Default agent profile adopted (tenant instance).'),
   ('model.key_issued',    'LiteLLM virtual key issued for a user (hash stored only).'),
   ('model.key_blocked',   'LiteLLM virtual key blocked (budget cutoff).'),
   ('model.key_unblocked', 'LiteLLM virtual key unblocked (budget recovered / period reset).'),
@@ -797,11 +930,18 @@ CREATE TABLE IF NOT EXISTS agents (
   status        text NOT NULL DEFAULT 'active' CHECK (status IN ('active','archived')),
   created_at    timestamptz NOT NULL DEFAULT now(),
   updated_at    timestamptz NOT NULL DEFAULT now(),
+  -- Añadida por la migración 0009_default_agent_profiles (spec 020) vía
+  -- ADD COLUMN: al final de la tabla por paridad schema.sql ↔ Alembic (AC-DB-040).
+  profile_key   text,            -- spec 020: perfil default del producto adoptado
   UNIQUE (tenant_id, id),
   UNIQUE (tenant_id, owner_user_id, name),
   FOREIGN KEY (tenant_id, owner_user_id) REFERENCES users (tenant_id, id),
   FOREIGN KEY (tenant_id, department_id) REFERENCES departments (tenant_id, id)
 );
+-- spec 020: UNA instancia viva por tenant y perfil default (D-020-02)
+CREATE UNIQUE INDEX IF NOT EXISTS agents_tenant_profile_uidx
+  ON agents (tenant_id, profile_key)
+  WHERE profile_key IS NOT NULL AND status = 'active';
 
 -- 9.3 agent_grants — grants explícitos invoke/view (REQ-AGT-002)
 CREATE TABLE IF NOT EXISTS agent_grants (
@@ -1062,3 +1202,485 @@ BEGIN
 END $$;
 
 COMMIT;
+
+-- ============================================================================
+-- 12. Evolución spec 016 (departments CRUD): rename + delete
+--     Misma migración: db/migrations/versions/20261026_0009_departments_crud.py
+--     (paridad pg_dump exigida por db/tests/test_schema_parity.py)
+--     Solo datos: cero DDL nuevo (departments y todas las FK ya existen
+--     desde 0001; las reglas de negocio viven en app/org/departments.py).
+-- ============================================================================
+
+-- 12.1 Nuevas acciones de audit (enum versionado, extensión por datos)
+INSERT INTO catalog.audit_actions (action, description) VALUES
+  ('department.renamed', 'Department renamed (old and new name in payload).'),
+  ('department.deleted', 'Department deleted (empty department; config cascaded, payload is self-sufficient).')
+ON CONFLICT (action) DO NOTHING;
+
+-- ============================================================================
+-- 13. Evolución spec 017 (roles & access): permiso roles.assign
+--     Misma migración: db/migrations/versions/20261026_0010_roles_access.py
+--     (paridad pg_dump exigida por db/tests/test_schema_parity.py)
+--     Solo datos: cero DDL nuevo. La puerta de los endpoints de asignación
+--     de roles es data-driven (constitution I10): un permiso del catálogo
+--     otorgado ÚNICAMENTE a org_admin. dept_admin conserva users.manage
+--     (editar depto/nombre/deshabilitar dentro de su scope) pero NO puede
+--     tocar roles — sin escalada a org_admin.
+-- ============================================================================
+
+-- 13.1 Permiso nuevo + grant solo a org_admin
+INSERT INTO catalog.permissions (key, description) VALUES
+  ('roles.assign', 'Assign/revoke tenant roles (org_admin only).')
+ON CONFLICT (key) DO NOTHING;
+
+INSERT INTO catalog.role_permissions (role_key, permission_key) VALUES
+  ('org_admin', 'roles.assign')
+ON CONFLICT (role_key, permission_key) DO NOTHING;
+
+-- ============================================================================
+-- 14. Evolución spec 024 (conexiones personalizadas): vault_connections +
+--     policy key allowed_connections + permiso connections.manage
+--     Misma migración: db/migrations/versions/20261026_0012_custom_connections.py
+--     (paridad pg_dump exigida por db/tests/test_schema_parity.py)
+-- ============================================================================
+
+-- 14.1 Nuevas acciones de audit (enum versionado, extensión por datos)
+INSERT INTO catalog.audit_actions (action, description) VALUES
+  ('connection.created',  'Custom connection created by the org admin (secret shown one-time).'),
+  ('connection.updated',  'Custom connection metadata/secret updated (secret shown one-time).'),
+  ('connection.revoked',  'Custom connection revoked (irreversible, use cuts off with 410).'),
+  ('connection.used',     'Custom connection secret injected at runtime (policy-gated, never logged).')
+ON CONFLICT (action) DO NOTHING;
+
+-- 14.2 Permiso nuevo + grant solo a org_admin (D-24-04)
+INSERT INTO catalog.permissions (key, description) VALUES
+  ('connections.manage', 'Create/update/revoke tenant custom connections (org_admin only).')
+ON CONFLICT (key) DO NOTHING;
+
+INSERT INTO catalog.role_permissions (role_key, permission_key) VALUES
+  ('org_admin', 'connections.manage')
+ON CONFLICT (role_key, permission_key) DO NOTHING;
+
+-- 14.3 Policy key tipada: allowed_connections (D-24-02/03)
+--      Tokens: '*' = todos los conectores del catálogo (sujetos a
+--      allowed_connectors), slug del catálogo, o id (UUID) de una conexión
+--      personalizada ACTIVA del tenant. Default '*' = sin cambio de
+--      comportamiento para tenants existentes.
+INSERT INTO catalog.policy_keys (key, value_type, invariable, default_value, description) VALUES
+  ('allowed_connections', 'list', false, '["*"]',
+   'Connection tokens the level allows: ''*'' (whole catalog), catalog slugs, or custom connection ids (deny-overrides across levels).')
+ON CONFLICT (key) DO NOTHING;
+
+-- 14.4 vault_connections — conexiones personalizadas del tenant (spec 024).
+--      SOLO material cifrado en las columnas de secreto (mismo contrato que
+--      vault_credentials §5.10); la metadata NO-secreta vive en metadata jsonb.
+CREATE TABLE IF NOT EXISTS vault_connections (
+  id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id         uuid NOT NULL REFERENCES tenants(id),
+  created_by        uuid NOT NULL,
+  name              text NOT NULL,
+  kind              text NOT NULL CHECK (kind IN ('database','api_key','custom','llm')),
+  metadata          jsonb NOT NULL DEFAULT '{}',
+  status            text NOT NULL DEFAULT 'active' CHECK (status IN ('active','revoked')),
+  ciphertext_secret bytea NOT NULL,   -- AES-256-GCM(secret, DEK)
+  ciphertext_dek    bytea NOT NULL,   -- DEK cifrada con la KEK (envelope)
+  nonce             bytea NOT NULL,   -- IV de AES-GCM
+  key_id            text NOT NULL,    -- versión/alias de la KEK usada
+  last_rotated_at   timestamptz,
+  last_used_at      timestamptz,
+  created_at        timestamptz NOT NULL DEFAULT now(),
+  updated_at        timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (tenant_id, id),
+  UNIQUE (tenant_id, name),
+  FOREIGN KEY (tenant_id, created_by) REFERENCES users (tenant_id, id)
+);
+CREATE INDEX IF NOT EXISTS vault_connections_tenant_idx
+  ON vault_connections (tenant_id, created_at DESC);
+
+-- 14.5 Trigger updated_at (la función set_updated_at() existe desde §6.1)
+DROP TRIGGER IF EXISTS vault_connections_set_updated_at ON vault_connections;
+CREATE TRIGGER vault_connections_set_updated_at
+  BEFORE UPDATE ON vault_connections FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- 14.6 RLS: mismo patrón fail-closed + FORCE que la sección 7
+DO $$
+DECLARE
+  t text;
+  tables text[] := ARRAY['vault_connections'];
+BEGIN
+  FOREACH t IN ARRAY tables
+  LOOP
+    EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', t);
+    EXECUTE format('ALTER TABLE public.%I FORCE ROW LEVEL SECURITY', t);
+    EXECUTE format($p$
+      CREATE POLICY tenant_isolation ON public.%I
+        FOR ALL TO trust_app
+        USING      (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
+        WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
+    $p$, t);
+  END LOOP;
+END $$;
+
+-- 14.7 Grants explícitos a la app (idénticos a los de la sección 8)
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE vault_connections TO trust_app;
+-- Spec 032 (D-CP-10, patrón devices): listing cross-tenant de conexiones
+-- llm activas para el job periódico de refresh del catálogo — el jobs-worker
+-- enumera tenants vía la conexión BYPASSRLS de claim (trust_migrator),
+-- SOLO lectura (mínimo privilegio). Paridad: migración 0024.
+GRANT SELECT ON TABLE vault_connections TO trust_migrator;
+
+-- ============================================================================
+-- 15. Evolución spec 025 (super-user del Provider Console, mandato Miller):
+--     operador + sesiones + audit del plano proveedor (ops, sin RLS).
+--     Migración: db/migrations/versions/20261026_0016_provider_superuser.py
+--     (las acciones provider.* del catálogo viven en el INSERT de §3).
+-- ============================================================================
+
+-- 15.1 ops.provider_operators — el ÚNICO actor fuera del multi-tenant.
+-- Plano proveedor: sin tenant_id, sin RLS (D-DB-01). password_hash = PHC
+-- argon2id (nunca plaintext); el secret TOTP vive cifrado con envelope
+-- AES-256-GCM (KEK fuera de la BD) y es NULL hasta el enrolamiento;
+-- must_change_password = required action del primer login.
+CREATE TABLE IF NOT EXISTS ops.provider_operators (
+  id                   uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  username             text NOT NULL UNIQUE,
+  password_hash        text NOT NULL,
+  status               text NOT NULL DEFAULT 'active'
+                         CHECK (status IN ('active','disabled')),
+  must_change_password boolean NOT NULL DEFAULT true,
+  totp_secret_enc      bytea,
+  totp_dek_enc         bytea,
+  totp_nonce           bytea,
+  totp_key_id          text,
+  totp_active          boolean NOT NULL DEFAULT false,
+  totp_enrolled_at     timestamptz,
+  created_at           timestamptz NOT NULL DEFAULT now(),
+  updated_at           timestamptz NOT NULL DEFAULT now()
+);
+
+COMMENT ON TABLE ops.provider_operators IS 'Provider super-users (spec 025, mandate Miller): the ONLY actor outside the multi-tenant scope. Provider plane: no tenant_id, no RLS (D-DB-01). password_hash is a PHC argon2id string; the TOTP secret is stored envelope-encrypted (AES-256-GCM, KEK never in the DB) and is NULL until enrollment.';
+
+-- 15.2 ops.provider_sessions — sesiones del operador en PostgreSQL
+-- (spec 025 D-PS-04): token opaco pst1.<id>.<secret>, solo sha256(secret)
+-- en BD (jti). Misma infra que public.sessions pero en el plano proveedor.
+-- Nada en memoria: las sesiones sobreviven reinicios del API por
+-- construcción.
+CREATE TABLE IF NOT EXISTS ops.provider_sessions (
+  id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  operator_id  uuid NOT NULL REFERENCES ops.provider_operators(id),
+  jti          text NOT NULL UNIQUE,
+  status       text NOT NULL DEFAULT 'active'
+                 CHECK (status IN ('active','revoked','expired')),
+  mfa_verified boolean NOT NULL DEFAULT false,
+  ip           inet,
+  user_agent   text,
+  expires_at   timestamptz NOT NULL,
+  last_seen_at timestamptz,
+  created_at   timestamptz NOT NULL DEFAULT now(),
+  updated_at   timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS provider_sessions_operator_idx
+  ON ops.provider_sessions (operator_id, status);
+
+COMMENT ON TABLE ops.provider_sessions IS 'Provider operator sessions in PostgreSQL (spec 025 D-PS-04): opaque token pst1.<id>.<secret>, only sha256(secret) stored (jti). Same infrastructure as public.sessions but in the provider plane (no tenant scope). Nothing in process memory: sessions survive API restarts by construction.';
+
+-- 15.3 ops.provider_audit — audit del plano proveedor (spec 025 D-PS-07):
+-- eventos de acceso del operador que no pertenecen a ningún tenant
+-- (audit_log exige tenant_id NOT NULL + FK). Append-only con hash chain
+-- GLOBAL (mismo patrón del trigger de audit_log, secuencia única) +
+-- trigger de rechazo de UPDATE/DELETE. action lleva FK al catálogo
+-- (data-driven, I10).
+CREATE TABLE IF NOT EXISTS ops.provider_audit (
+  id          bigserial PRIMARY KEY,
+  seq         bigint NOT NULL,
+  action      text NOT NULL REFERENCES catalog.audit_actions(action),
+  operator_id uuid,
+  username    text,
+  ip          inet,
+  user_agent  text,
+  payload     jsonb NOT NULL DEFAULT '{}',
+  ts          timestamptz NOT NULL DEFAULT now(),
+  hash_prev   char(64) NOT NULL,
+  hash        char(64) NOT NULL
+);
+
+COMMENT ON TABLE ops.provider_audit IS 'Append-only audit for provider-plane events (spec 025 D-PS-07): operator access events that belong to no tenant. Global hash chain (same trigger pattern as audit_log, single sequence); UPDATE/DELETE rejected by trigger.';
+
+CREATE OR REPLACE FUNCTION ops.provider_audit_canonical_payload(
+    rec ops.provider_audit) RETURNS text
+LANGUAGE sql IMMUTABLE AS $$
+  SELECT concat_ws('|',
+    rec.seq::text,
+    rec.action,
+    COALESCE(rec.operator_id::text, ''),
+    COALESCE(rec.username, ''),
+    COALESCE(rec.ip::text, ''),
+    COALESCE(rec.user_agent, ''),
+    rec.payload::text,
+    extract(epoch FROM rec.ts)::text
+  );
+$$;
+
+CREATE OR REPLACE FUNCTION ops.provider_audit_before_insert()
+RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+  v_prev_hash text;
+  v_prev_seq  bigint;
+BEGIN
+  PERFORM pg_advisory_xact_lock(
+    hashtextextended('provider-audit', 0));
+  SELECT hash, seq INTO v_prev_hash, v_prev_seq
+    FROM ops.provider_audit
+    ORDER BY id DESC
+    LIMIT 1;
+  NEW.seq       := COALESCE(v_prev_seq, 0) + 1;
+  NEW.hash_prev := COALESCE(v_prev_hash, repeat('0', 64));
+  NEW.hash      := encode(sha256(convert_to(
+    NEW.hash_prev || '|' ||
+    ops.provider_audit_canonical_payload(NEW), 'utf8')), 'hex');
+  RETURN NEW;
+END $$;
+
+DROP TRIGGER IF EXISTS provider_audit_chain_trigger ON ops.provider_audit;
+CREATE TRIGGER provider_audit_chain_trigger
+  BEFORE INSERT ON ops.provider_audit
+  FOR EACH ROW EXECUTE FUNCTION ops.provider_audit_before_insert();
+
+CREATE OR REPLACE FUNCTION ops.provider_audit_reject_mutation()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  RAISE EXCEPTION
+    'ops.provider_audit is append-only: % is prohibited (id %)',
+    TG_OP, COALESCE(OLD.id, NEW.id)
+    USING ERRCODE = 'raise_exception';
+END $$;
+
+DROP TRIGGER IF EXISTS provider_audit_immutable_trigger ON ops.provider_audit;
+CREATE TRIGGER provider_audit_immutable_trigger
+  BEFORE UPDATE OR DELETE ON ops.provider_audit
+  FOR EACH ROW EXECUTE FUNCTION ops.provider_audit_reject_mutation();
+
+CREATE OR REPLACE FUNCTION ops.provider_audit_verify_chain()
+RETURNS TABLE (status text, seq bigint)
+LANGUAGE plpgsql STABLE AS $$
+DECLARE
+  r ops.provider_audit%ROWTYPE;
+  v_prev text := repeat('0', 64);
+  v_seq  bigint := 0;
+BEGIN
+  FOR r IN SELECT * FROM ops.provider_audit ORDER BY id LOOP
+    IF r.seq <> v_seq + 1 OR r.hash_prev <> v_prev
+       OR r.hash <> encode(sha256(convert_to(
+            r.hash_prev || '|' ||
+            ops.provider_audit_canonical_payload(r), 'utf8')),
+            'hex') THEN
+      RETURN QUERY SELECT 'broken'::text, r.seq;
+      RETURN;
+    END IF;
+    v_prev := r.hash;
+    v_seq  := r.seq;
+  END LOOP;
+  RETURN QUERY SELECT 'ok'::text, NULL::bigint;
+END $$;
+
+-- 15.4 Triggers updated_at (la función set_updated_at() existe desde §6.1;
+-- el DO-loop de §6.1 solo barre public, ops.* se declara explícito).
+CREATE TRIGGER provider_operators_set_updated_at
+  BEFORE UPDATE ON ops.provider_operators
+  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER provider_sessions_set_updated_at
+  BEFORE UPDATE ON ops.provider_sessions
+  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- 15.5 Grants explícitos (las tablas nacen después del grant blanket de la
+-- sección 8, paridad con la vía Alembic). provider_audit es append-only
+-- para la app: INSERT/SELECT solamente.
+GRANT SELECT, INSERT, UPDATE ON TABLE ops.provider_operators TO trust_app;
+GRANT SELECT, INSERT, UPDATE ON TABLE ops.provider_sessions TO trust_app;
+GRANT SELECT, INSERT ON TABLE ops.provider_audit TO trust_app;
+GRANT USAGE ON SEQUENCE ops.provider_audit_id_seq TO trust_app;
+GRANT ALL PRIVILEGES ON TABLE ops.provider_operators TO trust_migrator;
+GRANT ALL PRIVILEGES ON TABLE ops.provider_sessions TO trust_migrator;
+GRANT ALL PRIVILEGES ON TABLE ops.provider_audit TO trust_migrator;
+GRANT USAGE, SELECT, UPDATE ON SEQUENCE ops.provider_audit_id_seq TO trust_migrator;
+
+-- ============================================================================
+-- 16. Evolución spec 028 (branding REQ-BRD-004 de la spec 001): logos
+--     light/dark + favicon por tenant, versionado draft/publish y rollback.
+--     Migración: db/migrations/versions/20261026_0018_branding_versioning.py
+-- ============================================================================
+
+-- 16.1 tenants += draft de edición (NUNCA visible para usuarios —
+-- REQ-BRD-004) y versión publicada. tenants.branding sigue siendo SOLO lo
+-- publicado (D-028-02).
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS branding_draft jsonb NOT NULL DEFAULT '{}';
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS branding_version integer NOT NULL DEFAULT 0;
+
+-- 16.2 branding_assets — logos light/dark + favicon por tenant (D-028-01):
+-- bytea (NO jsonb gigante: RLS uniforme, backup pg_dump, publish atómico
+-- en la misma tx). Append-only por diseño: cada upload inserta una fila
+-- nueva y los assets referenciados por versiones publicadas jamás se mutan.
+CREATE TABLE IF NOT EXISTS branding_assets (
+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id   uuid NOT NULL REFERENCES tenants(id),
+  kind        text NOT NULL CHECK (kind IN ('logo_light','logo_dark','favicon')),
+  mime        text NOT NULL CHECK (mime IN ('image/png','image/svg+xml')),
+  size_bytes  integer NOT NULL CHECK (size_bytes > 0 AND size_bytes <= 2097152),
+  sha256      text NOT NULL,
+  content     bytea NOT NULL,
+  created_by  uuid,
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS branding_assets_tenant_kind_idx
+  ON branding_assets (tenant_id, kind);
+CREATE INDEX IF NOT EXISTS branding_assets_tenant_id_idx
+  ON branding_assets (tenant_id);
+
+COMMENT ON TABLE branding_assets IS 'Tenant branding assets (spec 028, REQ-BRD-001/004): logo light/dark + favicon, PNG/SVG up to 2 MB, stored as bytea (D-028-01 — never inside tenants.branding jsonb). Append-only: every upload inserts a new row; assets referenced by published versions are never mutated.';
+
+-- 16.3 branding_versions — historial append-only de lo publicado
+-- (D-028-03). Publish = INSERT versión N+1 + UPDATE tenants.branding en
+-- UNA transacción; rollback = re-publicar una versión anterior como
+-- versión nueva.
+CREATE TABLE IF NOT EXISTS branding_versions (
+  tenant_id    uuid NOT NULL REFERENCES tenants(id),
+  version      integer NOT NULL CHECK (version >= 1),
+  data         jsonb NOT NULL,
+  published_by uuid,
+  published_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (tenant_id, version)
+);
+
+COMMENT ON TABLE branding_versions IS 'Published branding history (spec 028, D-028-03): exact jsonb published per version. Publish is atomic (INSERT next version + UPDATE tenants.branding in one tx); rollback republishes an older version as a NEW version — the history is append-only.';
+
+-- 16.4 RLS: mismo patrón fail-closed + FORCE que la sección 7.
+DO $$
+DECLARE
+  t text;
+  tables text[] := ARRAY['branding_assets','branding_versions'];
+BEGIN
+  FOREACH t IN ARRAY tables
+  LOOP
+    EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', t);
+    EXECUTE format('ALTER TABLE public.%I FORCE ROW LEVEL SECURITY', t);
+    EXECUTE format($p$
+      CREATE POLICY tenant_isolation ON public.%I
+        FOR ALL TO trust_app
+        USING      (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
+        WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
+    $p$, t);
+  END LOOP;
+END $$;
+
+-- 16.5 Grants explícitos a la app (las tablas nacen después del grant
+-- blanket de la sección 8 — paridad con la vía Alembic).
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE branding_assets TO trust_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE branding_versions TO trust_app;
+
+-- 16.6 Nuevas acciones de audit (enum versionado, extensión por datos).
+INSERT INTO catalog.audit_actions (action, description) VALUES
+  ('branding.draft.updated',
+   'Tenant branding draft edited (not yet visible to users — REQ-BRD-004).'),
+  ('branding.published',
+   'Tenant branding draft published atomically as a new version.'),
+  ('branding.rolled_back',
+   'Tenant branding rolled back to a previous published version.'),
+  ('branding.asset.uploaded',
+   'Branding asset uploaded (logo light/dark or favicon, PNG/SVG <= 2 MB).')
+ON CONFLICT (action) DO NOTHING;
+
+-- 17. Evolución spec 023 (hermes download — seam link→app, t_526030f3):
+--     link público de descarga por tenant gestionado por el ADMIN DEL CLIENTE
+--     (corrección Miller 2026-10-26). Migración:
+--     db/migrations/versions/20261026_0021_hermes_download.py
+--
+-- 17.1 tenants += estado del link público (D-023-08): habilitado por defecto
+--     (un tenant recién creado es descargable sin tocar nada; el admin lo
+--     deshabilita a propósito desde el Admin Console).
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS download_enabled boolean NOT NULL DEFAULT true;
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS download_updated_at timestamptz NOT NULL DEFAULT now();
+
+-- 17.2 Permiso de gestión del link (D-023-09): SOLO org_admin — coherente con
+--     el gate de rol de la sección "Hermes Download" del Admin Console.
+INSERT INTO catalog.permissions (key, description) VALUES
+  ('download_link.manage',
+   'Enable/disable the public Hermes download link.')
+ON CONFLICT (key) DO NOTHING;
+
+INSERT INTO catalog.role_permissions (role_key, permission_key) VALUES
+  ('org_admin', 'download_link.manage')
+ON CONFLICT (role_key, permission_key) DO NOTHING;
+
+-- 17.3 Acciones de audit (enum versionado, extensión por datos):
+--     download.issued por descarga del bundle (REQ-HDL-004); toggles
+--     auditados del link (REQ-HDL-005).
+INSERT INTO catalog.audit_actions (action, description) VALUES
+  ('download.issued',
+   'Hermes bundle downloaded from the public link.'),
+  ('download.link.enabled',
+   'Public download link enabled by the organization admin.'),
+  ('download.link.disabled',
+   'Public download link disabled by the organization admin.')
+ON CONFLICT (action) DO NOTHING;
+
+-- ============================================================================
+-- 18. Evolución spec 022 v1.1.0 (amend D-HRB-03 / REQ-HRB-010, gap
+--     t_0b6e8e2d): re-emisión directa del device token en enroll para un
+--     device active del mismo usuario con id_token MFA fresco (recuperación
+--     del token expirado — agente apagado > TTL).
+--     Migración: db/migrations/versions/20261027_0023_device_token_reissue.py
+-- ============================================================================
+
+-- 18.1 Acción de audit (enum versionado, extensión por datos).
+INSERT INTO catalog.audit_actions (action, description) VALUES
+  ('device.token_reissued',
+   'Device token re-issued directly on enroll: already-active device of the same user re-proved identity with a fresh MFA id_token (expired-token recovery, spec 022 D-HRB-03).')
+ON CONFLICT (action) DO NOTHING;
+
+-- ============================================================================
+-- 19. Evolución spec 032 (discovery dinámico de modelos, mandato Miller):
+--     toda conexión llm (OpenAI-compatible) del vault aporta sus modelos al
+--     catálogo (GET {base_url}/v1/models con la key de la conexión), con
+--     ciclo de vida stale/removed y gate compuesto conexión∧aprobación.
+--     Migración: db/migrations/versions/20261027_0024_dynamic_model_discovery.py
+--     (columnas/índices/CHECKs de §3.3 y kind de §14.4 ya reflejados arriba).
+-- ============================================================================
+
+-- 19.1 FK byok → conexión (aquí porque vault_connections nace en §14.4,
+--      después de §3.3; mismo nombre auto que la migración).
+ALTER TABLE catalog.model_catalog
+  ADD CONSTRAINT model_catalog_connection_id_fkey
+  FOREIGN KEY (connection_id) REFERENCES vault_connections(id) ON DELETE SET NULL;
+
+-- 19.2 RLS por-tenant (patrón §14.6): las filas byok son del tenant; las
+--      centrales (tenant_id IS NULL) siguen visibles para todos.
+ALTER TABLE catalog.model_catalog ENABLE ROW LEVEL SECURITY;
+ALTER TABLE catalog.model_catalog FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON catalog.model_catalog
+  FOR ALL TO trust_app
+  USING      (tenant_id IS NULL OR tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
+  WITH CHECK (tenant_id IS NULL OR tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
+
+-- 19.3 El discovery escribe filas byok como trust_app dentro del scope.
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE catalog.model_catalog TO trust_app;
+
+-- 19.4 Acciones de audit (enum versionado, extensión por datos).
+INSERT INTO catalog.audit_actions (action, description) VALUES
+  ('model.catalog_refreshed',
+   'Model catalog refreshed from a connected API (BYOK connection and/or central gateway): models discovered, updated and marked stale (spec 032).')
+ON CONFLICT (action) DO NOTHING;
+
+-- ============================================================================
+-- 20. Evolución spec 035 (usage analytics): el admin ve requests y consumos
+--     por usuario sobre el ledger real (mandato Miller).
+--     Misma migración: db/migrations/versions/20261027_0027_usage_export_audit.py
+--     (paridad pg_dump exigida por db/tests/test_schema_parity.py)
+--     Solo datos: cero DDL nuevo (spend_ledger y sus índices ya existen
+--     desde 0001/0004).
+-- ============================================================================
+
+-- 20.1 Nueva acción de audit (enum versionado, extensión por datos)
+INSERT INTO catalog.audit_actions (action, description) VALUES
+  ('usage.exported',
+   'Usage analytics CSV exported (per-user or per-request level).')
+ON CONFLICT (action) DO NOTHING;

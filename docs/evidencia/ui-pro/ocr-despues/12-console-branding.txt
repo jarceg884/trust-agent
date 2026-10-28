@@ -1,0 +1,68 @@
+Trust Agent
+ADMIN CONSOLE
+
+GOVERNANCE
+
+&
+
+2
+B
+e@
+
+‘Overview
+
+Organization
+
+Departments
+
+Users & Roles
+
+Budgets
+
+Model Access
+
+Shared Agents
+
+Devices
+
+Hermes Download
+
+Credentials
+
+Audit Log
+
+Branding
+
+demo-org | Connected + Invite user <b, Download desktop app
+
+Branding
+
+White-label the console and desktop for your organization.
+
+White-label branding
+Product name, tagline and accent color applied to the Admin Console and the desktop app in runtime — no redeploy.
+
+Product name Tagline
+
+Trust Agent Al governance for your organization
+
+Shown in the sidebar, login and page titles,
+
+Accent color
+
+#4F4GE5 B
+
+Hex color for buttons, links and highlights,
+
+Preview
+
+Trust Agent
+ADMIN CONSOLE
+
+Al governance for your organization
+
+ray
+
+‘A Alex Morgan ~
+
+‘source: provider

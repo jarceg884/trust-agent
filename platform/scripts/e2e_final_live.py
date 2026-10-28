@@ -50,7 +50,9 @@ API_HOST, API_PORT = "127.0.0.1", 8000
 KC_HOST, KC_PORT = "127.0.0.1", 8080
 LITELLM_PORT = 39989
 CLIENT_ID = "trust-agent-web"
-REDIRECT_URI = "http://127.0.0.1:9090/auth/callback"
+# Callback del helper trust-login del bundle de descarga (spec 023 D-023-13):
+# el flujo real de desktop. Retirado el demo :9090 (t_b8769ecb).
+REDIRECT_URI = "http://127.0.0.1:8765/callback"
 PROVIDER_TOKEN = "test-provider-token"
 KC_ADMIN_PASSWORD = "KeycloakDemo2026"
 DB_DSN = "host=127.0.0.1 port=55432 user=postgres password=trustlocal dbname=trust_agent"
@@ -60,7 +62,7 @@ ADMIN_EMAIL = "admin@final-e2e.test"
 ADMIN_NEW_PASSWORD = "FinalAdmin2026!"
 WORKER_EMAIL = "worker@final-e2e.test"
 WORKER_PASSWORD = "FinalWorker2026!"
-QWEN = "qwen2.5-72b-instruct"
+QWEN = "glm-5.2"
 
 FAILURES = []
 PASSES = 0
@@ -186,7 +188,7 @@ def _hop(st, body, loc, hdrs):
     KC26 responde a cada POST del baile con 302 a la página de la siguiente
     required action; sin seguir ese hop el body llega vacío y el baile muere
     (bug del intento 1). Solo se siguen hops del propio KC — el redirect
-    final con code= apunta a :9090 y NO se sigue (se parsea)."""
+    final con code= apunta al callback :8765 y NO se sigue (se parsea)."""
     for _ in range(4):
         if not loc or "code=" in loc or st not in (301, 302, 303, 307):
             return st, body, loc, hdrs
@@ -221,15 +223,18 @@ def totp_secret_of(html):
 
 
 def pkce_login(username, password, *, new_password=None, totp_state=None,
-               refuse_totp=False):
+               refuse_totp=False, acr_values=None):
     """Baile REAL authorization-code + PKCE S256 contra el realm.
 
     Maneja required actions encadenadas de KC26 (UPDATE_PASSWORD,
     CONFIGURE_TOTP con enrolamiento real, segundo factor OTP).
     Con refuse_totp=True NO enrola TOTP: si KC exige CONFIGURE_TOTP
     (comportamiento D-MFA-01: usuario sin credencial TOTP → enrolamiento
-    inline forzado), devuelve ("MFA_REQUIRED", None) — evidencia de que el
-    IdP es fail-closed y no entrega code sin MFA.
+    inline forzado), devuelve ("MFA_REQUIRED", None) — evidencia de que
+    el IdP es fail-closed y no entrega code sin MFA.
+    Con acr_values="2" el authorize pide LoA 2 (spec 015 D-AUTH-06, map
+    {"1":1,"2":2}): sin él el realm emite acr="1" aunque el usuario tenga
+    TOTP (probe-loa S7 vs S4) — el desktop real siempre pide "2".
     -> (id_token | "MFA_REQUIRED" | None, acr | None)
     """
     for k in list(COOKIES):
@@ -241,6 +246,8 @@ def pkce_login(username, password, *, new_password=None, totp_state=None,
         "redirect_uri": REDIRECT_URI, "state": "st-final-e2e",
         "code_challenge": challenge, "code_challenge_method": "S256",
     }
+    if acr_values is not None:
+        params["acr_values"] = acr_values
     st, body, hdrs = kc_fetch(
         f"/realms/{SLUG}/protocol/openid-connect/auth?{urllib.parse.urlencode(params)}")
     assert st == 200 and 'action="' in body, f"authorize HTTP {st}"

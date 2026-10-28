@@ -140,15 +140,15 @@ def healthcheck(
     except KeycloakAdminError as exc:
         checks.append(_check("idp_admin_user", False, exc.detail[:120]))
 
-    # MFA evidence wiring (D-MFA-01): without it no real KC26 login can
-    # ever pass the platform's MFA gate (Keycloak never emits `amr`).
+    # MFA evidence wiring (D-MFA-01 + spec 015 D-AUTH-06): without it no real
+    # KC26 login can ever produce acr evidence (Keycloak never emits `amr`).
     mfa_state = kc.mfa_acr_state(slug)
     checks.append(_check(
         "idp_mfa_acr",
-        mfa_state["acr_loa_map"] and mfa_state["loa_condition"],
+        mfa_state["acr_loa_map"] and mfa_state["loa_flow_ready"],
         f"acr.loa.map={mfa_state['acr_loa_map']} "
         f"browserFlow={mfa_state['browser_flow']} "
-        f"loa_condition={mfa_state['loa_condition']}",
+        f"loa_flow_ready={mfa_state['loa_flow_ready']}",
     ))
 
     status = "ok" if all(c["status"] == "ok" for c in checks) else "failed"

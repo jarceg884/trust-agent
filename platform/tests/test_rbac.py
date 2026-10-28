@@ -3,7 +3,7 @@ import os
 
 import pytest
 
-from tests.conftest import TENANT_A, bearer_headers, mint
+from tests.conftest import TENANT_A, TEST_DB, bearer_headers, mint
 
 ROLE_USERS = {
     "org_admin": "alice",
@@ -64,14 +64,16 @@ def test_dept_admin_scope_limited_to_own_department(client, idp, admin_conn):
     from app.auth.service import Principal, RoleAssignment
 
     bob = Principal(
-        tenant_id=TENANT_A, tenant_slug="tenant-a", user_id="bob",
+        tenant_id=TENANT_A, tenant_slug="tenant-a", tenant_name="Tenant A",
+        user_id="bob",
         email="", display_name="", department_id=None,
         roles=[RoleAssignment("dept_admin", "30000000-0000-0000-0000-000000000002")],
     )
     assert dept_scope(bob) == ["30000000-0000-0000-0000-000000000002"]
 
     alice = Principal(
-        tenant_id=TENANT_A, tenant_slug="tenant-a", user_id="alice",
+        tenant_id=TENANT_A, tenant_slug="tenant-a", tenant_name="Tenant A",
+        user_id="alice",
         email="", display_name="", department_id=None,
         roles=[RoleAssignment("org_admin", None)],
     )
@@ -84,7 +86,8 @@ def test_platform_admin_is_not_assignable_in_tenants(admin_conn):
 
     with psycopg.connect(
         f"host=127.0.0.1 port=55432 user=trust_app password=trust_app_dev "
-        f"dbname={os.environ.get('TRUST_TEST_DB', 'trust_agent_platform_test')}"
+        f"dbname={TEST_DB}"  # t_e000bf40: conftest.TEST_DB (import-time) —
+        # os.environ['TRUST_TEST_DB'] ya fue purgado por el fixture env (H6)
     ) as conn:
         with conn.transaction():
             conn.execute("SELECT set_config('app.tenant_id', %s, true)", (TENANT_A,))

@@ -1,7 +1,7 @@
 ---
 name: litellm-proxy-governance
 description: "LiteLLM proxy como plano de control de modelos: virtual keys, budgets (max_budget/budget_duration), teams, spend endpoints, pricing update. Use when gobernar acceso a modelos, presupuestos con corte o tracking de gasto."
-version: 1.0.0
+version: 1.1.0
 author: trust-agent dev
 metadata:
   hermes:
@@ -10,7 +10,9 @@ metadata:
 
 # LiteLLM Proxy — Virtual keys, budgets, teams, spend y pricing
 
-Investigado contra docs oficiales https://docs.litellm.ai/docs/proxy/* (oct-2026).
+Investigado contra docs oficiales https://docs.litellm.ai/docs/proxy/* (oct-2026)
+y **VERIFICADO EN VIVO contra un proxy real v1.106.3 con upstream Huawei MaaS**
+(re-validación t_c4766c4d, 2026-10-24 — sección 7).
 Requisito duro: **presupuestos requieren base de datos PostgreSQL** — en un
 despliegue sin DB los budgets *fallan abiertos* (se loguea un warning al arranque
 y nada bloquea en request time).
@@ -44,7 +46,7 @@ curl -X POST http://localhost:4000/key/generate \
     "key_alias": "depto-ti-user42",
     "user_id": "user-42",              # dueño; spend se acumula en LiteLLM_UserTable
     "team_id": "team-ti",              # si pertenece a un team, SOLO se aplican budgets del team
-    "models": ["qwen-plus", "deepseek-v3"],
+    "models": ["glm-5.2", "deepseek-v4-flash"],  # deployments reales MaaS (spec 018)
     "max_budget": 10,                  # USD; null por default (no se chequea)
     "budget_duration": "30d",          # reset del spend al fin del periodo
     "rpm_limit": 60, "tpm_limit": 100000,
@@ -198,6 +200,14 @@ los precios MaaS o el spend se loguea a $0 (el proxy lo flaggea con WARNING
     `LITELLM_KEY_ROTATION_GRACE_PERIOD` para corte sin downtime.
 9. `default_key_generate_params` en `litellm_settings` aplica defaults
    (max_budget, models, team_id, allowed_routes) a keys nuevas elegibles.
+10. **Pricing de modelos DB (`POST /model/new`) va en `litellm_params`** —
+    verificado en vivo contra v1.106.3 (spec 032, t_99526286): con el pricing
+    SOLO en `model_info` el proxy registra el modelo pero factura $0
+    (`spend: 0.0`, `cost_breakdown` en ceros, sin WARNING). El override de
+    billing es el "per-deployment pricing override" de `litellm_params`
+    (`input_cost_per_token`/`output_cost_per_token`); `model_info` queda
+    como passthrough de metadata. Enviar en AMBOS es seguro. Esto difiere
+    del modelo por config (§5), donde `model_info` sí aplica.
 
 ## Fuentes
 
@@ -209,3 +219,90 @@ los precios MaaS o el spend se loguea a $0 (el proxy lo flaggea con WARNING
 - https://docs.litellm.ai/docs/proxy/custom_model_cost_map
 - https://docs.litellm.ai/docs/proxy/custom_pricing
 - https://docs.litellm.ai/docs/proxy/error_reference
+
+## 7. Hallazgos verificados contra un proxy REAL (t_c4766c4d, v1.106.3)
+
+Evidencia en vivo contra LiteLLM 1.106.3 + PostgreSQL dedicado + upstream
+Huawei MaaS `glm-5.2` (script `platform/scripts/revalidate_litellm_real.py`,
+docs/validacion-final.md §9). Todo lo anterior de docs se cumplió; estos son
+los deltas y confirmaciones:
+
+### 7.1 Formato REAL de `/spend/logs/v2` (difiere de lo que uno asume)
+
+- El hash de la key viaja en **`api_key`** — NO existe `user_api_key_hash`.
+- El nombre PÚBLICO del modelo viaja en **`model_group`**; `model` lleva el
+  interno de `litellm_params` (p. ej. `openai/glm-5.2`). Para requests
+  fallidos de modelos no ruteados `model_group` es `""` (usar fallback a
+  `model`).
+- Tokens: `prompt_tokens` / `completion_tokens` (no hay campo `tokens`).
+- `metadata` es un dict con `usage_object` (con `prompt_tokens_details.
+  cached_tokens`), `cost_breakdown` (input_cost/output_cost desglosados) y
+  `user_api_key`.
+- **`spend_logs_metadata` NO se estampa** (llega `"spend_logs_metadata":
+  null` aunque se pasó al emitir la key): la resolución log→tenant/usuario
+  debe hacerse POR HASH de la key (`api_key` → tabla local de hashes).
+- El gateway también loguea los INTENTOS FALLIDOS (403 modelo no permitido,
+  422 budget exceeded) con `spend: 0.0` y `status: "failure"` — el pipeline
+  de ingesta debe tolerarlos (telemetría honesta, costo cero).
+
+### 7.2 Semántica de corte confirmada en vivo
+
+- Budget nativo excedido → **HTTP 422** `{"error": {"message": "Budget has
+  been exceeded! Key=<alias> (sk-...) Current cost: X, Max budget: Y",
+  "type": "budget_exceeded"}}` (422 por defecto, no 429).
+- Key bloqueada → **HTTP 401** `"Authentication Error, Key is blocked.
+  Update via /key/unblock if you're an admin."`.
+- Modelo fuera de la lista de la key → **HTTP 403** `"The requested model
+  'X' is not available for this API key, or the model name is invalid."` —
+  el check de modelos ocurre ANTES de rutear (403 aunque el modelo no
+  exista en el proxy).
+- `/key/generate` devuelve `key` (plaintext una vez) y `token` (= sha256 de
+  la key) — confirmado; `/key/info?key=<hash>` responde `{"key": "<hash>",
+  "info": {...}}` (la info anida bajo `info`).
+- **Pitfall nuevo — max_budget fosilizado en la key**: al SUBIR el
+  presupuesto de un usuario, desbloquear la key no basta: el gateway sigue
+  cortando con el `max_budget` nativo estampado al emitir la key hasta el
+  reset de `budget_duration`. El plano de control debe re-sincronizar con
+  `POST /key/update {"key": "<hash>", "max_budget": <nuevo>}` en cada ciclo
+  de enforcement cuando el budget difiere del estampado (implementado en
+  `app/governance/spend.py`, D-GOV-16). Jamás enviar `max_budget: null` en
+  /key/update — un null explícito es CLEAR (pitfall 6).
+
+### 7.3 Pricing verificado con precios reales MaaS
+
+- `model_info` con `input_cost_per_token` / `output_cost_per_token` /
+  `cache_read_input_cost` en config.yaml produce costos EXACTOS contra la
+  fórmula del proveedor (verificado ±0% contra GLM-5.2 MaaS: $1.40/M in,
+  $4.40/M out, $0.26/M cache-hit, Period 1).
+- `POST /reload/model_cost_map` → 200 ("4260 models updated") y NO pisa los
+  overrides de `model_info` del config — seguro de llamar en caliente.
+- OJO Huawei MaaS: pricing diferencial por horario (Period 1/2, GMT+8) y
+  cache-hit; el cost map es estático → fijar Period 1 (peor caso) y
+  documentar que el costo real puede ser MENOR.
+
+### 7.4 Gotchas de instalación (venv propio)
+
+- `pip install 'litellm[proxy]'` NO alcanza para correr con DB: falta
+  Prisma. Instalar `litellm[extra_proxy]` + `prisma` y correr
+  `PATH=./venv/bin:$PATH prisma generate --schema=$(find venv -name
+  schema.prisma)` una vez (sin eso: "Unable to find Prisma binaries").
+- Sin DB el proxy ARRANCA igualmente (solo un warning) — presupuestos
+  fallan abiertos. Verificar `LiteLLM_BudgetTable` en la DB antes de
+  confiar.
+
+## 8. Seguridad / supply chain (contexto del operador, 2026-10-24)
+
+- **2026-10-21: v1.107.0 publicada con MALWARE** (robo de credenciales +
+  RCE) en PyPI/Docker 11:39-14:20 UTC; release retirado; versiones previas
+  seguras. Razón de más para gateway propio, pineado y auditado.
+- **CVE-2026-114612** (CVSS 9.9, escalada a proxy admin via salt key):
+  fixed en 1.100.4/1.101.3/1.102.2/1.103.1/1.104.0-rc.2.
+- **CVE-2026-49468** (auth bypass por Host header): fixed en 1.84.0.
+- **PINNEADO: litellm 1.106.3** (PyPI 2026-10-24 09:14 UTC, post-containment;
+  cubre ambos CVEs, no es la versión comprometida). JAMÁS `latest` ni tags
+  flotantes de Docker; ver `litellm-real/requirements.txt`.
+- **PENDIENTE 2026-10-27**: disclosure EMBARGOADA — re-check obligatorio de
+  docs.litellm.ai/blog/tags/incident-report + advisories antes de cualquier
+  upgrade futuro.
+- El gateway debe escuchar SOLO en 127.0.0.1 en local (sin exposición a
+  red); la master key jamás en el repo (env fuera de git).

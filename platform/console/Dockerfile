@@ -19,4 +19,6 @@ RUN npm run build
 
 ENV NODE_ENV=production
 EXPOSE 3100
-CMD ["npx", "next", "start", "--port", "3100"]
+# Puerto desde el entorno (t_b62edff2): default dev 3100; el .env lo cambia
+# sin rebuild (TRUST_CONSOLE_PORT). Next arranca en 0.0.0.0.
+CMD ["sh", "-c", "npx next start --port ${TRUST_CONSOLE_PORT:-3100}"]

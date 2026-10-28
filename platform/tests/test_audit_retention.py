@@ -20,7 +20,8 @@ from conftest import (
     _admin, bearer_headers, mint,
 )
 
-TEST_DB = "trust_agent_platform_test"
+import os  # noqa: E402 (honor TRUST_TEST_DB como tests/conftest.py)
+TEST_DB = os.environ.get("TRUST_TEST_DB", "trust_agent_platform_test")
 
 # Tenant dedicado del test (creado/eliminado aquí): su cadena empieza
 # vacía, así que las filas con ts viejo son el PREFIJO de su cadena — el

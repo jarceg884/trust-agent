@@ -49,7 +49,7 @@ def _enroll_jwt(idp, *, user="carol", tenant=TENANT_A, org=ORG_A, amr=("mfa",),
 
 def _enroll(client, idp, fingerprint, *, user="carol", org=ORG_A,
             issuer_org=None, public_key=None, amr=("mfa",),
-            sign_with_other_key=False):
+            sign_with_other_key=False, device_type=None):
     body = {
         "org_code": org,
         "id_token": _enroll_jwt(
@@ -61,6 +61,9 @@ def _enroll(client, idp, fingerprint, *, user="carol", org=ORG_A,
         "device_name": f"dev-{fingerprint}",
         "platform": "linux",
     }
+    if device_type is not None:
+        # Spec 034 (D-034-04): 'cli' | 'desktop' — ausencia = default server.
+        body["device_type"] = device_type
     return client.post("/api/devices/enroll", json=body)
 
 
@@ -354,9 +357,12 @@ def test_reject_pending_device(client, idp, admin_conn):
                        json={"enrollment_token":
                              enrolled["enrollment_token"]})
     assert resp.status_code == 410
-    events = _audit_events(admin_conn, TENANT_A, "device.revoked", device_id)
+    events = _audit_events(admin_conn, TENANT_A, "device.rejected", device_id)
     assert len(events) == 1
     assert events[0]["payload"]["outcome"] == "rejected"
+    # F4: el reject NO debe colarse como device.revoked (trail distinguible)
+    assert _audit_events(admin_conn, TENANT_A, "device.revoked",
+                         device_id) == []
 
 
 def test_exchange_no_oracle_uniform_410(client, idp):
@@ -454,17 +460,53 @@ def test_reenroll_after_revocation(client, idp, admin_conn):
     assert len(events) == 2
 
 
-def test_reenroll_conflicts(client, idp):
-    # fingerprint active del mismo usuario -> 409
-    fp = f"fp-conf-self-{uuid.uuid4().hex[:8]}"
+def test_reenroll_active_same_user_reissues_token_directly(client, idp, admin_conn):
+    """D-HRB-03 amend (spec 022 v1.1.0, REQ-HRB-010b, gap t_0b6e8e2d).
+
+    Device ACTIVE del mismo usuario + id_token MFA fresco → 200 con device
+    token DIRECTO (sin enrollment token ni re-aprobación admin) + audit
+    ``device.token_reissued``. Es la recuperación documentada del token
+    expirado (agente apagado > TTL).
+    """
+    fp = f"fp-reissue-{uuid.uuid4().hex[:8]}"
     device_id = _enroll(client, idp, fp).json()["device_id"]
     alice = mint(client, idp, "alice")
     client.post(f"/api/devices/{device_id}/approve",
                 headers=bearer_headers(alice))
-    resp = _enroll(client, idp, fp)
-    assert resp.status_code == 409
 
-    # fingerprint de OTRO usuario (alice, seed active) -> 409
+    resp = _enroll(client, idp, fp)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["device_id"] == device_id  # misma fila (upsert por fingerprint)
+    assert body["status"] == "active"
+    assert body["device_token"], "reissue must carry a fresh device token"
+    assert body["expires_in"] > 0
+    # El token re-emitido ES una credencial válida:
+    dt = body["device_token"]
+    # (1) camino sesión+MFA (DeviceGate): Bearer sesión + X-Device-Token:
+    carol = mint(client, idp, "carol")
+    headers = {**bearer_headers(carol), "X-Device-Token": dt}
+    assert client.get("/api/_probe/device", headers=headers).status_code == 200
+    # (2) camino plugin (require_bundle_auth): Bearer = device token:
+    hb = client.post(
+        "/api/me/device-heartbeat",
+        json={"applied_policy_version": 1, "uptime_seconds": 1, "mode": "normal"},
+        headers={"Authorization": f"Bearer {dt}", "X-Device-Token": dt},
+    )
+    assert hb.status_code == 200, hb.text
+    # Audit de la re-emisión en el tenant:
+    events = _audit_events(admin_conn, TENANT_A, "device.token_reissued", device_id)
+    assert len(events) == 1
+    # La fila NO se reseteó (sigue active, aprobada, sin tocar approved_at):
+    row = _device_row(admin_conn, device_id)
+    assert row["status"] == "active"
+    assert row["approved_at"] is not None
+
+
+def test_reenroll_conflicts(client, idp):
+    # fingerprint active del mismo usuario -> 200 con token directo
+    # (D-HRB-03 amend: ver test_reenroll_active_same_user_reissues_token_directly)
+    # fingerprint de OTRO usuario (alice, seed active) -> 409 (sin oracle)
     resp = _enroll(client, idp, "fp-alice-laptop")
     assert resp.status_code == 409
 

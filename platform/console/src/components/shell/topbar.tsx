@@ -13,6 +13,7 @@ import { Badge, Button, useToast } from "@/components/ui";
 import {
   IconBell,
   IconChevronDown,
+  IconDownload,
   IconLogout,
   IconMenu,
   IconPlus,
@@ -37,9 +38,21 @@ export function Topbar({
       </button>
 
       <div className="flex min-w-0 items-center gap-2">
-        <span className="truncate text-sm font-semibold text-foreground">
-          {me.tenant_slug}
+        {/* t_b14cbefb: the topbar is human-facing — show the organization
+            NAME (tenants.name via whoami.tenant_name) with the slug
+            degraded to tooltip + secondary text, never the raw slug
+            alone ("hermes-dl" read like a machine identifier). */}
+        <span
+          className="truncate text-sm font-semibold text-foreground"
+          title={me.tenant_slug}
+        >
+          {me.tenant_name || me.tenant_slug}
         </span>
+        {me.tenant_name && me.tenant_name !== me.tenant_slug ? (
+          <span className="hidden max-w-40 truncate text-xs text-faint md:inline">
+            {me.tenant_slug}
+          </span>
+        ) : null}
         <Badge tone="success">Connected</Badge>
       </div>
 
@@ -53,6 +66,20 @@ export function Topbar({
             <IconPlus size={13} /> Invite user
           </Button>
         </Link>
+        {/* CORRECCIÓN MILLER (t_360a752e): "Download desktop app" del mockup
+            (D-AC-04) ahora enlaza a la sección Hermes Download del console —
+            el admin del cliente genera y envía el link a sus empleados. */}
+        {me.roles.some((r) => r.role_key === "org_admin") && (
+          <Link
+            href="/hermes-download"
+            className="hidden sm:inline-flex"
+            title="Hermes Download — share the desktop app with employees"
+          >
+            <Button variant="secondary" size="sm">
+              <IconDownload size={13} /> Download desktop app
+            </Button>
+          </Link>
+        )}
         <NotificationsBell />
         <UserMenu me={me} />
       </div>
@@ -189,6 +216,18 @@ function UserMenu({ me }: { me: WhoAmI }) {
 
   const topRole = me.roles[0]?.role_key ?? "user";
 
+  // Pulido v2 (hallazgo #7) + t_b14cbefb: el chip del topbar NO muestra el
+  // email crudo truncado. El control plane persiste display_name = email
+  // cuando el usuario no tiene nombre propio; un nombre REAL se reconoce
+  // porque difiere del email. Con nombre real el chip gana contexto
+  // humano "Nombre — rol" (el rol descriptivo acompaña, el email completo
+  // vive en el menú con truncate CSS + title); sin nombre, fallback a la
+  // parte local del email (comportamiento v2).
+  const email = me.email || "?";
+  const realName =
+    me.display_name && me.display_name !== email ? me.display_name : null;
+  const chipLabel = realName ?? email.split("@")[0];
+
   return (
     <div ref={ref} className="relative">
       <button
@@ -196,17 +235,22 @@ function UserMenu({ me }: { me: WhoAmI }) {
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
         aria-haspopup="menu"
-        className="flex items-center gap-2 rounded-lg border border-border-subtle bg-surface px-2.5 py-1.5 text-xs transition-colors hover:bg-surface-alt"
+        className="flex items-center gap-2 rounded-lg border border-border-subtle bg-surface px-2.5 py-1.5 text-xs transition-all duration-150 ease-out hover:border-foreground/20 hover:bg-surface-alt"
       >
         <span
           aria-hidden="true"
-          className="flex size-6 items-center justify-center rounded-full bg-accent-soft text-[11px] font-semibold text-accent"
+          className="flex size-6 shrink-0 items-center justify-center rounded-full bg-accent-soft text-[11px] font-semibold text-accent"
         >
           {(me.display_name || me.email || "?").charAt(0).toUpperCase()}
         </span>
         <span className="hidden max-w-32 truncate font-medium text-foreground sm:inline">
-          {me.display_name || me.email}
+          {chipLabel}
         </span>
+        {realName ? (
+          <span className="hidden max-w-24 truncate text-muted sm:inline">
+            — {topRole}
+          </span>
+        ) : null}
         <IconChevronDown size={13} className="text-muted" />
       </button>
       {open ? (

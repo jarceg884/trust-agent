@@ -89,7 +89,8 @@ señales (`platform/app/auth/mfa.py::mfa_evidence`, spec 011 D-MFA-01):
 - Gate: `platform/app/auth/mfa.py` (amr OR acr>=2, fail-closed).
 - Wiring: `platform/app/tenants/keycloak_admin.py::ensure_mfa_acr` +
   `mfa_acr_state` (usado por el healthcheck de provisioning).
-- Clientes con step-up: `platform/desktop-client` y `platform/console`
+- Clientes con step-up: `platform/console` y el helper `trust-login` del
+  bundle de descarga (`platform/hermes/`, spec 023)
   (`acr_values=2` + re-intento único de authorize si `mfa_verified=false`).
 - Doble de tests: `tests/conftest.py::_IdP` (emite `amr`; `extra_claims`
   permite pinnar la forma real KC26 `amr:null, acr:"2"`).

@@ -1,0 +1,4 @@
+{"ts": 1793161180, "pid": 3429212, "event": "batch1_active", "keys": ["approval_mode", "allowed_terminal_backends", "require_write_sandbox", "allowed_env_passthrough", "web_domain_policy", "allow_private_network_access", "allowed_providers", "allow_self_updates"]}
+{"ts": 1793161180, "pid": 3429212, "event": "plugin_tool_scan", "tools": 1}
+{"ts": 1793161181, "event": "attestation_skipped", "trigger": "startup", "reason": "device not enrolled"}
+{"ts": 1793161201, "pid": 3429212, "event": "auto_enroll_attempt", "org_code": "hermes-dl-e2e", "outcome": "pending", "detail": ""}

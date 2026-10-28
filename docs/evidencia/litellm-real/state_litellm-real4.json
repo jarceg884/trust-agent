@@ -1,0 +1,23 @@
+{
+  "tenant_id": "91eb5a4e-e4be-4ec3-b178-6d3829cef0a8",
+  "dept_it": "854b4b98-1ced-4623-9628-f9a10b09f12b",
+  "admin_user_id": "5689dc41-bd6f-4667-a78d-f82b7923c672",
+  "admin_sub": "7c11185a-77b3-4a7e-82f1-b1b8485bc29e",
+  "admin": {
+    "session_token": "REDACTED",
+    "refresh_token": "REDACTED",
+    "csrf_token": null,
+    "expires_at": "2026-10-25T02:49:13.296493+00:00",
+    "mfa_verified": true
+  },
+  "worker_user_id": "a0262a49-32a6-497e-ae0d-4cb4c569e939",
+  "worker": {
+    "session_token": "REDACTED",
+    "refresh_token": "REDACTED",
+    "csrf_token": null,
+    "expires_at": "2026-10-25T02:49:13.544079+00:00",
+    "mfa_verified": true
+  },
+  "key_id": "be0d70fc-379c-43aa-aeb1-23809be057d8",
+  "key_hash": "[REDACTED-POST-GATE: SHA-256 unidireccional del proxy local — no es credencial]"
+}

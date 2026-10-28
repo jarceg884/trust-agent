@@ -179,7 +179,7 @@ def test_spend_ledger_duplicate_request_id_rejected(app_conn):
             conn.execute(
                 "INSERT INTO spend_ledger (tenant_id, request_id, model_name, mode, "
                 "cost_base_cents, cost_billed_cents, occurred_at) "
-                "VALUES (%s, 'req-a-1', 'deepseek-v3', 'central', 1, 1, now())",
+                "VALUES (%s, 'req-a-1', 'deepseek-v4-flash', 'central', 1, 1, now())",
                 (TENANT_A,),
             )
 
@@ -190,7 +190,7 @@ def test_spend_ledger_byok_billed_equals_base(app_conn):
         row = conn.execute(
             "INSERT INTO spend_ledger (tenant_id, request_id, model_name, mode, "
             "cost_base_cents, cost_billed_cents, occurred_at) "
-            "VALUES (%s, %s, 'deepseek-v3', 'byok', 42, 42, now()) RETURNING cost_billed_cents",
+            "VALUES (%s, %s, 'deepseek-v4-flash', 'byok', 42, 42, now()) RETURNING cost_billed_cents",
             (TENANT_A, f"req-byok-{uuid.uuid4().hex[:8]}"),
         ).fetchone()
         assert row[0] == 42
@@ -243,8 +243,10 @@ def test_invariable_policy_keys_are_catalog_data(admin_conn):
         "SELECT key FROM catalog.policy_keys WHERE invariable ORDER BY key"
     ).fetchall()
     assert [r[0] for r in row] == [
+        # require_mfa dejó de ser invariable (migración 0014, spec 015
+        # D-AUTH-07): es org-tunable, default false.
         "approved_models_only", "explicit_shared_agent_grants",
-        "require_mfa", "scoped_credentials",
+        "scoped_credentials",
     ]
 
 
@@ -332,7 +334,7 @@ def test_model_access_duplicate_rejected(app_conn):
             conn.execute(
                 "INSERT INTO model_access (id, tenant_id, model_id, level, mode) "
                 "VALUES (%s, %s, "
-                "(SELECT id FROM catalog.model_catalog WHERE model_name = 'qwen2.5-72b-instruct'), "
+                "(SELECT id FROM catalog.model_catalog WHERE model_name = 'glm-5.2'), "
                 "'org', 'central')",
                 (uuid.uuid4(), TENANT_A),
             )
@@ -343,7 +345,7 @@ def test_model_access_org_and_user_levels_coexist(app_conn):
         conn.execute(
             "INSERT INTO model_access (id, tenant_id, model_id, level, department_id, user_id, mode) "
             "VALUES (%s, %s, "
-            "(SELECT id FROM catalog.model_catalog WHERE model_name = 'deepseek-v3'), "
+            "(SELECT id FROM catalog.model_catalog WHERE model_name = 'deepseek-v4-flash'), "
             "'user', %s, %s, 'byok')",
             (uuid.uuid4(), TENANT_A, DEPT_A1, USER_A1),
         )

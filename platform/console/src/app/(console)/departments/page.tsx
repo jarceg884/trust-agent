@@ -3,7 +3,7 @@ import { PageHeader } from "@/components/ui";
 import { DepartmentsPage } from "./departments-page";
 
 export const metadata: Metadata = {
-  title: "Departments — Trust Agent Admin Console",
+  title: "Departments",
 };
 
 export default function Page() {

@@ -1,0 +1,134 @@
+{
+  "slug": "uuid-fix",
+  "admin_email": "admin@uuid-fix.test",
+  "acr": "2",
+  "timestamp": "2026-10-26T11:32:50-0600",
+  "results": [
+    {
+      "check": "REPRO PUT /api/budgets/dept/not-a-uuid -> 422",
+      "expected": 422,
+      "got": 422,
+      "reason": "validation_failed",
+      "pass": true
+    },
+    {
+      "check": "CONTROL PUT /api/budgets/dept/<uuid inexistente> -> 404",
+      "expected": 404,
+      "got": 404,
+      "reason": "not_found",
+      "pass": true
+    },
+    {
+      "check": "PUT /api/budgets/user/not-a-uuid",
+      "expected": 422,
+      "got": 422,
+      "reason": "validation_failed",
+      "pass": true
+    },
+    {
+      "check": "PUT /api/policies/dept/not-a-uuid",
+      "expected": 422,
+      "got": 422,
+      "reason": "validation_failed",
+      "pass": true
+    },
+    {
+      "check": "PUT /api/policies/user/not-a-uuid",
+      "expected": 422,
+      "got": 422,
+      "reason": "validation_failed",
+      "pass": true
+    },
+    {
+      "check": "PUT /api/departments/not-a-uuid",
+      "expected": 422,
+      "got": 422,
+      "reason": "validation_failed",
+      "pass": true
+    },
+    {
+      "check": "DELETE /api/departments/not-a-uuid",
+      "expected": 422,
+      "got": 422,
+      "reason": "validation_failed",
+      "pass": true
+    },
+    {
+      "check": "PUT /api/users/not-a-uuid",
+      "expected": 422,
+      "got": 422,
+      "reason": "validation_failed",
+      "pass": true
+    },
+    {
+      "check": "POST /api/users/not-a-uuid/disable",
+      "expected": 422,
+      "got": 422,
+      "reason": "validation_failed",
+      "pass": true
+    },
+    {
+      "check": "GET /api/devices/not-a-uuid",
+      "expected": 422,
+      "got": 422,
+      "reason": "validation_failed",
+      "pass": true
+    },
+    {
+      "check": "POST /api/devices/not-a-uuid/revoke",
+      "expected": 422,
+      "got": 422,
+      "reason": "validation_failed",
+      "pass": true
+    },
+    {
+      "check": "GET /api/vault/credentials/not-a-uuid",
+      "expected": 422,
+      "got": 422,
+      "reason": "validation_failed",
+      "pass": true
+    },
+    {
+      "check": "GET /api/connectors/instances/not-a-uuid",
+      "expected": 422,
+      "got": 422,
+      "reason": "validation_failed",
+      "pass": true
+    },
+    {
+      "check": "POST /api/models/keys/not-a-uuid/revoke",
+      "expected": 422,
+      "got": 422,
+      "reason": "validation_failed",
+      "pass": true
+    },
+    {
+      "check": "GET /api/jobs/not-a-uuid",
+      "expected": 422,
+      "got": 422,
+      "reason": "validation_failed",
+      "pass": true
+    },
+    {
+      "check": "GET /api/agents/not-a-uuid",
+      "expected": 422,
+      "got": 422,
+      "reason": "validation_failed",
+      "pass": true
+    },
+    {
+      "check": "GET /api/audit/events (query)",
+      "expected": 422,
+      "got": 422,
+      "reason": "validation_failed",
+      "pass": true
+    },
+    {
+      "check": "GET /api/policies (query)",
+      "expected": 422,
+      "got": 422,
+      "reason": "validation_failed",
+      "pass": true
+    }
+  ]
+}

@@ -1,0 +1,5 @@
+glm-5.2 → HTTP 200
+{"id":"035002ff5d024ae8a6b623e501e3ede0","created":1793069359,"model":"glm-5.2","object":"chat.completion","choices":[{"finish_reason":"stop","index":0,"message":{"content":"OK","role":"assistant","reasoning_content":"1.  **Analyze the Request:** The user is asking me to \"Say OK\".\n2.  **Determine the appropriate response:** The most direct and compliant response is exactly what the user asked f
+
+gpt-4o → HTTP 403
+{"error":{"message":"The requested model 'gpt-4o' is not available for this API key, or the model name is invalid. Check the models available to you and try again.","type":"key_model_access_denied","param":"model","code":"403"}}

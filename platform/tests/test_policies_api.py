@@ -1,10 +1,12 @@
 """REQ-GOV-020…024 — API de políticas en 3 niveles (spec 005 §3.2)."""
+import os
+
 from conftest import (
     DEPT_A1, DEPT_A2, TENANT_A, USER_BOB, USER_CAROL, _admin, bearer_headers,
     mint,
 )
 
-TEST_DB = "trust_agent_platform_test"
+TEST_DB = os.environ.get("TRUST_TEST_DB", "trust_agent_platform_test")
 
 
 def _put_policy(client, path, key, value, tokens):
@@ -29,15 +31,47 @@ def test_unknown_key_and_type_validation(client, idp):
 
 
 def test_invariable_keys_rejected_at_every_level(client, idp):
-    """AC-GOV-021: invariables del proveedor → 422 en org/depto/usuario."""
+    """AC-GOV-021: invariables del proveedor → 422 en org/depto/usuario.
+
+    Spec 015 (D-AUTH-07): ``require_mfa`` DEJÓ de ser invariable — es una
+    policy org-tunable (el org_admin puede apagarla); se verifica aquí mismo
+    que el PUT org la acepta, mientras ``approved_models_only`` sigue siendo
+    piso invariable del proveedor.
+    """
     alice = mint(client, idp, "alice")
     for path in ("/api/policies/org",
                  f"/api/policies/dept/{DEPT_A1}",
                  f"/api/policies/user/{USER_CAROL}"):
-        resp = _put_policy(client, path, "require_mfa", False, alice)
-        assert resp.status_code == 422, path
         resp = _put_policy(client, path, "approved_models_only", False, alice)
         assert resp.status_code == 422, path
+    # require_mfa ahora es variable (spec 015): el org_admin puede apagarla.
+    resp = _put_policy(client, "/api/policies/org", "require_mfa", False, alice)
+    assert resp.status_code == 200, resp.text
+    # ...y la efectiva lo refleja (el gate MFA se vuelve opcional).
+    eff = client.get("/api/me/policies",
+                     headers=bearer_headers(alice)).json()
+    assert eff["require_mfa"] is False
+    # Restaurar para no contaminar otros tests del mismo tenant.
+    _put_policy(client, "/api/policies/org", "require_mfa", True, alice)
+
+
+def test_org_only_keys_reject_dept_and_user_overrides(client, idp):
+    """Spec 015 (D-AUTH-07/08, hallazgo t_8f716f9f): ``require_mfa`` y
+    ``allow_self_registration`` gatillan comportamiento org-wide ANTES de
+    que exista contexto de departamento (login UX, auto-registro) — el gate
+    lee SOLO el nivel org, así que un override dept/user quedaría guardado,
+    visible en la matriz y jamás honrado. El upsert lo rechaza (422); el
+    nivel org sigue siendo tunable."""
+    alice = mint(client, idp, "alice")
+    for key in ("require_mfa", "allow_self_registration"):
+        for path in (f"/api/policies/dept/{DEPT_A1}",
+                     f"/api/policies/user/{USER_CAROL}"):
+            resp = _put_policy(client, path, key, False, alice)
+            assert resp.status_code == 422, (key, path, resp.text)
+            assert "org-only" in resp.json()["error"]["message"]
+    # El nivel org sigue siendo el único tunable (spec 015 D-AUTH-07).
+    resp = _put_policy(client, "/api/policies/org", "require_mfa", True, alice)
+    assert resp.status_code == 200, resp.text
 
 
 def test_versioning_and_audit(client, idp, admin_conn):
@@ -99,7 +133,7 @@ def test_effective_policy_combination(client, idp):
     eff = resp.json()
     # org [vmware,email] ∩ dept A1 [vmware] ∩ user [vmware] = [vmware]
     assert eff["allowed_connectors"] == ["vmware"]
-    # invariable al piso del proveedor aunque el seed tenga require_mfa=false
+    # org row require_mfa=true (seed spec 015: tenants existentes la conservan)
     assert eff["require_mfa"] is True
     assert eff["approved_models_only"] is True
     # user-level seed: session_timeout_minutes = 30
@@ -131,3 +165,40 @@ def test_list_policies(client, idp):
     denied = client.get("/api/policies?level=org",
                         headers=bearer_headers(carol))
     assert denied.status_code == 403
+
+
+def test_delete_user_policy_without_department_id(client, idp):
+    """AC-GOV-025 (gap B-3, t_fdc728d2): PUT /policies/user/{user_id}
+    resolves the user's department from `users` and stamps it on the row;
+    DELETE /policies/user/{key}?user_id=… WITHOUT department_id must apply
+    the SAME resolution. Exact repro of the asymmetry: before the fix this
+    DELETE answered 404 for a policy the PUT had just written (200)."""
+    alice = mint(client, idp, "alice")
+    # The upsert resolves and stamps Carol's department (DEPT_A1) — the
+    # caller never passes a department_id on the PUT path.
+    put = _put_policy(client, f"/api/policies/user/{USER_CAROL}",
+                      "allowed_models", ["glm-5.2"], alice)
+    assert put.status_code == 200, put.text
+    # DELETE without department_id: resolves the dept like the PUT → 204.
+    # (Before REQ-GOV-025: 404 "Policy not found at this level.")
+    delete = client.delete(
+        "/api/policies/user/allowed_models",
+        params={"user_id": USER_CAROL},
+        headers=bearer_headers(alice),
+    )
+    assert delete.status_code == 204, delete.text
+    # Really deactivated: a second identical DELETE finds no active row.
+    again = client.delete(
+        "/api/policies/user/allowed_models",
+        params={"user_id": USER_CAROL},
+        headers=bearer_headers(alice),
+    )
+    assert again.status_code == 404, again.text
+    # Nonexistent user → 404 "User not found." (same contract as the PUT).
+    missing = client.delete(
+        "/api/policies/user/allowed_models",
+        params={"user_id": "00000000-0000-0000-0000-000000000000"},
+        headers=bearer_headers(alice),
+    )
+    assert missing.status_code == 404, missing.text
+    assert "User not found" in missing.json()["error"]["message"]

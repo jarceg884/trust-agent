@@ -1,0 +1,35 @@
+Trust Agent
+
+= rneote 4 ~
+Trust Agent demo-org | Connected + Invite user Download desktop app © A. Alex Morgan
+GOVERNANCE
+28 Overview Hermes Download
+
+Your organization's stable download link for the Trust Agent desktop app — share it with employees to enroll their devices under your governance.
+Organization
+§® Departments Stable download link
+
+One permanent link for your whole organization. The download page carries your branding and serves the desktop bundle already bound to this organization.
+® Users & Roles
+© org: demo-org
+
+© Budgets
+Model Access http: //127.0.0.1:6000/download/demo-org © Copy tink
+© Open download page The link never changes — safe to pin in your intranet or onboarding docs.
+
+8
+@ Shared Agents
+Qo
+
+Devices
+
+4, Hermes Download
+Send the link to an employee
+Credentials Generate a ready-to-send invitation with the link and the enrollment steps. Sending happens from your own email client — no email is sent by this console.
+B Audit Log
+Employee email
+© Branding
+
+name@yourcompany.com
+
+Used only to pre-fill the draft on your machine — nothing is stored or sent by the console.

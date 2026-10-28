@@ -1,0 +1,61 @@
+{
+  "slug": "uuid-fix",
+  "results": [
+    {
+      "check": "GET /api/vault/connections/not-a-uuid",
+      "expected": 422,
+      "got": 422,
+      "reason": "validation_failed",
+      "pass": true
+    },
+    {
+      "check": "PUT /api/vault/connections/not-a-uuid",
+      "expected": 422,
+      "got": 422,
+      "reason": "validation_failed",
+      "pass": true
+    },
+    {
+      "check": "POST /api/vault/connections/not-a-uuid/revoke",
+      "expected": 422,
+      "got": 422,
+      "reason": "validation_failed",
+      "pass": true
+    },
+    {
+      "check": "POST /api/vault/connections/not-a-uuid/use",
+      "expected": 422,
+      "got": 422,
+      "reason": "validation_failed",
+      "pass": true
+    },
+    {
+      "check": "POST /api/me/notifications/not-a-uuid/read",
+      "expected": 422,
+      "got": 422,
+      "reason": "validation_failed",
+      "pass": true
+    },
+    {
+      "check": "POST /api/devices/not-a-uuid/token",
+      "expected": 422,
+      "got": 422,
+      "reason": "validation_failed",
+      "pass": true
+    },
+    {
+      "check": "POST /api/agents/not-a-uuid/grants",
+      "expected": 422,
+      "got": 422,
+      "reason": "validation_failed",
+      "pass": true
+    },
+    {
+      "check": "DELETE /api/agents/not-a-uuid/grants/not-a-uuid",
+      "expected": 422,
+      "got": 422,
+      "reason": "validation_failed",
+      "pass": true
+    }
+  ]
+}

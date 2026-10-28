@@ -530,9 +530,12 @@ def test_cross_tenant_isolation(client, idp, tenant_c):
                             headers=bearer_headers(dave)).json()["instances"]
     assert all(c["id"] != cred_id for c in dave_creds)
     assert all(i["id"] != inst_id for i in dave_insts)
-    # forged non-uuid id -> 404, never a 500
-    assert client.get("/api/vault/credentials/not-a-uuid",
-                      headers=bearer_headers(dave)).status_code == 404
+    # forged non-uuid id -> 422 validation_failed (t_378503a1: uniform
+    # contract for every UUID param; it was 404 via a local mitigation)
+    resp = client.get("/api/vault/credentials/not-a-uuid",
+                      headers=bearer_headers(dave))
+    assert resp.status_code == 422
+    assert resp.json()["error"]["reason"] == "validation_failed"
 
 
 # =============================================================================

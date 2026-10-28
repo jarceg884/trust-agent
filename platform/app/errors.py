@@ -67,6 +67,31 @@ def mfa_required() -> ApiError:
     )
 
 
+def mfa_code_required() -> ApiError:
+    """Spec 025 (REQ-PS-008): el operador tiene TOTP activo — el login
+    exige el código del authenticator (prompt de UX, no cuenta como fallo
+    de throttle)."""
+    return ApiError(
+        status_code=HTTP_401_UNAUTHORIZED, code="unauthorized",
+        reason="mfa_code_required",
+        message="A TOTP code from your authenticator app is required.",
+    )
+
+
+def password_change_required() -> ApiError:
+    """Spec 025 (D-PS-08): required action del primer login — toda ruta
+    provider de negocio responde 403 hasta completar el cambio de
+    password."""
+    return ApiError(
+        status_code=HTTP_403_FORBIDDEN, code="forbidden",
+        reason="password_change_required",
+        message=(
+            "You must change your password before using the Provider "
+            "Console (first-login required action)."
+        ),
+    )
+
+
 def permission_denied(message: str = "You do not have permission to perform this action.") -> ApiError:
     return ApiError(
         status_code=HTTP_403_FORBIDDEN, code="forbidden",
@@ -79,6 +104,20 @@ def tenant_suspended() -> ApiError:
         status_code=HTTP_403_FORBIDDEN, code="forbidden",
         reason="tenant_suspended",
         message="This organization is currently suspended.",
+    )
+
+
+def tenant_pending_activation() -> ApiError:
+    """Spec 026 (REQ-SS-002): a pending_activation tenant is LOCKED — the
+    user may authenticate to see their status, but every tenant endpoint
+    answers 423 Locked until the provider activates the organization."""
+    return ApiError(
+        status_code=423, code="locked",
+        reason="tenant_pending_activation",
+        message=(
+            "Your organization is pending activation by the provider. "
+            "Nothing is functional until it is activated."
+        ),
     )
 
 
@@ -114,6 +153,16 @@ def model_not_approved(message: str = "This model is not approved for your organ
     )
 
 
+def budget_cutoff(message: str = "Your budget is exhausted; invocation is cut off.") -> ApiError:
+    # Spec 020 (REQ-020-003): the invoke gate refuses to authorize an
+    # invocation the gateway would reject — defense in depth on top of
+    # the blocked virtual key (D-GOV-07).
+    return ApiError(
+        status_code=HTTP_403_FORBIDDEN, code="forbidden",
+        reason="budget_cutoff", message=message,
+    )
+
+
 def credential_type_not_allowed(message: str = "Credential type not allowed by policy.") -> ApiError:
     # Governance gate on vault_allowed_credential_types (REQ-VLT-004, arq. §5.2).
     return ApiError(
@@ -143,6 +192,33 @@ def validation_failed(message: str) -> ApiError:
         status_code=HTTP_422_UNPROCESSABLE_ENTITY, code="invalid_request",
         reason="validation_failed", message=message,
     )
+
+
+def invalid_uuid(name: str) -> ApiError:
+    # Malformed UUID in a path/query/body param (t_378503a1): the request is
+    # syntactically invalid -> 422, never a 500 from a failed SQL CAST.
+    return ApiError(
+        status_code=HTTP_422_UNPROCESSABLE_ENTITY, code="invalid_request",
+        reason="validation_failed", message=f"{name} must be a valid UUID.",
+    )
+
+
+def require_uuid(value: str, name: str) -> str:
+    """Validate and canonicalize a mandatory UUID param (t_378503a1).
+
+    PostgreSQL accepts a few textual UUID forms (uppercase, undashed, urn);
+    uuid.UUID parses the same set, so canonicalizing here also keeps string
+    comparisons correct (e.g. department_id against a dept_admin's scope).
+    """
+    try:
+        return str(uuid.UUID(str(value)))
+    except (ValueError, TypeError, AttributeError):
+        raise invalid_uuid(name) from None
+
+
+def optional_uuid(value: str | None, name: str) -> str | None:
+    """require_uuid for optional params: None passes through untouched."""
+    return require_uuid(value, name) if value is not None else None
 
 
 def gone(message: str = "This resource was already consumed.") -> ApiError:
@@ -202,6 +278,29 @@ async def validation_error_handler(_: Request, exc: RequestValidationError) -> J
 
 
 async def unhandled_error_handler(_: Request, exc: Exception) -> JSONResponse:
+    return JSONResponse(
+        status_code=500,
+        content=_envelope("internal_error", "internal_error",
+                          "An unexpected error occurred."),
+    )
+
+
+async def data_error_handler(_: Request, exc: Exception) -> JSONResponse:
+    """Safety net (t_378503a1): a PostgreSQL 22P02 ('invalid input syntax for
+    type uuid') that escapes route-level require_uuid validation answers
+    422 validation_failed instead of leaking as a 500 internal_error.
+
+    Any other DataError (genuine data corruption) still answers 500. The
+    business transaction has already been rolled back by get_tx/engine.begin()
+    before this handler runs, so the connection pool stays usable.
+    """
+    orig = getattr(exc, "orig", None)
+    if orig is not None and "invalid input syntax for type uuid" in str(orig):
+        return JSONResponse(
+            status_code=HTTP_422_UNPROCESSABLE_ENTITY,
+            content=_envelope("invalid_request", "validation_failed",
+                              "Invalid UUID format."),
+        )
     return JSONResponse(
         status_code=500,
         content=_envelope("internal_error", "internal_error",

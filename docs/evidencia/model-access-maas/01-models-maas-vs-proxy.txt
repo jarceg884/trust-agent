@@ -1,0 +1,18 @@
+=== 1. GET {MAAS_ENDPOINT}/models (key Inforum) ===
+[
+ "deepseek-v4-flash",
+ "glm-5.1",
+ "glm-5.2",
+ "qwen3-32b",
+ "glm-5.3",
+ "deepseek-v4.1-flash"
+]
+=== 2. GET http://127.0.0.1:4000/v1/models (proxy real) ===
+[
+ "glm-5.3",
+ "glm-5.2",
+ "glm-5.1",
+ "deepseek-v4.1-flash",
+ "deepseek-v4-flash",
+ "qwen3-32b"
+]

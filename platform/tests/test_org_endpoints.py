@@ -19,7 +19,8 @@ from conftest import (
     _admin, bearer_headers, mint,
 )
 
-TEST_DB = "trust_agent_platform_test"
+import os  # noqa: E402 (honor TRUST_TEST_DB como tests/conftest.py)
+TEST_DB = os.environ.get("TRUST_TEST_DB", "trust_agent_platform_test")
 
 
 class FakeKeycloak:
@@ -361,7 +362,8 @@ def test_branding_put_requires_manage_and_validates(client, idp):
     assert client.put("/api/branding", json={},
                       headers=bearer_headers(alice)).status_code == 422
 
-    before = _audit_count("branding.updated")
+    # Spec 028 (D-028-04): PUT edita el DRAFT — audit branding.draft.updated.
+    before = _audit_count("branding.draft.updated")
     resp = client.put(
         "/api/branding",
         json={"product_name": "Acme Suite", "tagline": "Run with us",
@@ -370,19 +372,41 @@ def test_branding_put_requires_manage_and_validates(client, idp):
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["source"] == "tenant"
-    assert body["product_name"] == "Acme Suite"
-    assert _audit_count("branding.updated") == before + 1
+    assert body["draft"]["product_name"] == "Acme Suite"
+    assert body["draft"]["has_changes"] is True
+    assert _audit_count("branding.draft.updated") == before + 1
 
-    # GET reflects the tenant branding for every principal.
+    # REQ-BRD-004: el draft NO es visible para otros usuarios hasta publicar.
+    resp = client.get("/api/branding", headers=bearer_headers(carol))
+    assert resp.json()["source"] == "provider"
+    assert resp.json()["product_name"] == "Trust Agent"
+
+    # Publish atómico -> visible para todos + audit con versión.
+    resp = client.post("/api/branding/publish",
+                       headers=bearer_headers(alice))
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["version"] == 1
+    assert resp.json()["published"]["source"] == "tenant"
+    assert _audit_count("branding.published") >= 1
+
     resp = client.get("/api/branding", headers=bearer_headers(carol))
     assert resp.json()["source"] == "tenant"
     assert resp.json()["product_name"] == "Acme Suite"
+    assert resp.json()["version"] == 1
 
     # Restore the seed so other suites see the pristine tenant.
     with _admin(TEST_DB) as c:
-        c.execute(f"UPDATE tenants SET branding = '{{}}'::jsonb "
-                  f"WHERE id = '{TENANT_A}'")
+        c.execute(
+            f"DELETE FROM branding_versions WHERE tenant_id = '{TENANT_A}'"
+        )
+        c.execute(
+            f"DELETE FROM branding_assets WHERE tenant_id = '{TENANT_A}'"
+        )
+        c.execute(
+            f"UPDATE tenants SET branding = '{{}}'::jsonb, "
+            f"branding_draft = '{{}}'::jsonb, branding_version = 0 "
+            f"WHERE id = '{TENANT_A}'"
+        )
 
 
 # ============================================================================

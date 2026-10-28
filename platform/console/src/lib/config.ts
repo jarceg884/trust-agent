@@ -31,6 +31,15 @@ export const config = {
    * también cuando existe una sesión SSO previa sin segundo factor.
    */
   mfaAcrValues: process.env.TRUST_MFA_ACR_VALUES ?? "2",
+  /**
+   * Base pública del endpoint de descarga por tenant (spec 023,
+   * t_526030f3): `GET /download/{tenant_slug}`. Default: el propio
+   * control plane (:8000). Overrideable si el bundle se sirve desde otro
+   * origen. CORRECCIÓN MILLER (t_360a752e): este link lo envía el ADMIN
+   * DEL CLIENTE desde esta console — el proveedor ya no lo genera.
+   */
+  downloadBaseUrl:
+    process.env.TRUST_DOWNLOAD_BASE_URL ?? process.env.TRUST_API_BASE_URL ?? "http://127.0.0.1:8000",
 } as const;
 
 /** Slug válido de organización (realm Keycloak / tenants.slug). */
@@ -41,4 +50,14 @@ export function isValidOrgCode(orgCode: string): boolean {
 /** Issuer del realm de una organización. */
 export function issuerFor(orgCode: string): string {
   return `${config.idpBaseUrl}/realms/${orgCode}`;
+}
+
+/**
+ * Link estable de descarga de Hermes del tenant (spec 023, t_526030f3):
+ * página pública `GET /download/{tenant_slug}` con branding del tenant que
+ * sirve el bundle white-label ligado a la org (org_code embebido — público,
+ * la seguridad está en la aprobación del enrolamiento).
+ */
+export function hermesDownloadUrl(orgCode: string): string {
+  return `${config.downloadBaseUrl}/download/${encodeURIComponent(orgCode)}`;
 }

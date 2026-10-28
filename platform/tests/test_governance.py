@@ -36,6 +36,29 @@ def test_boolean_deny_overrides():
     assert eff["custom_bool"] is False
 
 
+def test_org_only_keys_resolve_as_the_gate():
+    """Spec 015 (D-AUTH-07/08, hallazgo t_8f716f9f): org-only keys ignore
+    dept/user values in combine() — the enforcement gate reads ONLY the
+    org level, so the effective policy must mirror it even if a legacy
+    dept/user row exists (the upsert now rejects new ones with 422)."""
+    cat = dict(CATALOG)
+    cat["require_mfa"] = {"value_type": "boolean", "invariable": False,
+                          "default_value": False}
+    cat["allow_self_registration"] = {"value_type": "boolean",
+                                      "invariable": False,
+                                      "default_value": True}
+    # org=true, dept=false, user=false -> the gate sees true (NOT AND=false)
+    eff = combine({"require_mfa": True}, {"require_mfa": False},
+                  {"require_mfa": False}, cat)
+    assert eff["require_mfa"] is True
+    # no org row -> catalog default; dept/user rows cannot change it
+    eff = combine({}, {"require_mfa": True}, {"require_mfa": True}, cat)
+    assert eff["require_mfa"] is False
+    # same semantics for allow_self_registration (registration is org-wide)
+    eff = combine({}, {"allow_self_registration": False}, {}, cat)
+    assert eff["allow_self_registration"] is True
+
+
 def test_list_intersection():
     # org allows [vmware,email], dept allows [vmware] -> [vmware]
     eff = combine({"allowed_connectors": ["vmware", "email"]},
@@ -100,14 +123,14 @@ def test_defaults_when_no_level_defines():
 
 def test_effective_policy_endpoint(client, idp):
     """Carol (dept A1, user-level 30'): org∩dept connectors, user timeout,
-    invariable require_mfa=true despite the org row saying false."""
+    org require_mfa=true (seed spec 015: existing tenants keep their row)."""
     tokens = mint(client, idp, "carol")
     resp = client.get("/api/me/policies", headers=bearer_headers(tokens))
     assert resp.status_code == 200
     eff = resp.json()
     assert eff["allowed_connectors"] == ["vmware"]  # [vmware,email] ∩ [vmware]
     assert eff["session_timeout_minutes"] == 30
-    assert eff["require_mfa"] is True  # invariable floor beats the org row
+    assert eff["require_mfa"] is True  # org row (D-AUTH-07)
     assert eff["approved_models_only"] is True
 
 
@@ -118,4 +141,6 @@ def test_dave_sees_defaults(client, idp):
     assert resp.status_code == 200
     eff = resp.json()
     assert eff["allowed_connectors"] == []
-    assert eff["require_mfa"] is True
+    # Spec 015 (D-AUTH-07): tenant-b has NO org row → catalog default false
+    # (how NEW tenants are born: MFA optional, the app suggests enrolling).
+    assert eff["require_mfa"] is False

@@ -41,7 +41,7 @@ curl -X POST $KC/admin/realms/trust-agent-test/clients -H "Authorization: Bearer
   -H 'Content-Type: application/json' -d '{
     "clientId":"trust-agent-web","enabled":true,"protocol":"openid-connect",
     "publicClient":true,"standardFlowEnabled":true,"directAccessGrantsEnabled":false,
-    "redirectUris":["http://127.0.0.1:9090/auth/callback"],
+    "redirectUris":["http://127.0.0.1:8765/callback"],
     "attributes":{"pkce.code.challenge.method":"S256"}}'
 
 # Crear usuario — HTTP 201

@@ -102,7 +102,7 @@ async function handle(
       : await request.arrayBuffer();
 
   // CSRF double-submit estricto: SOLO el header del navegador (que lo lee de
-  // la cookie ta_csrf legible por JS). Sin fallback a la cookie: un atacante
+  // la cookie ta_console_csrf legible por JS). Sin fallback a la cookie: un
   // cross-site no puede leer la cookie ni setear headers custom, y el control
   // plane valida el hash (REQ-SEC-010).
   const csrf = MUTATING.has(request.method)
@@ -150,13 +150,7 @@ async function handle(
           contentType,
         );
         if (res.status !== 401) {
-          const out = new NextResponse(await res.arrayBuffer(), {
-            status: res.status,
-            headers: {
-              "Content-Type":
-                res.headers.get("content-type") ?? "application/json",
-            },
-          });
+          const out = await proxyResponse(res);
           out.cookies.set(COOKIE.session, rotated.session_token, cookieOptions(8 * 3600));
           out.cookies.set(COOKIE.refresh, rotated.refresh_token, cookieOptions(8 * 3600));
           return out;
@@ -167,14 +161,24 @@ async function handle(
     }
   }
 
+  return proxyResponse(res);
+}
+
+// HTTP statuses that MUST NOT carry a body: the Response/NextResponse
+// constructor throws "Invalid response status code 204" if one is passed,
+// which surfaced the proxy as HTTP 500 on the first 204 endpoint
+// (DELETE /api/users/{id}/roles/{role_key}, spec 017 AC-RA-002).
+const NO_BODY_STATUS = new Set([204, 304]);
+
+async function proxyResponse(res: Response): Promise<NextResponse> {
   const headers = new Headers();
   const resCt = res.headers.get("content-type");
   if (resCt) headers.set("Content-Type", resCt);
   headers.set("Cache-Control", "no-store");
-  return new NextResponse(await res.arrayBuffer(), {
-    status: res.status,
-    headers,
-  });
+  const body = NO_BODY_STATUS.has(res.status)
+    ? null
+    : await res.arrayBuffer();
+  return new NextResponse(body, { status: res.status, headers });
 }
 
 export const GET = handle;

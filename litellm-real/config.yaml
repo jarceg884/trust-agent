@@ -1,0 +1,107 @@
+# LiteLLM proxy REAL — plano de control de modelos (t_c4766c4d, spec 018).
+#
+# Upstream: Huawei Cloud MaaS ap-southeast-1 (OpenAI-compatible).
+# Presupuestos: PostgreSQL DEDICADO (contenedor trust-agent-litellm-db :55433,
+# DB `litellm`) — sin DB los budgets fallan abiertos (hallazgo de
+# docs/investigacion.md §2; OBLIGATORIO por spec de la tarea).
+#
+# model_list = los 6 deployments REALES verificados en vivo contra
+# {MAAS_ENDPOINT}/models (key "Inforum", GET /models HTTP 200, 2026-10-26).
+# Pricing REAL de la doc oficial MaaS intl en USD por millón de tokens,
+# convención PEOR CASO — Periodo 1 (08:00-20:59 GMT+8) cuando hay diferencial
+# por horario, tier ≥32K cuando hay pricing por longitud, patrón reasoning
+# cuando hay pricing por patrón:
+#   support.huaweicloud.com/intl/en-us/price-maas/price-maas-0002.html
+#   support.huaweicloud.com/intl/en-us/price-modelarts/price-modelarts-0047.html (Qwen3-32B)
+# Catálogo espejo: migración 0009_model_catalog_maas + db/schema.sql §3.3
+# (spec 018, AC-018-03). Ver hallazgo completo en
+# skills/llm-gateway/huawei-maas-models (pricing diferencial por horario).
+model_list:
+  # GLM-5.3 — sin diferencial horario: $1.40 in / $4.40 out / $0.26 cache-hit.
+  - model_name: glm-5.3
+    litellm_params:
+      model: openai/glm-5.3
+      api_base: os.environ/MAAS_ENDPOINT
+      api_key: os.environ/MAAS_API_KEY
+    model_info:
+      input_cost_per_token: 0.0000014
+      output_cost_per_token: 0.0000044
+      cache_read_input_cost: 0.00000026
+      max_tokens: 1000000       # contexto documentado (Model List intl)
+      mode: chat
+  # GLM-5.2 — P1: $1.40 in / $4.40 out / $0.26 cache-hit (P2: 0.98/3.08/0.182).
+  - model_name: glm-5.2
+    litellm_params:
+      model: openai/glm-5.2
+      api_base: os.environ/MAAS_ENDPOINT
+      api_key: os.environ/MAAS_API_KEY
+    model_info:
+      input_cost_per_token: 0.0000014
+      output_cost_per_token: 0.0000044
+      cache_read_input_cost: 0.00000026
+      max_tokens: 1000000       # contexto documentado (Model List intl)
+      mode: chat
+  # GLM-5.1 — pricing por longitud; tier ≥32K P1: $1.078 / $3.774 / $0.27 cache.
+  - model_name: glm-5.1
+    litellm_params:
+      model: openai/glm-5.1
+      api_base: os.environ/MAAS_ENDPOINT
+      api_key: os.environ/MAAS_API_KEY
+    model_info:
+      input_cost_per_token: 0.000001078
+      output_cost_per_token: 0.000003774
+      cache_read_input_cost: 0.00000027
+      max_tokens: 198000        # contexto documentado (Model List intl)
+      mode: chat
+  # DeepSeek-V4.1-Flash — P1: $0.30 in / $1.20 out / $0.03 cache-hit.
+  - model_name: deepseek-v4.1-flash
+    litellm_params:
+      model: openai/deepseek-v4.1-flash
+      api_base: os.environ/MAAS_ENDPOINT
+      api_key: os.environ/MAAS_API_KEY
+    model_info:
+      input_cost_per_token: 0.0000003
+      output_cost_per_token: 0.0000012
+      cache_read_input_cost: 0.00000003
+      max_tokens: 1000000       # contexto documentado (Model List intl)
+      mode: chat
+  # DeepSeek-V4-Flash — sin diferencial: $0.135 in / $0.27 out.
+  - model_name: deepseek-v4-flash
+    litellm_params:
+      model: openai/deepseek-v4-flash
+      api_base: os.environ/MAAS_ENDPOINT
+      api_key: os.environ/MAAS_API_KEY
+    model_info:
+      input_cost_per_token: 0.000000135
+      output_cost_per_token: 0.00000027
+      max_tokens: 1000000       # contexto documentado (Model List intl)
+      mode: chat
+  # DeepSeek-V4.1-Flash-1017 — deployment nuevo aparecido upstream el
+  # 2026-10-27 (GET /models en vivo). Fuente precios: price-maas-0002
+  # (actualizada 2026-10-27 GMT+8), peor caso P1: $0.30 in / $1.20 out.
+  # Contexto 1M / máx. output 384K (Model List intl, 2026-10-27).
+  - model_name: deepseek-v4.1-flash-1017
+    litellm_params:
+      model: openai/deepseek-v4.1-flash-1017
+      api_base: os.environ/MAAS_ENDPOINT
+      api_key: os.environ/MAAS_API_KEY
+    model_info:
+      input_cost_per_token: 0.0000003
+      output_cost_per_token: 0.0000012
+      max_tokens: 1000000       # contexto documentado (Model List intl)
+      mode: chat
+  # qwen3-32b: RETIRADO — MaaS dejó de servirlo (verificado en vivo
+  # 2026-10-27: ausente de GET /models, chat/completions → 404
+  # ModelArts.81009). Eliminado del model_list (spec 018 §5, migración
+  # 0026 lo marca stale en el catálogo).
+
+litellm_settings:
+  drop_params: true
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  # spec 032 (discovery dinámico): permite /model/new //model/delete en
+  # runtime (modelos byok registrados por el control plane con la key de
+  # la conexión). Leído de general_settings (proxy_server.py:7022).
+  store_model_in_db: true
+  database_url: os.environ/DATABASE_URL

@@ -136,3 +136,33 @@ def register_success(conn: Connection, account_key_: str) -> None:
         ),
         {"key": account_key_},
     )
+
+
+def register_hit(
+    conn: Connection,
+    key: str,
+    *,
+    window_secs: int,
+    max_hits: int,
+    base_secs: int = 30,
+    max_secs: int = 3600,
+) -> None:
+    """Count one POSITIVE hit on `key` (spec 023, D-023-07).
+
+    Same table and lockout arithmetic as ``register_failure``, but for
+    endpoints where every request counts (not only failures): the public
+    download page/bundle. After ``max_hits`` inside the sliding window the
+    key locks out progressively (base * 2^(hits - max), capped) and
+    ``check()`` raises 429 on subsequent requests. Counters live in
+    PostgreSQL (ops plane, no RLS by design) so they survive restarts.
+    """
+    conn.execute(
+        _REGISTER_FAILURE_SQL,
+        {
+            "key": key,
+            "window_secs": window_secs,
+            "max_fails": max_hits,
+            "base_secs": base_secs,
+            "max_secs": max_secs,
+        },
+    )

@@ -9,6 +9,11 @@ from ..db import get_engine, get_migrator_engine
 from ..errors import not_found, permission_denied
 from .healthcheck import healthcheck
 from .keycloak_admin import KeycloakAdminClient
+from .provider_service import (
+    activate_tenant,
+    list_tenants,
+    set_tenant_status,
+)
 from .provision import (
     ProvisionRequest,
     find_tenant_by_slug,
@@ -69,6 +74,71 @@ def provision_tenant(
     )
     return JSONResponse(
         status_code=201 if result["created"] else 200, content=result
+    )
+
+
+@router.get("")
+def list_all_tenants(
+    status: str | None = None,
+    principal: Principal = Depends(get_provider_principal),
+):
+    """Lista de tenants con stats (spec 014 REQ-PC-001, D-PC-04).
+
+    Filas vía migrator (cross-tenant, solo el proveedor); stats por tenant
+    leídos como trust_app dentro del scope de cada uno. ``status`` filtra
+    (spec 026: cola de pending_activation del Provider Console).
+    """
+    _require_provision_permission(principal)
+    return list_tenants(get_engine(), get_migrator_engine(), status=status)
+
+
+class ActivateBody(BaseModel):
+    initial_budget_usd: float
+
+
+@router.post("/{slug}/activate")
+def activate_pending_tenant(
+    slug: str,
+    body: ActivateBody,
+    principal: Principal = Depends(get_provider_principal),
+):
+    """Activa un tenant pending_activation + budget inicial (spec 026,
+    REQ-SS-003).
+
+    UNA transacción: status -> active, budget org asignado, audit
+    `tenant.activated` + `budget.assigned` y notificación a los org_admin.
+    409 si ya está active o suspended (suspended usa /reactivate).
+    """
+    _require_provision_permission(principal)
+    return activate_tenant(
+        get_engine(), get_migrator_engine(), slug,
+        body.initial_budget_usd,
+    )
+
+
+@router.post("/{slug}/suspend")
+def suspend_tenant(
+    slug: str, principal: Principal = Depends(get_provider_principal)
+):
+    """Suspende un tenant (spec 014 REQ-PC-002, D-PC-05).
+
+    Transaccional + auditado (tenant.suspended, actor provider); idempotente.
+    El core niega cada request del tenant con 403 tenant_suspended.
+    """
+    _require_provision_permission(principal)
+    return set_tenant_status(
+        get_engine(), get_migrator_engine(), slug, "suspended"
+    )
+
+
+@router.post("/{slug}/reactivate")
+def reactivate_tenant(
+    slug: str, principal: Principal = Depends(get_provider_principal)
+):
+    """Reactiva un tenant suspendido (spec 014 REQ-PC-003, D-PC-05)."""
+    _require_provision_permission(principal)
+    return set_tenant_status(
+        get_engine(), get_migrator_engine(), slug, "active"
     )
 
 

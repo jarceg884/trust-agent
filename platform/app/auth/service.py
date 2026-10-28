@@ -27,7 +27,9 @@ from ..db import get_engine, set_tenant
 from ..errors import (
     csrf_required,
     invalid_token,
+    password_change_required,
     service_unavailable,
+    tenant_pending_activation,
     tenant_suspended,
 )
 from .jwks import verify_id_token
@@ -74,6 +76,11 @@ def _hash(value: str) -> str:
 class Principal:
     tenant_id: str
     tenant_slug: str
+    # Human-facing organization name (tenants.name). Additive field exposed
+    # by whoami (t_b14cbefb): the console topbar shows the org NAME and
+    # degrades the slug to tooltip/secondary. Same source of truth as the
+    # slug (tenants table), resolved at principal-build time.
+    tenant_name: str
     user_id: str
     email: str
     display_name: str
@@ -185,7 +192,7 @@ def lookup_session(conn: Connection, session_id: str, secret_hash: str) -> dict 
             "       s.mfa_verified, s.expires_at, "
             "       u.email, u.display_name, u.department_id, u.status AS user_status, "
             "       t.status AS tenant_status, t.slug AS tenant_slug, "
-            "       t.oidc_issuer_url "
+            "       t.name AS tenant_name, t.oidc_issuer_url "
             "FROM sessions s "
             "JOIN users u ON u.tenant_id = s.tenant_id AND u.id = s.user_id "
             "JOIN tenants t ON t.id = s.tenant_id "
@@ -195,6 +202,28 @@ def lookup_session(conn: Connection, session_id: str, secret_hash: str) -> dict 
         {"sid": session_id, "hash": secret_hash},
     ).mappings().first()
     return dict(row) if row else None
+
+
+def sync_mfa_enrolled(conn: Connection, user_id: str) -> bool:
+    """D-AUTH-11 (spec 015 v1.1.0): lazy sync of ``users.mfa_enrolled``.
+
+    Called only from auth funnels that have ALREADY verified an id_token
+    whose claims prove a second factor (``mfa_evidence`` — D-MFA-01) and run
+    inside a tenant-scoped transaction (RLS isolates the UPDATE, constitution
+    III). The guard makes it a no-op once the column is true, so per-request
+    callers (stateless JWT path) do not write on every call. Monotonic by
+    design: a password-only login never clears the column — not proving a
+    second factor does not prove the user un-enrolled. Returns True when the
+    column actually flipped (false -> true).
+    """
+    result = conn.execute(
+        text(
+            "UPDATE users SET mfa_enrolled = true, updated_at = now() "
+            "WHERE id = CAST(:uid AS uuid) AND NOT mfa_enrolled"
+        ),
+        {"uid": user_id},
+    )
+    return (result.rowcount or 0) > 0
 
 
 def revoke_session(conn: Connection, session_id: str) -> None:
@@ -301,6 +330,7 @@ def _build_principal(
     return Principal(
         tenant_id=str(row["tenant_id"]),
         tenant_slug=row["tenant_slug"],
+        tenant_name=row["tenant_name"],
         user_id=str(row["user_id"]),
         email=row["email"],
         display_name=row["display_name"],
@@ -316,10 +346,16 @@ def _build_principal(
     )
 
 
-def authenticate(request: Request) -> Principal | None:
+def authenticate(
+    request: Request, *, allow_pending: bool = False
+) -> Principal | None:
     """Resolve the request principal, or None for anonymous requests.
 
-    Raises 401 invalid_token / 403 tenant_suspended on failure.
+    Raises 401 invalid_token / 403 tenant_suspended / 423
+    tenant_pending_activation on failure. ``allow_pending`` (spec 026,
+    D-26-03) lets a pending_activation tenant through — reserved for
+    session-lifecycle endpoints (logout); the cached principal then carries
+    no gate, so it must never be used on business surface.
     Result is cached on request.state (FastAPI dependency cache).
     """
     cached = getattr(request.state, "principal", "__unset__")
@@ -364,10 +400,13 @@ def authenticate(request: Request) -> Principal | None:
             leeway=settings.jwt_leeway_seconds,
         )
         tenant_id = claims["tenant_id"]
+        # MFA evidence: `amr` (test double / standard-IdP) or `acr` >=
+        # TRUST_MFA_MIN_ACR (Keycloak 26, which never emits `amr` — D-MFA-01).
+        mfa_verified = mfa_evidence(claims)
         with engine.begin() as conn:
             set_tenant(conn, tenant_id)
             trow = conn.execute(
-                text("SELECT id, status, slug, oidc_issuer_url FROM tenants")
+                text("SELECT id, status, slug, name, oidc_issuer_url FROM tenants")
             ).mappings().first()
             if trow is None:
                 raise invalid_token()
@@ -382,14 +421,18 @@ def authenticate(request: Request) -> Principal | None:
             ).mappings().first()
             if urow is None or urow["status"] != "active":
                 raise invalid_token()
+            if mfa_verified:
+                # D-AUTH-11 (spec 015 v1.1.0): the desktop/plugin path uses
+                # the raw id_token as Bearer and never mints a DB session —
+                # sync the directory column here. Guarded UPDATE: no write
+                # once the column is true.
+                sync_mfa_enrolled(conn, str(urow["id"]))
             roles = load_roles(conn, str(urow["id"]))
             permissions = load_permissions(conn, [r.role_key for r in roles])
-        # MFA evidence: `amr` (test double / standard-IdP) or `acr` >=
-        # TRUST_MFA_MIN_ACR (Keycloak 26, which never emits `amr` — D-MFA-01).
-        mfa_verified = mfa_evidence(claims)
         row = {
             "tenant_id": trow["id"],
             "tenant_slug": trow["slug"],
+            "tenant_name": trow["name"],
             "tenant_status": trow["status"],
             "user_id": urow["id"],
             "email": urow["email"],
@@ -408,7 +451,13 @@ def authenticate(request: Request) -> Principal | None:
             auth_via_cookie=False,
         )
 
-    if principal and row.get("tenant_status") != "active":
+    if principal and row.get("tenant_status") == "pending_activation":
+        # Spec 026 (REQ-SS-002, D-26-02): the tenant is LOCKED. The user
+        # authenticated (they may SEE their status) but nothing functional
+        # answers — 423 on every tenant endpoint.
+        if not allow_pending:
+            raise tenant_pending_activation()
+    elif principal and row.get("tenant_status") != "active":
         raise tenant_suspended()
     request.state.principal = principal
     return principal
@@ -434,36 +483,87 @@ def get_principal(request: Request) -> Principal:
     return principal
 
 
-def get_provider_principal(request: Request) -> Principal:
-    """Provider operator principal (spec 004, D-ONB-02).
+def get_principal_allow_pending(request: Request) -> Principal:
+    """Spec 026 (D-26-03): like get_principal, but a pending_activation
+    tenant passes. Reserved for session-lifecycle endpoints the locked user
+    still needs (logout) — never for business surface."""
+    principal = authenticate(request, allow_pending=True)
+    if principal is None:
+        raise invalid_token("Authentication required.")
+    return principal
 
-    platform_admin is NOT a tenant role (the schema's CHECK on user_roles
-    excludes it and sessions.tenant_id is NOT NULL), so no user session can
-    ever carry tenants.provision. Provider routes authenticate with a bearer
-    token from the environment (constant-time compare, fail-closed when
-    unconfigured) and load the platform_admin permissions data-driven from
-    catalog.role_permissions — never code constants.
+
+def get_provider_principal(request: Request) -> Principal:
+    """Provider operator principal (spec 025 D-PS-06 — supercede el token
+    estático del spec 004 D-ONB-02).
+
+    Dos caminos, AMBOS fail-closed si no hay operador seedeado en
+    ``ops.provider_operators`` (REQ-PS-010 — la recuperación es reiniciar el
+    API, que re-seedea):
+
+    1. PRIMARIO — sesión de operador ``pst1…`` (``ops.provider_sessions``,
+       mintada por ``POST /api/provider/auth/login``). Sujeto a la required
+       action del primer login: 403 ``password_change_required`` hasta
+       completar el cambio (D-PS-08).
+    2. BREAK-GLASS (deprecado, documentado en platform/README.md) — el
+       bearer estático de entorno, SOLO con ``TRUST_PROVIDER_TOKEN``
+       configurado explícitamente. Vía de escape para CLI/scripts de
+       emergencia; NO está sujeto al flag del primer login.
+
+    platform_admin NO es un rol de tenant (el CHECK de user_roles lo excluye
+    y sessions.tenant_id es NOT NULL), así que ninguna sesión de usuario
+    puede cargarlo. Los permisos se leen data-driven de
+    catalog.role_permissions — jamás constantes de código.
     """
-    settings = get_settings()
-    if not settings.provider_token:
+    # Import local: provider.operator importa ..auth.throttle (mismo paquete).
+    from ..provider import operator as provider_op
+
+    engine = get_engine()
+    try:
+        operator_seeded = provider_op.operator_exists(engine)
+    except Exception:
+        operator_seeded = False
+    if not operator_seeded:
         raise service_unavailable(
-            "Provider operations are disabled: TRUST_PROVIDER_TOKEN is not "
-            "configured (fail-closed)."
+            "Provider operations are disabled: no provider operator is "
+            "seeded. Restart the API to bootstrap one (fail-closed)."
         )
+
     auth = request.headers.get("authorization", "")
-    if not auth.startswith("Bearer "):
-        raise invalid_token("Provider token required.")
-    provided = auth[len("Bearer "):].strip()
-    if not secrets.compare_digest(provided, settings.provider_token):
-        raise invalid_token("Invalid provider token.")
-    with get_engine().connect() as conn:
+    provided = auth[len("Bearer "):].strip() if auth.startswith("Bearer ") else ""
+    if not provided:
+        raise invalid_token("Provider authentication required.")
+
+    if provided.startswith(provider_op.SESSION_PREFIX):
+        with engine.begin() as conn:
+            session = provider_op.lookup_operator_session(conn, provided)
+        if session is None:
+            raise invalid_token("Invalid or expired provider session.")
+        if session["must_change_password"]:
+            # Required action del primer login (D-PS-08): el control plane
+            # niega TODA ruta provider de negocio hasta completar el cambio.
+            raise password_change_required()
+        display_name = f"Provider Operator ({session['username']})"
+    else:
+        settings = get_settings()
+        if not settings.provider_token:
+            raise service_unavailable(
+                "Provider operations are disabled: TRUST_PROVIDER_TOKEN is "
+                "not configured (fail-closed)."
+            )
+        if not secrets.compare_digest(provided, settings.provider_token):
+            raise invalid_token("Invalid provider token.")
+        display_name = "Provider Operator (break-glass)"
+
+    with engine.connect() as conn:
         permissions = load_permissions(conn, ["platform_admin"])
     principal = Principal(
         tenant_id="",
         tenant_slug="platform",
+        tenant_name="Platform",
         user_id="",
         email="",
-        display_name="Provider Operator",
+        display_name=display_name,
         department_id=None,
         roles=[RoleAssignment("platform_admin")],
         permissions=permissions,
@@ -476,11 +576,24 @@ def get_provider_principal(request: Request) -> Principal:
 def require_mfa(principal: Principal = Depends(get_principal)) -> Principal:
     """MfaGate (REQ-ORG-007): 403 mfa_required without verified MFA.
 
+    Spec 015 (D-AUTH-07): the gate is POLICY-AWARE — it only fires when the
+    organization's effective `require_mfa` policy is true. With
+    require_mfa=false the session without MFA passes (the app always
+    suggests enrolling via the persistent banner instead of blocking).
+
     Exempt routes simply do not declare this dependency (/api/auth/*, /healthz).
     """
-    if not principal.mfa_verified:
-        from ..errors import mfa_required
+    if principal.mfa_verified:
+        return principal
+    from ..db import get_engine, set_tenant
+    from ..errors import mfa_required
+    from ..governance.service import org_policy_value
 
+    engine = get_engine()
+    with engine.connect() as conn:
+        set_tenant(conn, principal.tenant_id)
+        required = org_policy_value(conn, "require_mfa")
+    if required is None or required is True or required == "true":
         raise mfa_required()
     return principal
 

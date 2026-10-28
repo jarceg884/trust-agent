@@ -77,10 +77,13 @@ def enroll(
     fingerprint: str,
     device_name: str | None,
     platform: str | None,
+    device_type: str = "desktop",
 ) -> dict:
     """Create/re-enroll a pending device and mint a one-time enrollment token.
 
     Upsert key: (tenant_id, fingerprint) — retries never create extra rows.
+    `device_type` (spec 034, D-034-04): 'cli' | 'desktop' — validated by the
+    router; stored so admins can tell a CLI install from a desktop app.
     """
     validate_public_key(public_key)
     if not fingerprint or len(fingerprint) > 256:
@@ -100,10 +103,10 @@ def enroll(
             text(
                 "INSERT INTO devices (id, tenant_id, user_id, fingerprint, "
                 " device_name, platform, status, public_key, "
-                " enrollment_token_hash) "
+                " enrollment_token_hash, device_type) "
                 "VALUES (CAST(:id AS uuid), CAST(:tenant_id AS uuid), "
                 " CAST(:user_id AS uuid), :fp, :name, :platform, 'pending', "
-                " :public_key, :enrollment_hash)"
+                " :public_key, :enrollment_hash, :device_type)"
             ),
             {
                 "id": device_id,
@@ -114,6 +117,7 @@ def enroll(
                 "platform": platform,
                 "public_key": public_key,
                 "enrollment_hash": token_hash,
+                "device_type": device_type,
             },
         )
     else:
@@ -121,7 +125,37 @@ def enroll(
             # Fingerprint already taken by another user of this tenant.
             raise conflict("This device fingerprint is already enrolled.")
         if existing["status"] == "active":
-            raise conflict("This device is already enrolled and active.")
+            # D-HRB-03 amend (spec 022 v1.1.0, REQ-HRB-010b, gap t_0b6e8e2d):
+            # the device is ALREADY approved and the caller just re-proved
+            # identity with a fresh MFA id_token (verified by the router) —
+            # re-issue the device token DIRECTLY, no admin re-approval and
+            # no one-time enrollment token. This is the documented recovery
+            # for an expired device token (agent off > TTL): re-run the
+            # login flow and the next enroll yields a fresh token.
+            device_id = str(existing["id"])
+            settings = get_settings()
+            audit_service.emit(
+                conn,
+                tenant_id=str(tenant_id),
+                actor_role=_enrolling_role(conn, user_id),
+                actor_id=str(user_id),
+                action="device.token_reissued",
+                target_type="device",
+                target_id=device_id,
+                device_id=device_id,
+                payload={"fingerprint": fingerprint, "user_id": str(user_id)},
+            )
+            return {
+                "device_id": device_id,
+                "status": "active",
+                "device_token": issue_device_token(
+                    settings,
+                    device_id=device_id,
+                    user_id=str(user_id),
+                    tenant_id=str(tenant_id),
+                ),
+                "expires_in": settings.device_token_ttl_minutes * 60,
+            }
         # pending (retry) or revoked/rejected (re-enrollment, ADR-013):
         # reset to pending with the new key and a fresh enrollment token.
         device_id = str(existing["id"])
@@ -129,6 +163,7 @@ def enroll(
             text(
                 "UPDATE devices SET status = 'pending', public_key = :public_key, "
                 " device_name = :name, platform = :platform, "
+                " device_type = :device_type, "
                 " enrollment_token_hash = :enrollment_hash, "
                 " approved_at = NULL, approved_by = NULL, "
                 " enrolled_at = now(), updated_at = now() "
@@ -139,6 +174,7 @@ def enroll(
                 "public_key": public_key,
                 "name": device_name,
                 "platform": platform,
+                "device_type": device_type,
                 "enrollment_hash": token_hash,
             },
         )
@@ -267,7 +303,7 @@ def renew_token(conn: Connection, *, principal: Principal, device_id: str) -> di
 def my_devices(conn: Connection, principal: Principal) -> list[dict]:
     rows = conn.execute(
         text(
-            "SELECT id, fingerprint, device_name, platform, status, "
+            "SELECT id, fingerprint, device_name, platform, device_type, status, "
             "enrolled_at, approved_at, last_seen_at "
             "FROM devices WHERE user_id = CAST(:uid AS uuid) "
             "ORDER BY created_at"
@@ -280,6 +316,7 @@ def my_devices(conn: Connection, principal: Principal) -> list[dict]:
             "fingerprint": r["fingerprint"],
             "device_name": r["device_name"],
             "platform": r["platform"],
+            "device_type": r["device_type"],
             "status": r["status"],
             "enrolled_at": _iso(r["enrolled_at"]),
             "approved_at": _iso(r["approved_at"]),
@@ -293,7 +330,8 @@ def my_devices(conn: Connection, principal: Principal) -> list[dict]:
 # Admin console (permission devices.manage; dept_admin scoped to their depts)
 # ---------------------------------------------------------------------------
 _DEVICE_SELECT = text(
-    "SELECT d.id, d.fingerprint, d.device_name, d.platform, d.status, "
+    "SELECT d.id, d.fingerprint, d.device_name, d.platform, d.device_type, "
+    "d.status, "
     "d.enrolled_at, d.approved_at, d.approved_by, d.last_seen_at, "
     "d.user_id, u.email, u.display_name, u.department_id, "
     "dept.name AS department_name, "
@@ -317,6 +355,7 @@ def _serialize(row) -> dict:
         "fingerprint": row["fingerprint"],
         "device_name": row["device_name"],
         "platform": row["platform"],
+        "device_type": row["device_type"],
         "status": row["status"],
         "enrolled_at": _iso(row["enrolled_at"]),
         "approved_at": _iso(row["approved_at"]),
@@ -426,7 +465,7 @@ def reject(conn: Connection, *, principal: Principal, device_id: str) -> dict:
         tenant_id=principal.tenant_id,
         actor_role=_actor_role(principal),
         actor_id=principal.user_id,
-        action="device.revoked",
+        action="device.rejected",
         target_type="device",
         target_id=device_id,
         device_id=device_id,
@@ -439,12 +478,235 @@ def reject(conn: Connection, *, principal: Principal, device_id: str) -> dict:
     return {"device_id": device_id, "status": "rejected"}
 
 
+# ---------------------------------------------------------------------------
+# Presence (spec 027, REQ-027-04): who is connected RIGHT NOW
+# ---------------------------------------------------------------------------
+_PRESENCE_SELECT = text(
+    "SELECT d.id, d.fingerprint, d.device_name, d.platform, d.device_type, "
+    "d.status, "
+    "d.last_heartbeat_at, d.applied_policy_version, d.agent_uptime_seconds, "
+    "d.user_id, u.email, u.display_name, u.department_id, "
+    "dept.name AS department_name "
+    "FROM devices d "
+    "JOIN users u ON u.tenant_id = d.tenant_id AND u.id = d.user_id "
+    "LEFT JOIN departments dept "
+    " ON dept.tenant_id = d.tenant_id AND dept.id = u.department_id"
+)
+
+
+def presence(
+    conn: Connection, *, principal: Principal, department_id: str | None = None
+) -> dict:
+    """Live presence: online count + per-device detail (D-027-04).
+
+    `online` is computed ONLY over active devices: a heartbeat younger than
+    the online window means the enrolled agent is alive. The current policy
+    version per device comes from the same function that signs the bundle,
+    so `policy_up_to_date` is the live-propagation signal the admin sees.
+    """
+    from ..config import get_settings
+    from ..governance.bundle import _policy_version
+
+    settings = get_settings()
+    window = max(60, settings.presence_online_window_seconds)
+
+    clauses, params = [], {}
+    scope = dept_scope(principal)
+    if scope is not None:  # dept_admin (or plain user): only their departments
+        clauses.append("u.department_id = ANY(:depts)")
+        params["depts"] = scope
+    if department_id is not None:
+        clauses.append("u.department_id = CAST(:dept AS uuid)")
+        params["dept"] = department_id
+    sql = _PRESENCE_SELECT
+    if clauses:
+        sql = text(str(_PRESENCE_SELECT) + " WHERE " + " AND ".join(clauses))
+    rows = conn.execute(sql, params).mappings()
+
+    devices = []
+    online_count = 0
+    active_count = 0
+    for r in rows:
+        current_version = _policy_version(
+            conn, department_id=r["department_id"] and str(r["department_id"]),
+            user_id=str(r["user_id"]),
+        )
+        heartbeat = r["last_heartbeat_at"]
+        online = (
+            r["status"] == "active"
+            and heartbeat is not None
+            and (datetime.now(timezone.utc) - heartbeat).total_seconds() <= window
+        )
+        if r["status"] == "active":
+            active_count += 1
+        if online:
+            online_count += 1
+        applied = r["applied_policy_version"]
+        devices.append({
+            "id": str(r["id"]),
+            "user_id": str(r["user_id"]),
+            "email": r["email"],
+            "display_name": r["display_name"],
+            "department_id": str(r["department_id"]) if r["department_id"] else None,
+            "department_name": r["department_name"],
+            "fingerprint": r["fingerprint"],
+            "device_name": r["device_name"],
+            "platform": r["platform"],
+            "device_type": r["device_type"],
+            "status": r["status"],
+            "online": online,
+            "last_heartbeat_at": _iso(heartbeat),
+            "applied_policy_version": applied,
+            "current_policy_version": current_version,
+            "policy_up_to_date": applied is not None and applied == current_version,
+            "agent_uptime_seconds": r["agent_uptime_seconds"],
+        })
+    return {
+        "online_count": online_count,
+        "active_count": active_count,
+        "online_window_seconds": window,
+        "heartbeat_interval_seconds": settings.heartbeat_interval_seconds,
+        "devices": devices,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Integral revocation sweep (spec 019 Incremento 4, REQ-GOH-011 / D-GOH-05)
+# ---------------------------------------------------------------------------
+def _block_user_virtual_keys(
+    conn: Connection, principal: Principal, *, user_id: str, device_id: str
+) -> list[dict]:
+    """Block the user's ACTIVE LiteLLM virtual keys (REQ-GOH-011a).
+
+    Decision against the real model (platform/app/models/): virtual keys
+    are USER-scoped — ``api_keys.device_id`` exists in the schema but no
+    issuance path populates it, and D-GOH-05/REQ-GOH-011 say "la virtual
+    key del usuario" dies on revocation. We therefore block every ACTIVE
+    key of the device's owner via the real proxy ``/key/block`` (by hash,
+    D-GOV-02) and mark it ``blocked`` in the same transaction.
+
+    Fail-closed: a LiteLLM failure raises service_unavailable, which
+    rolls back the WHOLE revocation (the device stays active). A 404
+    from the proxy means the key no longer exists at the gateway — it is
+    already dead, so we proceed (same rule as keys.revoke_key).
+    """
+    from ..models.litellm import get_litellm
+
+    litellm = get_litellm()
+    rows = conn.execute(
+        text(
+            "SELECT id, alias, litellm_key_hash FROM api_keys "
+            "WHERE user_id = CAST(:uid AS uuid) AND status = 'active'"
+        ),
+        {"uid": user_id},
+    ).mappings().all()
+    blocked: list[dict] = []
+    for r in rows:
+        litellm.block_key(r["litellm_key_hash"])
+        conn.execute(
+            text(
+                "UPDATE api_keys SET status = 'blocked', updated_at = now() "
+                "WHERE id = CAST(:kid AS uuid)"
+            ),
+            {"kid": str(r["id"])},
+        )
+        audit_service.emit(
+            conn,
+            tenant_id=principal.tenant_id,
+            actor_role=_actor_role(principal),
+            actor_id=principal.user_id,
+            action="model.key_blocked",
+            target_type="api_key",
+            target_id=str(r["id"]),
+            device_id=device_id,
+            payload={
+                "reason": "device_revoked",
+                "device_id": device_id,
+                "alias": r["alias"],
+            },
+        )
+        blocked.append({"key_id": str(r["id"]), "alias": r["alias"]})
+    return blocked
+
+
+def _sweep_device_connector_grants(
+    conn: Connection, principal: Principal, *, user_id: str, device_id: str
+) -> list[dict]:
+    """Disconnect the user's ACTIVE connector instances (REQ-GOH-011b).
+
+    Uses the shared cutoff primitive (REQ-CON-005) so catalog connectors
+    die exactly like the policy sweep does; each cut is audited as
+    ``connector.disconnected`` (reason device_revoked) and the owner gets
+    an inbox notification. Custom connections (spec 024) have no
+    per-device grant row: their runtime injection channel is session-
+    gated and the device's sessions are revoked in this same transaction,
+    which cuts that channel too.
+    """
+    from ..connectors import service as connectors_service
+    from ..governance import notifications as inbox
+
+    cut = connectors_service.disconnect_connector_instances(
+        conn, user_id=user_id
+    )
+    swept: list[dict] = []
+    for inst in cut:
+        audit_service.emit(
+            conn,
+            tenant_id=principal.tenant_id,
+            actor_role=_actor_role(principal),
+            actor_id=principal.user_id,
+            action="connector.disconnected",
+            target_type="connector_instance",
+            target_id=str(inst["id"]),
+            device_id=device_id,
+            payload={
+                "connector_slug": inst["connector_slug"],
+                "reason": "device_revoked",
+                "device_id": device_id,
+            },
+        )
+        inbox.notify(
+            conn,
+            tenant_id=principal.tenant_id,
+            user_id=user_id,
+            type="connector_disconnected",
+            payload={
+                "connector_slug": inst["connector_slug"],
+                "reason": "device_revoked",
+                "device_id": device_id,
+            },
+        )
+        swept.append(
+            {
+                "instance_id": str(inst["id"]),
+                "connector_slug": inst["connector_slug"],
+            }
+        )
+    return swept
+
+
 def revoke(conn: Connection, *, principal: Principal, device_id: str) -> dict:
-    """Revoke a device AND its sessions in the SAME transaction (REQ-DEV-004:
-    effective immediately — the next request is 401, no cache involved)."""
+    """Revoke a device AND its sessions AND its control-plane access in
+    the SAME transaction (REQ-DEV-004 + REQ-GOH-011): the next request is
+    401, no cache involved, and the revoked device can neither invoke
+    models (virtual key blocked at the gateway) nor use connectors whose
+    credentials live in the server-side vault.
+
+    The sweep runs only when the device was ACTIVE: a pending device
+    never exchanged a device token nor held sessions, so it has no
+    control-plane access to cut — and killing the user's key because an
+    unapproved enrollment was revoked would cut access that belongs to
+    the user's OTHER active devices, beyond what the spec promises
+    ("la revocación corta el acceso real" DEL dispositivo revocado).
+
+    Fail-closed (spec 019 §9 Incremento 4): if the LiteLLM block or the
+    connector sweep fails, the exception propagates and the transaction
+    rolls back — the revocation is NOT confirmed.
+    """
     row = _get_scoped_device(conn, principal, device_id)
     if row["status"] not in ("pending", "active"):
         raise conflict("The device is already revoked or rejected.")
+    was_active = row["status"] == "active"
     conn.execute(
         text(
             "UPDATE devices SET status = 'revoked', "
@@ -460,6 +722,14 @@ def revoke(conn: Connection, *, principal: Principal, device_id: str) -> dict:
         ),
         {"did": device_id},
     )
+    sweep = {"keys_blocked": [], "connectors_disconnected": []}
+    if was_active:
+        sweep["keys_blocked"] = _block_user_virtual_keys(
+            conn, principal, user_id=str(row["user_id"]), device_id=device_id
+        )
+        sweep["connectors_disconnected"] = _sweep_device_connector_grants(
+            conn, principal, user_id=str(row["user_id"]), device_id=device_id
+        )
     audit_service.emit(
         conn,
         tenant_id=principal.tenant_id,
@@ -474,6 +744,14 @@ def revoke(conn: Connection, *, principal: Principal, device_id: str) -> dict:
             "sessions_revoked": True,
             "fingerprint": row["fingerprint"],
             "user_id": str(row["user_id"]),
+            # REQ-GOH-011: the audit carries the sweep summary (keys
+            # blocked + connectors swept) so the admin can verify the
+            # hard remote guarantee from the audit trail alone.
+            "sweep": sweep,
         },
     )
-    return {"device_id": device_id, "status": "revoked"}
+    return {
+        "device_id": device_id,
+        "status": "revoked",
+        "sweep": sweep,
+    }

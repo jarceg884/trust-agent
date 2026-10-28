@@ -18,7 +18,14 @@ import pytest
 from tests.conftest import MIGRATOR_DB_URL, TENANT_A, TEST_DB, USER_CAROL, _admin
 
 ORPHAN_TENANT = "99999999-9999-9999-9999-999999999999"
-QWEN = "qwen2.5-72b-instruct"
+QWEN = "glm-5.2"
+
+# Sandbox de módulo (t_e000bf40): test_orphan_tenant_log_rejected_not_poison
+# ingesta via el worker una fila de HOY para Carol (log "healthy-qa-h2")
+# que, sin limpieza, rompe los conteos EXACTOS de la ventana 'today' del
+# tenant en test_usage_analytics. El fixture (conftest) borra al salir
+# SOLO el delta de filas creadas aquí y restaura budget_counters.
+pytestmark = pytest.mark.usefixtures("ledger_delta_sandbox")
 
 
 @pytest.fixture()

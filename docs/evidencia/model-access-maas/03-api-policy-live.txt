@@ -1,0 +1,32 @@
+=== E1: MaaS real /models ↔ catálogo ===
+[PASS] E1 proxy LiteLLM real /v1/models == 6 deployments MaaS  · ['deepseek-v4-flash', 'deepseek-v4.1-flash', 'glm-5.1', 'glm-5.2', 'glm-5.3', 'qwen3-32b']
+=== Provisioning + login REAL (PKCE S256 + TOTP) ===
+[PASS] P1 POST /api/admin/tenants → 201  · HTTP 201 {"created":true,"tenant":{"id":"f8f5c1f3-799e-4433-baf4-c302ee1a893a","name":"Model Access MaaS Corp","slug":"model-access-maas-1026c","status":"activ
+    [dance] enrolamiento TOTP real: code=968178
+[PASS] P2 login REAL admin (acr=2)  · acr=2
+=== E2: catálogo de la plataforma (doc oficial MaaS) ===
+[PASS] E2a GET /api/models devuelve exactamente los 6 deployments reales  · HTTP 200 ['deepseek-v4-flash', 'deepseek-v4.1-flash', 'glm-5.1', 'glm-5.2', 'glm-5.3', 'qwen3-32b']
+[PASS] E2b los modelos genéricos retirados ya no existen
+[PASS] E2c glm-5.2: contexto 1M, output 128K, 140/440 ¢/M (doc oficial)  · {"model_name": "glm-5.2", "display_name": "GLM-5.2", "provider": "huawei_maas", "context_tokens": 1000000, "max_output_tokens": 128000, "input_price_cents_per_m": 140.0, "output_price_cents_per_m": 440.0, "status": "available"}
+[PASS] E2d qwen3-32b: límites NULL (no documentados), precio 27/269.5  · {"model_name": "qwen3-32b", "display_name": "Qwen3-32B", "provider": "huawei_maas", "context_tokens": null, "max_output_tokens": null, "input_price_cents_per_m": 27.0, "output_price_cents_per_m": 269.5, "status": "available"}
+=== E3/E4: policy integrada (spec 018 D-018-02) ===
+[PASS] E3a GET /api/models/access incluye sección policy  · HTTP 200 {"models":[{"model_name":"deepseek-v4.1-flash","display_name":"DeepSeek-V4.1-Flash","provider":"huawei_maas","context_tokens":1000000,"max_output_toke
+[PASS] E3b policy.approved_models_only === true (floor invariable)  · {"allowed_models": null, "approved_models_only": true}
+[PASS] E3c policy.allowed_models es null sin policy org  · {"allowed_models": null, "approved_models_only": true}
+[PASS] E4a GET /api/policies?level=org incluye model_approvals=[glm-5.2]  · HTTP 200 ['glm-5.2']
+[PASS] E4b model_approvals expone modo y estado  · {"model_name": "glm-5.2", "mode": "central", "status": "approved"}
+=== E5: aprobación org de deepseek-v4-flash → policy visible ===
+[PASS] E5a PUT /api/models/access (deepseek-v4-flash, org) → 201  · HTTP 201 {"id":"4e20fd83-e4f5-4b9c-a5f4-2c6e369cdea3","model_name":"deepseek-v4-flash","level":"org","mode":"central","status":"approved"}
+[PASS] E5b model_approvals ahora = [deepseek-v4-flash, glm-5.2]  · ['deepseek-v4-flash', 'glm-5.2']
+=== E6: policy allowed_models restringe (deny-overrides) ===
+[PASS] E6a PUT /api/policies/org allowed_models=['glm-5.2'] → 200  · HTTP 200 {"id":"e364f692-c8c0-420b-a762-05f2c3be1b31","key":"allowed_models","level":"org","version":1,"value":["glm-5.2"]}
+[PASS] E6b /api/models/access refleja policy.allowed_models=['glm-5.2']  · {"allowed_models": ["glm-5.2"], "approved_models_only": true}
+[PASS] E6c conjunto efectivo del admin = ['glm-5.2'] (aprobados ∩ policy, deny-overrides)  · HTTP 200 {"models":["glm-5.2"]}
+[PASS] E6d verify deepseek-v4-flash → 403 (aprobado pero fuera de policy)  · HTTP 403
+=== E7: invocación REAL glm-5.2 (key virtual → proxy → MaaS) ===
+[PASS] E7a emisión de key virtual → 201  · HTTP 201 {"key":"sk-Vc9EXJs6Rk8uteff2mVMrg","key_id":"1102effc-c44a-4a38-83b9-241812a4f6b4","alias":"trust-9e009d71-02fc96ee","al  # gitleaks:allow key VIRTUAL del proxy LiteLLM local (127.0.0.1:4000, tenant de dev con budget) — no es credencial de un upstream real
+[PASS] E7b chat/completions glm-5.2 vía proxy → MaaS real responde  · HTTP 200 ok
+[PASS] E7c deepseek-v4-flash con la misma key → 403 (policy)  · HTTP 403
+
+============================================================
+Evidencia spec 018: 21 PASS, 0 FAIL

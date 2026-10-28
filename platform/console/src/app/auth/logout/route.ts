@@ -5,6 +5,7 @@
  */
 import { NextResponse, type NextRequest } from "next/server";
 import { rawApi } from "@/lib/control-plane";
+import { requestOrigin } from "@/lib/origin";
 import {
   clearSessionCookies,
   getCsrfToken,
@@ -13,7 +14,7 @@ import {
 } from "@/lib/session";
 
 export async function POST(request: NextRequest) {
-  const origin = new URL(request.url).origin;
+  const origin = requestOrigin(request);
   const session = await getSessionToken();
   const csrf = await getCsrfToken();
 

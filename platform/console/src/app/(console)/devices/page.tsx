@@ -3,7 +3,7 @@ import { PageHeader } from "@/components/ui";
 import { DevicesPage } from "./devices-page";
 
 export const metadata: Metadata = {
-  title: "Devices — Trust Agent Admin Console",
+  title: "Devices",
 };
 
 export default function Page() {

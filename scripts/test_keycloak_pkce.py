@@ -17,7 +17,7 @@ import http.client
 KC = "127.0.0.1:8080"
 REALM = "trust-agent-test"
 CLIENT_ID = "trust-agent-web"
-REDIRECT_URI = "http://127.0.0.1:9090/auth/callback"
+REDIRECT_URI = "http://127.0.0.1:8765/callback"
 
 
 def b64url(raw: bytes) -> str:

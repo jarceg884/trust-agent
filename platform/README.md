@@ -93,6 +93,14 @@ curl -s http://127.0.0.1:8000/healthz   # {"status":"ok","database":"up"}
   progresivo (30 s × 2^(fallos−5), tope 24 h). El contador vive en
   PostgreSQL: sobrevive al reinicio del API. El login exitoso resetea el
   contador de la cuenta (no el de la IP).
+- **Operador del proveedor (spec 025)**: el login del Provider Console es
+  usuario+contraseña del super-user seedeado en `ops.provider_operators`
+  (password argon2id, primer login fuerza cambio, MFA TOTP opcional en
+  `/security`, sesiones en `ops.provider_sessions` que sobreviven reinicios,
+  audit en `ops.provider_audit`). `TRUST_PROVIDER_TOKEN` está **DEPRECADO**:
+  queda solo como break-glass para scripts de emergencia y SOLO si está
+  explícitamente configurado; sin operador seedeado toda autenticación
+  provider fail-closea (503). Ver `docs/provider-superuser.md`.
 - **RBAC**: permisos calculados por request desde `catalog.role_permissions`
   (la matriz §2.1 de spec 001 vive en datos). `dept_admin` limitado a sus
   departamentos; cross-tenant → 404.
@@ -128,6 +136,15 @@ Dominios y endpoints (todos con MfaGate + RBAC + scope de tenant):
 - **Spend + corte** (`app/governance/spend.py` + `spend_worker.py`): worker `python -m app.governance.spend_worker` que ingiere `/spend/logs/v2` con cursor en `ops.spend_cursor` (idempotente por `request_id`), aplica margen MaaS (central) o registra BYOK sin margen, actualiza `budget_counters` por nivel y ejecuta el enforcement: bloqueo/desbloqueo de keys por hash (`/key/block`/`/key/unblock`), audit `budget.cutoff`/`budget.threshold` y notificaciones de inbox (`GET /api/me/notifications`) con dedupe por ventana.
 
 En tests, LiteLLM es un **doble HTTP declarado** (`tests/litellm_fake.py`, D-GOV-15): mismo patrón que el IdP mock — HTTP real con la semántica documentada de la Admin API (corte nativo 429, key bloqueada 401, models de la key). Contra un proxy real solo cambia `TRUST_LITELLM_BASE_URL`.
+
+**Proxy real (re-validación t_c4766c4d, docs/validacion-final.md §9)**: existe un
+gateway LiteLLM real v1.106.3 en `litellm-real/` (venv propio, PostgreSQL dedicado
+`trust-agent-litellm-db` :55433, upstream Huawei MaaS glm-5.2, escucha 127.0.0.1:4000;
+arrancar con `litellm-real/start.sh`). El stack compose lee
+`TRUST_LITELLM_BASE_URL`/`TRUST_LITELLM_MASTER_KEY` de `.env` (default = doble 39989):
+con el `.env` actual el api+spend-worker apuntan al gateway REAL. Para volver al doble
+(demo con `e2e_final_live.py`): quitar ambas variables de `.env` y
+`docker compose up -d --no-deps --force-recreate api spend-worker`.
 
 ## Tests
 

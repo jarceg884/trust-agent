@@ -1,0 +1,35 @@
+# Perfil Hermes del usuario final del desktop (plantilla white-label).
+#
+# El desktop es Hermes CONFIGURADO, no un fork (constitution IV / C6):
+# este config.yaml apunta el modelo al gateway LiteLLM del tenant con la
+# VIRTUAL KEY del usuario — el gate real de modelos aprobados y presupuesto
+# (D-GOV-15: la key solo acepta los modelos aprobados por la org y aplica
+# max_budget; LiteLLM es el plano de control de modelos).
+#
+# La virtual key la emite el control plane (POST /api/models/keys, one-time)
+# y la inyecta el instalador del desktop en el entorno del perfil — nunca se
+# commitea (los secrets viven en el .env del perfil, por máquina).
+model:
+  default: glm-5.2   # ejemplo: modelo aprobado por la organización
+  provider: custom
+  base_url: http://127.0.0.1:4000  # proxy LiteLLM del tenant (spec 005)
+  api_key: ${TRUST_USER_VIRTUAL_KEY}
+
+# Sin fallback a proveedores personales: TODO tráfico de modelos pasa por el
+# gateway gobernado de la organización. No declarar fallback_model es parte
+# del contrato de gobernanza (approved_models_only).
+
+plugins:
+  enabled:
+    - trust-agent-governance   # puente de gobernanza (tool + hooks, ver hermes/plugins/)
+
+# El toolset del plugin (trust_agent) NO se habilita solo con plugins.enabled:
+# sin esta lista explícita, governance_status queda fuera de la superficie de
+# tools del agente (los toolsets de plugins son opt-in por plataforma).
+platform_toolsets:
+  cli:
+    - hermes-cli
+    - trust_agent
+
+agent:
+  reasoning_effort: medium
