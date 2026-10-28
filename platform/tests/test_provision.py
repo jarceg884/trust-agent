@@ -262,6 +262,14 @@ def test_provision_full_flow(client, admin_conn):
     assert state["acr_loa_map"] and state["loa_flow_ready"]
     rep = kc._get_realm_rep(SLUG, "test")
     assert rep["loginTheme"] == "trust-agent"
+    # t_e68687ee: per-tenant `en` localization overrides converge with the
+    # branding product_name (TOTP enrollment h1, no KC default texts).
+    from app.tenants.keycloak_admin import LOCALIZATION_LOCALE, TOTP_TITLE_KEY
+    loc = kc._request(
+        "GET", f"/admin/realms/{SLUG}/localization/{LOCALIZATION_LOCALE}",
+        step="test",
+    ).json()
+    assert loc[TOTP_TITLE_KEY] == "Secure your Trust Agent account"
 
     after = _counts(admin_conn)
     assert after["tenants"] == before["tenants"] + 1

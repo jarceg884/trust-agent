@@ -297,3 +297,82 @@ los módulos de este fix (verificado este run).
 
 **Veredicto**: AC-AUTH-010 **VERIFICADO OK** con evidencia real (flujo
 positivo + negativo monotónico + UI).
+
+## Addendum 2026-10-28 — Textos TOTP white-label + barrido completo del flujo auth (t_e68687ee, feedback Miller)
+
+**Feedback**: "para el OTP se nota mucho que es Keycloak". El cuerpo ya estaba
+themed (AC-AUTH-001), pero el enrolamiento TOTP mostraba los defaults de KC:
+h1 "Mobile Authenticator Setup", "Install one of the following applications
+on your mobile:", "Provide a Device Name to help you manage your OTP
+devices.", alert "You need to set up Mobile Authenticator to activate your
+account.".
+
+**Fix en dos capas** (misma filosofía de D-AUTH-01: la marca es data, no un
+fork de template):
+
+1. **Tema** `platform/idp-themes/trust-agent/login/messages/messages_{en,es}.properties`
+   — copy white-label genérico para las keys jergosas de KC
+   (`loginTotpTitle`, `configureTotpMessage`, `loginTotpStep1..3`,
+   `loginTotpStep3DeviceName`, `loginTotpDeviceName`, `loginTotpManual*`,
+   `loginTotpUnableToScan`, `loginTotpScanBarcode`). Aplica a TODO realm con
+   `loginTheme=trust-agent` sin restart (KC 26.2.5 resolvió el bundle al
+   vuelo — verificado en vivo). Pitfalls verificados: los .properties del
+   tema se leen UTF-8 crudo (como los del padre) y los valores se formatean
+   estilo MessageFormat — un apóstrofe literal exige `''` ("Can''t scan the
+   code?"; con uno solo se renderiza "Cant").
+2. **Localization texts por realm** (product_name del branding) —
+   `KeycloakAdminClient.ensure_login_theme` ahora también converge
+   `POST /admin/realms/{r}/localization/en` con
+   `loginTotpTitle="Secure your <product> account"`. Pitfalls verificados en
+   vivo contra KC 26.2.5: el `PUT /admin/realms/{r}` **silencia**
+   `localizationTexts` (no persiste); el endpoint dedicado es
+   `GET/POST .../localization/{locale}` (POST mergea por-key) y funciona con
+   `internationalizationEnabled=false` (estado default de los realms).
+   Retro-fit idempotente vía `apply_auth_ux_realms.py`, que ahora lee
+   `tenants.branding->>'product_name'`: **101 realms actualizados, 0
+   fallos** (spot-check: `cli-gov-e2e`→"Secure your Nimbus Agent account",
+   `gate-final`→"Secure your Gate Agent account",
+   `arce-demo`→"Secure your Trust Agent account").
+
+**Título de pestaña 🐴 — investigación cerrada**: el HTML del servidor es
+`<title>Sign in to Trust Agent</title>` (curl, sin emoji) y NINGÚN script de
+la página toca `document.title` (grep del HTML + de los JS del tema). El
+emoji aparece SOLO en navegadores manejados por harness CDP (el de QA y el
+de este run lo reproducen): un script del tooling prefija el emoji del
+favicon al título. Usuario real: título limpio + favicon Trust Agent
+(`c7c057a9…`, servido desde el tema en TODAS las páginas — el `<link
+rel=icon>` sale del template común). No es producto.
+
+**Barrido completo con navegador real** (realm `arce-demo`, usuarios
+desechables `wl-sweep`/`wl-sweep2` creados y ELIMINADOS después; screenshots
+en `screenshots/sweep-0*.png`):
+
+| Página | Cómo se llegó | Verificación DOM | Screenshot |
+|---|---|---|---|
+| Login | authorize PKCE | título "Sign in to Trust Agent", h1 "Sign in to your account", header "TRUST AGENT", favicon del tema, 0 "Keycloak" en texto | sweep-01-login.png |
+| Login error | password incorrecto | alert "Invalid username or password.", themed | sweep-02-login-error.png |
+| Enrolamiento TOTP | required action CONFIGURE_TOTP | h1 **"Secure your Trust Agent account"**, alert "Set up two-factor authentication to activate your account.", pasos white-label, "Can't scan the code?" con apóstrofe, 0 defaults KC, 0 "Keycloak" | sweep-03-totp-enrollment.png |
+| Entrada OTP | login + `acr_values=2` (step-up) | h1 "Sign In", label "One-time code", themed | sweep-04-totp-entry.png |
+| Update password | required action UPDATE_PASSWORD | h1 "Update password", alert "You need to change your password to activate your account.", themed | sweep-05-update-password.png |
+| Error | authorize con redirect_uri inválido | h1 "We are sorry...", "Invalid parameter: redirect_uri", themed | sweep-06-error.png |
+| Logout | end-session con id_token_hint | h1 "You are logged out", themed | sweep-07-logout.png |
+
+Consent: N/A — `trust-agent-web` tiene `consentRequired=false` (verificado
+vía Admin REST), la pantalla de consentimiento no existe en este flujo.
+
+**Flujo real verificado de punta a punta** (además del navegador): PKCE
+completo por HTTP — login → OTP (TOTP computado del secret real, HMAC-SHA1
+sobre los bytes UTF-8 del secret ALPHANUM de `SecretGenerator`; NO es
+base32-decodificable) → code → token exchange → id_token con `acr:"2"` y
+claim `tenant_id`.
+
+**Tests**: `test_keycloak_admin_localization.py` +5 (nuevo: product_name en
+la localization, converge de override stale, idempotente sin escritura,
+merge preserva keys ajenas); `test_provision.py` extendido (assert de la
+localization contra el realm real provisionado); juntos con
+`test_tenant_self_signup.py` + `test_auth_ux.py` + `test_e2e_keycloak.py`:
+45 passed. Suite completa con `TRUST_TEST_DB` aislado: ver run de la card.
+
+**Veredicto**: residuos TOTP eliminados; barrido completo sin artefactos
+Keycloak-visibles en ninguna página del flujo auth. Con la enmienda v1.3.0
+(panel propio, ADR-019) esta superficie queda como capa fallback.

@@ -157,6 +157,58 @@ consola ya usa (spec 009/011 verificados).
   `{"loginTheme":"<nombre>"}`. Hacerlo idempotente en el provisioning y
   retroactivo para realms existentes.
 
+### 3.1 Overrides de textos (messages) — verificado en vivo 26.2.5 (t_e68687ee)
+
+Dos capas, ambas sin fork de templates:
+
+1. **Bundles del tema** `themes/<nombre>/login/messages/messages_{en,es}.properties`:
+   solo las keys cuyos defaults de KC leen como jerga (TOTP:
+   `loginTotpTitle`="Mobile Authenticator Setup", `configureTotpMessage`,
+   `loginTotpStep1..3`, `loginTotpStep3DeviceName`, `loginTotpDeviceName`,
+   `loginTotpManual*`, `loginTotpUnableToScan`, `loginTotpScanBarcode`).
+   Las keys ausentes caen al padre — el archivo se mantiene mínimo a
+   propósito. Se toman al vuelo junto con el resto del tema (sin restart).
+   PITFALLS: (a) los .properties del tema se leen **UTF-8 crudo** (como los
+   del padre — "Configura tu aplicación…"); (b) los valores se formatean
+   estilo **MessageFormat**: un apóstrofe literal exige `''` ("Can''t scan
+   the code?" — con uno solo se renderiza "Cant", verificado en vivo).
+2. **Localization texts por realm** (para textos con el product_name del
+   tenant — los bundles no pueden interpolar el displayName en keys que el
+   template llama sin argumentos, p.ej. `msg("loginTotpTitle")`):
+   `GET/POST /admin/realms/{r}/localization/{locale}` (POST **mergea
+   por-key**; `DELETE .../localization/{locale}/{key}` limpia). PITFALLS
+   verificados en vivo: (a) el `PUT /admin/realms/{r}` **silencia**
+   `localizationTexts` — NO persiste por ahí, solo por el endpoint dedicado;
+   (b) funciona con `internationalizationEnabled=false` (estado default de
+   los realms — no hay que habilitar i18n); (c) el `title` de pestaña SIEMPRE
+   es `msg("loginTitle", realm.displayName)` → "Sign in to <displayName>",
+   ya lleva el product name por dato del realm. Implementación de referencia:
+   `KeycloakAdminClient.ensure_login_theme` +
+   `platform/scripts/apply_auth_ux_realms.py` (retro-fit idempotente que lee
+   `tenants.branding->>'product_name'`).
+
+### 3.2 El emoji 🐴 del título de pestaña NO es del producto
+
+Verificado dos veces (QA t_13f8b623 y t_e68687ee): el HTML del servidor trae
+`<title>Sign in to <displayName></title>` SIN emoji y ningún script de la
+página toca `document.title`. El "🐴 " aparece solo en navegadores manejados
+por harness CDP (tooling de QA y de dev lo reproducen): un script del
+tooling prefija el emoji del favicon al título. Usuario real: título limpio
++ favicon del tema (verificar `link[rel=icon]` → `/resources/<v>/login/
+<nombre-tema>/img/favicon.ico`, no `keycloak.v2`).
+
+### 3.3 TOTP del enrolamiento por HTTP (para probes/e2e)
+
+El input oculto `totpSecret` NO es base32: es un string ALPHANUM random
+(`SecretGenerator.randomString`, alfabeto A-Za-z0-9). La clave HMAC son sus
+bytes UTF-8 directos (las apps llegan a lo mismo decodificando el QR, que es
+Base32(raw.getBytes())). TOTP stock: SHA1/6 dígitos/30s. En el form de
+entrada OTP (`login-otp.ftl`) el input es `#otp` (no `#totp`) y NO hay que
+mandar `tryAnotherWay` ni `selectedCredentialId` vacíos — `tryAnotherWay`
+presente dispara la pantalla "Select login method". El `action` de los
+forms viene HTML-escapado (`&amp;`) — aplicar `html.unescape` antes del
+POST.
+
 ## 4. Google identity provider (brokering) vía Admin REST
 
 ```

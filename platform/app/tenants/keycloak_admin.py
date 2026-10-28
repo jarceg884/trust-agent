@@ -66,6 +66,16 @@ USERNAME_PASSWORD_PROVIDER = "auth-username-password-form"
 # KC 26 default theme is keycloak.v2; our theme extends it (PatternFly v5)
 # and is deployed via the idp-themes/ volume → /opt/keycloak/themes.
 LOGIN_THEME = "trust-agent"
+# Per-tenant message overrides (t_e68687ee): locale of the realm localization
+# texts managed by ensure_login_theme. "en" matches the app UI language and
+# the theme's default locale; realms ship with internationalization disabled
+# and the overrides still apply (verified live against KC 26.2.5).
+LOCALIZATION_LOCALE = "en"
+# TOTP enrollment page h1 — the one login surface where the tenant product
+# name reads naturally ("Secure your <product> account"). The generic
+# fallback ("Two-factor authentication") lives in the theme's
+# login/messages/messages_en.properties.
+TOTP_TITLE_KEY = "loginTotpTitle"
 
 # --- Google identity brokering (spec 015, D-AUTH-02) -------------------------
 GOOGLE_IDP_ALIAS = "google"
@@ -909,17 +919,60 @@ class KeycloakAdminClient:
         # never clobber a deliberate custom display name).
         if rep.get("displayName") in (None, "", realm):
             updates["displayName"] = display
-        if not updates:
-            return
-        rep.update(updates)
+        if updates:
+            rep.update(updates)
+            resp = self._request(
+                "PUT", f"/admin/realms/{realm}", step="keycloak.login_theme",
+                json_body=rep,
+            )
+            if resp.status_code not in (200, 204):
+                raise KeycloakAdminError(
+                    "keycloak.login_theme",
+                    f"bind login theme: HTTP {resp.status_code} {resp.text[:200]}",
+                )
+        # Per-tenant message overrides (t_e68687ee): the TOTP enrollment
+        # h1 carries the tenant's product name. Theme bundles cannot do this
+        # (login-config-totp.ftl calls msg("loginTotpTitle") with no args),
+        # so the brand rides realm localization texts — data, not a fork.
+        self._ensure_localization(realm, self._brand_localization(display))
+
+    # --- realm localization texts (per-tenant message overrides) --------------
+
+    def _brand_localization(self, product: str) -> dict[str, str]:
+        """Message overrides that embed the tenant product name. Keys not
+        listed here fall back to the theme's messages_*.properties (generic
+        white-label copy) and then to the KC defaults."""
+        return {TOTP_TITLE_KEY: f"Secure your {product} account"}
+
+    def _ensure_localization(self, realm: str, texts: dict[str, str]) -> None:
+        """Idempotently merge `texts` into the realm's `en` localization
+        overrides. KC 26 pitfall (verified live): PUT /admin/realms/{r}
+        silently DROPS `localizationTexts` — the dedicated endpoints are
+        GET/POST /admin/realms/{r}/localization/{locale} (POST merges
+        per-key) and they work with internationalization disabled."""
         resp = self._request(
-            "PUT", f"/admin/realms/{realm}", step="keycloak.login_theme",
-            json_body=rep,
+            "GET",
+            f"/admin/realms/{realm}/localization/{LOCALIZATION_LOCALE}",
+            step="keycloak.login_theme",
         )
-        if resp.status_code not in (200, 204):
+        if resp.status_code != 200:
             raise KeycloakAdminError(
                 "keycloak.login_theme",
-                f"bind login theme: HTTP {resp.status_code} {resp.text[:200]}",
+                f"get localization texts: HTTP {resp.status_code} {resp.text[:200]}",
+            )
+        current = resp.json() or {}
+        if all(current.get(key) == value for key, value in texts.items()):
+            return
+        resp = self._request(
+            "POST",
+            f"/admin/realms/{realm}/localization/{LOCALIZATION_LOCALE}",
+            step="keycloak.login_theme",
+            json_body=texts,
+        )
+        if resp.status_code not in (200, 201, 204):
+            raise KeycloakAdminError(
+                "keycloak.login_theme",
+                f"set localization texts: HTTP {resp.status_code} {resp.text[:200]}",
             )
 
     def _idp_instances(self, realm: str) -> list:

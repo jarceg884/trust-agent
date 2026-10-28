@@ -7,11 +7,17 @@ for every NEW tenant. Realms provisioned before spec 015 keep the old
 surface until this script is run — it is idempotent, so it can be re-run
 after every upgrade.
 
-Applies, per realm (D-AUTH-01/02/03/06):
+Applies, per realm (D-AUTH-01/02/03/06 + v1.3.0 ADR-019):
   - ensure_login_theme   → loginTheme=trust-agent + displayNameHtml brand
+                           + per-tenant `en` localization overrides (TOTP
+                           enrollment h1 carries tenants.branding
+                           product_name — t_e68687ee)
   - ensure_google_idp    → google IdP when TRUST_GOOGLE_CLIENT_ID/SECRET set
   - ensure_tenant_id_hardcode_mapper → signed tenant_id for brokered users
   - ensure_mfa_acr       → acr.loa.map {"1":1,"2":2} + Password LoA flow
+  - ensure_direct_grant_enabled → directAccessGrantsEnabled=true (web client)
+  - ensure_direct_grant_flow     → trust-direct-grant-loa bound (acr:"2"
+                           evidence for password+OTP direct grants)
 
 Usage:
   platform/.venv/bin/python platform/scripts/apply_auth_ux_realms.py \
@@ -85,7 +91,8 @@ def main() -> int:
 
     with engine.connect() as conn:
         rows = conn.execute(
-            text("SELECT id, slug, status FROM tenants ORDER BY created_at")
+            text("SELECT id, slug, status, branding FROM tenants "
+                 "ORDER BY created_at")
         ).mappings().all()
 
     only = {s.strip() for s in args.only.split(",")} if args.only else None
@@ -95,16 +102,24 @@ def main() -> int:
         if only is not None and slug not in only:
             continue
         tenant_id = str(row["id"])
+        branding = row["branding"] or {}
+        product_name = branding.get("product_name") or None
         try:
-            kc.ensure_login_theme(slug)
+            kc.ensure_login_theme(slug, product_name=product_name)
             google = kc.ensure_google_idp(slug)
             kc.ensure_tenant_id_hardcode_mapper(slug, tenant_id)
             kc.ensure_mfa_acr(slug)
+            kc.ensure_direct_grant_enabled(slug)
+            kc.ensure_direct_grant_flow(slug)
             state = kc.mfa_acr_state(slug)
+            dg_state = kc.direct_grant_flow_state(slug)
             print(
-                f"[ok] {slug}: theme=trust-agent google={google} "
+                f"[ok] {slug}: theme=trust-agent "
+                f"product={product_name or 'Trust Agent'} google={google} "
                 f"hardcode-mapper=on loa_flow_ready="
-                f"{state.get('loa_flow_ready')}"
+                f"{state.get('loa_flow_ready')} "
+                f"direct_grant=on flow={dg_state.get('bound_flow')} "
+                f"loa={dg_state.get('loa_level')}"
             )
             ok += 1
         except KeycloakAdminError as exc:
