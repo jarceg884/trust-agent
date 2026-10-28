@@ -1,5 +1,5 @@
 """Provider admin routes: tenant provisioning (spec 004, REQ-ONB-030…032)."""
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -7,6 +7,7 @@ from ..auth.service import Principal, get_provider_principal
 from ..config import get_settings
 from ..db import get_engine, get_migrator_engine
 from ..errors import not_found, permission_denied
+from .deprovision import deprovision
 from .healthcheck import healthcheck
 from .keycloak_admin import KeycloakAdminClient
 from .provider_service import (
@@ -35,11 +36,25 @@ class ProvisionBody(BaseModel):
     admin_display_name: str | None = None
 
 
+class DeleteBody(BaseModel):
+    """Fail-closed (t_4f4b0eb1): el caller debe repetir el slug EXACTO."""
+    confirm: str
+
+
 def _require_provision_permission(principal: Principal) -> None:
     """Data-driven check against catalog.role_permissions (D-ONB-02):
     removing the platform_admin -> tenants.provision row must deny here."""
     if "tenants.provision" not in principal.permissions:
         raise permission_denied("Missing permission: tenants.provision")
+
+
+def _require_delete_permission(principal: Principal) -> None:
+    """Deprovisioning (t_4f4b0eb1): permiso MÁS restrictivo que provision —
+    borrar es irreversible. Mismo check data-driven (D-ONB-02): quitar la
+    fila platform_admin -> tenants.delete de catalog.role_permissions debe
+    negar el endpoint."""
+    if "tenants.delete" not in principal.permissions:
+        raise permission_denied("Missing permission: tenants.delete")
 
 
 def _kc() -> KeycloakAdminClient:
@@ -139,6 +154,31 @@ def reactivate_tenant(
     _require_provision_permission(principal)
     return set_tenant_status(
         get_engine(), get_migrator_engine(), slug, "active"
+    )
+
+
+@router.delete("/{slug}")
+def delete_tenant(
+    slug: str,
+    body: DeleteBody,
+    request: Request,
+    principal: Principal = Depends(get_provider_principal),
+):
+    """Deprovisioning real (t_4f4b0eb1, repro Miller): borra el realm de
+    Keycloak, TODAS las filas del tenant (una transacción migrator) y
+    deja registro durable ``tenant.deleted`` en ops.provider_audit.
+
+    Solo el provider (super-user) con el permiso ``tenants.delete``
+    (data-driven, D-ONB-02). Fail-closed: ``confirm`` debe ser el slug
+    EXACTO — cualquier otra cosa es 422 sin tocar nada.
+    """
+    _require_delete_permission(principal)
+    return deprovision(
+        get_migrator_engine(),
+        _kc(),
+        slug,
+        body.confirm,
+        operator=getattr(request.state, "provider_operator", None),
     )
 
 

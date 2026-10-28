@@ -14,6 +14,7 @@
  */
 import { useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { api, ApiError } from "@/lib/api-client";
 import type {
   HealthcheckResult,
@@ -41,11 +42,12 @@ import {
 
 export function TenantDetail({ tenant }: { tenant: TenantListItem }) {
   const { push } = useToast();
+  const router = useRouter();
   const [status, setStatus] = useState(tenant.status);
   const [orgBudgetCents, setOrgBudgetCents] = useState(tenant.org_budget_cents);
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState<
-    "suspend" | "reactivate" | "activate" | null
+    "suspend" | "reactivate" | "activate" | "delete" | null
   >(null);
   // Spec 026: budget inicial (USD) para la activación de un tenant pending.
   const [budgetUsd, setBudgetUsd] = useState("100");
@@ -126,6 +128,43 @@ export function TenantDetail({ tenant }: { tenant: TenantListItem }) {
     }
   }
 
+  // Deprovisioning real (t_4f4b0eb1, repro Miller): DELETE del tenant
+  // completo — realm de Keycloak + todas las filas + audit tenant.deleted.
+  // El botón solo se habilita tras escribir el slug EXACTO (fail-closed,
+  // igual que el API: body.confirm debe ser el slug).
+  async function deleteTenant() {
+    setBusy(true);
+    try {
+      const res = await api<{
+        deleted: boolean;
+        slug: string;
+        realm_deleted: boolean;
+        warning: string | null;
+        removed: Record<string, number>;
+      }>(`/api/admin/tenants/${tenant.slug}`, {
+        method: "DELETE",
+        body: { confirm: tenant.slug },
+      });
+      push(
+        res.warning ? "error" : "success",
+        res.warning
+          ? `Tenant deleted from the database, but ${res.warning}`
+          : `Tenant "${tenant.name}" deleted permanently (realm + ${Object.values(res.removed).reduce((a, b) => a + b, 0)} rows removed).`,
+      );
+      router.push("/tenants");
+      router.refresh();
+    } catch (cause) {
+      const message =
+        cause instanceof ApiError
+          ? `${cause.message} (${cause.reason})`
+          : "The deletion failed.";
+      push("error", message);
+    } finally {
+      setBusy(false);
+      setConfirm(null);
+    }
+  }
+
   async function runHealthcheck() {
     setHealthBusy(true);
     setHealthError(null);
@@ -198,6 +237,17 @@ export function TenantDetail({ tenant }: { tenant: TenantListItem }) {
               Reactivate tenant
             </Button>
           )}
+          {/* t_4f4b0eb1 (repro Miller: "no veo botón para eliminar"):
+              deprovisioning permanente, siempre disponible — el dialog
+              exige escribir el slug exacto antes de habilitarse. */}
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => setConfirm("delete")}
+            disabled={busy}
+          >
+            Delete tenant…
+          </Button>
         </div>
       </header>
 
@@ -405,30 +455,43 @@ export function TenantDetail({ tenant }: { tenant: TenantListItem }) {
         onClose={() => setConfirm(null)}
         onConfirm={() => {
           if (confirm === "activate") void activateTenant();
+          else if (confirm === "delete") void deleteTenant();
           else if (confirm) void changeStatus(confirm);
         }}
         loading={busy}
-        danger={confirm === "suspend"}
+        danger={confirm === "suspend" || confirm === "delete"}
         title={
           confirm === "activate"
             ? "Activate this organization?"
-            : confirm === "suspend"
-              ? "Suspend this tenant?"
-              : "Reactivate this tenant?"
+            : confirm === "delete"
+              ? "Delete this tenant permanently?"
+              : confirm === "suspend"
+                ? "Suspend this tenant?"
+                : "Reactivate this tenant?"
         }
         confirmLabel={
           confirm === "activate"
             ? "Activate"
-            : confirm === "suspend"
-              ? "Suspend"
-              : "Reactivate"
+            : confirm === "delete"
+              ? "Delete permanently"
+              : confirm === "suspend"
+                ? "Suspend"
+                : "Reactivate"
+        }
+        requireText={confirm === "delete" ? tenant.slug : undefined}
+        requireLabel={
+          confirm === "delete"
+            ? `Type "${tenant.slug}" to confirm`
+            : undefined
         }
         message={
           confirm === "activate"
             ? `"${tenant.name}" will become active with an initial budget of USD ${Number.parseFloat(budgetUsd || "0").toFixed(2)}. Its admins will be notified and everything (agents, models, devices, spend) will start working against that budget. This action is audited.`
-            : confirm === "suspend"
-              ? `Every request from "${tenant.name}" will be denied immediately (403 tenant_suspended). The Keycloak realm stays intact for reactivation. This action is audited.`
-              : `"${tenant.name}" will return to active status and its users will regain access. This action is audited.`
+            : confirm === "delete"
+              ? `"${tenant.name}" will be deleted FOREVER: its Keycloak realm, every user, department, budget, policy, device, agent, credential and audit event. There is no undo. This action is audited (tenant.deleted).`
+              : confirm === "suspend"
+                ? `Every request from "${tenant.name}" will be denied immediately (403 tenant_suspended). The Keycloak realm stays intact for reactivation. This action is audited.`
+                : `"${tenant.name}" will return to active status and its users will regain access. This action is audited.`
         }
       />
     </>

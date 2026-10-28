@@ -373,10 +373,19 @@ export function Dialog({
   const ref = useRef<HTMLDivElement>(null);
   const titleId = useId();
 
+  // Fix t_90e899e0 (repro Miller: "escribo una letra y me saca del box"):
+  // onClose llega como arrow inline (nueva identidad por render); en las
+  // deps del efecto hacía que cada keystroke re-ejecutara el focus() del
+  // panel y robara el foco del input. Ref siempre fresco + deps [open].
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  });
+
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") onCloseRef.current();
     };
     document.addEventListener("keydown", onKey);
     // Focus inicial dentro del diálogo.
@@ -388,7 +397,7 @@ export function Dialog({
       clearTimeout(t);
       document.body.style.overflow = prevOverflow;
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
   return (
@@ -446,6 +455,8 @@ export function ConfirmDialog({
   message,
   confirmLabel = "Confirm",
   danger = true,
+  requireText,
+  requireLabel,
 }: {
   open: boolean;
   onClose: () => void;
@@ -455,21 +466,45 @@ export function ConfirmDialog({
   message: string;
   confirmLabel?: string;
   danger?: boolean;
+  /**
+   * Typed confirmation (t_4f4b0eb1, tenant delete): when set, the confirm
+   * button stays disabled until the user types EXACTLY this string
+   * (fail-closed, mirrors the API's ?confirm slug check). The Enter
+   * shortcut is suppressed until the text matches.
+   */
+  requireText?: string;
+  requireLabel?: string;
 }) {
+  const [typed, setTyped] = useState("");
+  const typedOk = requireText === undefined || typed === requireText;
+
+  // Reset del texto al (re)abrir: patrón oficial de React "adjust state
+  // when a prop changes" — setState durante el render, NO en un effect
+  // (evita el cascading render de react-hooks/set-state-in-effect). Un
+  // texto viejo de un diálogo previo nunca satisface uno nuevo.
+  const [prevOpen, setPrevOpen] = useState(open);
+  if (open !== prevOpen) {
+    setPrevOpen(open);
+    if (open) setTyped("");
+  }
+
   // Atajo de teclado (estándar pro): Enter confirma salvo cuando el foco está
-  // en un botón (el Enter nativo de ese botón manda — p. ej. Cancel).
+  // en un botón (el Enter nativo de ese botón manda — p.ej. Cancel). Con
+  // confirmación tipada, Enter además exige el texto exacto. Re-suscribir
+  // por keystroke es barato (solo el listener keydown, sin foco).
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Enter" || loading) return;
       const el = document.activeElement;
       if (el instanceof HTMLButtonElement) return;
+      if (requireText !== undefined && typed !== requireText) return;
       e.preventDefault();
       onConfirm();
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [open, loading, onConfirm]);
+  }, [open, loading, onConfirm, typed, requireText]);
   return (
     <Dialog
       open={open}
@@ -485,6 +520,7 @@ export function ConfirmDialog({
             variant={danger ? "danger" : "primary"}
             size="sm"
             loading={loading}
+            disabled={!typedOk}
             onClick={onConfirm}
           >
             {confirmLabel}
@@ -493,6 +529,29 @@ export function ConfirmDialog({
       }
     >
       <p className="text-sm leading-relaxed text-muted">{message}</p>
+      {requireText !== undefined ? (
+        <div className="mt-4">
+          {requireLabel ? (
+            <label
+              htmlFor="confirm-typed"
+              className="mb-1.5 block text-sm font-medium text-foreground"
+            >
+              {requireLabel}
+            </label>
+          ) : null}
+          <input
+            id="confirm-typed"
+            autoComplete="off"
+            spellCheck={false}
+            value={typed}
+            onChange={(e) => setTyped(e.target.value)}
+            className="w-full rounded-lg border border-border-subtle bg-surface px-3.5 py-2.5 font-mono text-sm text-foreground focus:border-danger focus:outline-none"
+          />
+          <p className="mt-1.5 text-xs text-muted">
+            Type the slug exactly to enable the button.
+          </p>
+        </div>
+      ) : null}
     </Dialog>
   );
 }

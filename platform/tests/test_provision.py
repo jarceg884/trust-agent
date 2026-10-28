@@ -51,7 +51,11 @@ def _realm_cleanup():
     from app.tenants.keycloak_admin import KeycloakAdminClient
 
     kc = KeycloakAdminClient(get_settings())
-    for slug in (SLUG, CLI_SLUG, "rollback-corp", "cli-rollback-corp"):
+    # Anti-gasura (t_4f4b0eb1): TODOS los realms que este módulo crea,
+    # incluido explicit-plan-corp (el fix anterior dejaba el realm huérfano
+    # en el Keycloak local — la DB efímera se dropea, el realm no).
+    for slug in (SLUG, CLI_SLUG, "rollback-corp", "cli-rollback-corp",
+                 "explicit-plan-corp"):
         try:
             kc.delete_realm(slug)
         except Exception:  # noqa: BLE001 — best effort cleanup

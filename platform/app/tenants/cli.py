@@ -8,6 +8,7 @@ POST /api/admin/tenants. Idiom-proof runbook: one command, exit 0 (REQ-ONB-008).
         --budget-usd 500 [--model-plan standard|a,b] [--slug acme] \
         [--branding '{"product_name": "Acme AI"}'] [--departments it_operations]
     trust-provision verify <slug>
+    trust-provision deprovision <slug> --confirm <slug>   # irreversible
 
 Output: JSON on stdout (one_time_activation ONLY on creation — never stored,
 never re-displayed). Errors: envelope JSON on stderr, exit 1.
@@ -66,6 +67,25 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     return 0 if result["status"] == "ok" else 1
 
 
+def _cmd_deprovision(args: argparse.Namespace) -> int:
+    from .deprovision import deprovision
+
+    result = deprovision(
+        get_migrator_engine(),
+        KeycloakAdminClient(get_settings()),
+        args.slug,
+        args.confirm,
+        operator={"id": None, "username": None, "via": "cli"},
+    )
+    print(json.dumps(result, indent=2, default=str))
+    if result.get("warning"):
+        # El borrado SUCEDIÓ, pero el realm quedó huérfano: exit 1 para que
+        # un runbook idiom-proof (exit 0 = todo bien) no lo trague.
+        print(json.dumps({"warning": result["warning"]}), file=sys.stderr)
+        return 1
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="trust-provision",
@@ -94,6 +114,18 @@ def main(argv: list[str] | None = None) -> int:
     v = sub.add_parser("verify", help="Run the tenant healthcheck.")
     v.add_argument("slug", help="Tenant slug.")
     v.set_defaults(func=_cmd_verify)
+
+    d = sub.add_parser(
+        "deprovision",
+        help="Delete a tenant COMPLETELY (realm + every row). Irreversible.",
+    )
+    d.add_argument("slug", help="Tenant slug to delete.")
+    d.add_argument(
+        "--confirm", required=True,
+        help="Fail-closed: must be the EXACT slug (prevents fat-finger "
+             "deletion of a real customer).",
+    )
+    d.set_defaults(func=_cmd_deprovision)
 
     args = parser.parse_args(argv)
     try:

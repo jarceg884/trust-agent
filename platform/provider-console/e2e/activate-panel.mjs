@@ -255,6 +255,25 @@ async function main() {
   } catch (err) {
     check("journey completed without exceptions", false, String(err).split("\n")[0]);
   } finally {
+    // Anti-garbage convention (t_4f4b0eb1): TODO tenant de fábrica lleva
+    // prefijo e2e- y se deprovisiona al terminar — el Provider Console de
+    // Miller nunca más se llena de probes. Usa el endpoint REAL de delete
+    // (fail-closed: confirm = slug exacto), con la cookie de la sesión del
+    // navegador vía el BFF.
+    try {
+      const del = await page.request.del(
+        `${BASE}/api/proxy/api/admin/tenants/${slug}`,
+        { data: { confirm: slug } },
+      );
+      const delBody = await del.json().catch(() => ({}));
+      check(
+        "cleanup: e2e tenant deprovisioned (DELETE /api/admin/tenants + confirm)",
+        del.ok() && delBody?.deleted === true,
+        `HTTP ${del.status()} realm_deleted=${delBody?.realm_deleted}`,
+      );
+    } catch (e) {
+      check("cleanup: e2e tenant deprovisioned", false, String(e).split("\n")[0]);
+    }
     await browser.close();
   }
 

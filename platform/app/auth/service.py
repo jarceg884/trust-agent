@@ -666,6 +666,14 @@ def get_provider_principal(request: Request) -> Principal:
             # niega TODA ruta provider de negocio hasta completar el cambio.
             raise password_change_required()
         display_name = f"Provider Operator ({session['username']})"
+        # Identidad del operador para el audit del plano proveedor
+        # (t_4f4b0eb1): los endpoints admin la leen de request.state y la
+        # pasan a ops.provider_audit (D-PS-07). Nada de parsear display_name.
+        request.state.provider_operator = {
+            "id": str(session["operator_id"]),
+            "username": session["username"],
+            "via": "session",
+        }
     else:
         settings = get_settings()
         if not settings.provider_token:
@@ -676,6 +684,11 @@ def get_provider_principal(request: Request) -> Principal:
         if not secrets.compare_digest(provided, settings.provider_token):
             raise invalid_token("Invalid provider token.")
         display_name = "Provider Operator (break-glass)"
+        request.state.provider_operator = {
+            "id": None,
+            "username": None,
+            "via": "break-glass",
+        }
 
     with engine.connect() as conn:
         permissions = load_permissions(conn, ["platform_admin"])
