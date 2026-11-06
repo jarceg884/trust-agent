@@ -268,6 +268,11 @@ def _platform_section(slug: str, installers: dict) -> str:
         url = f"/download/{_esc(slug)}/installer/{platform}"
         info = (installers or {}).get(platform)
         if info:
+            filename = str(info.get("filename") or "").lower()
+            if filename.endswith(".msix"):
+                tagline = ".msix installer"
+            elif filename.endswith(".exe"):
+                tagline = ".exe installer"
             card = (
                 f'<div class="plat" data-os="{platform}">'
                 f'<span class="badge">Detected for your system</span>'
