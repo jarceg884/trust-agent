@@ -54,6 +54,7 @@ function inviteMessage(orgCode: string, downloadUrl: string): string {
   return (
     `Download Trust Agent for our organization (${orgCode}):\n\n` +
     `Desktop app:\n  ${downloadUrl}\n\n` +
+    `Windows signing certificate (install once in Trusted People):\n  ${downloadUrl}/certificate\n\n` +
     `CLI (server / VPS / terminal — Linux, macOS, WSL2):\n  ` +
     `curl -fsSL ${downloadUrl}/cli | bash\n\n` +
     `Install the desktop app, then activate it with the one-time enrollment ` +
@@ -88,6 +89,10 @@ export function HermesDownloadPage({
   // Estado REAL del link contra el contrato de la spec 023.
   const link = useApi<DownloadLinkStatus>("/api/download-link");
   const toggle = useMutation();
+  const certificateFile = `${orgCode}-certificate.cer`;
+  const certificateCommand =
+    `certutil -addstore -f "TrustedPeople" ` +
+    `"$env:USERPROFILE\\Downloads\\${certificateFile}"`;
 
   // El endpoint de gestión aún no existe en el control plane (spec 023 en
   // vuelo): 404/405 = contrato pendiente, no un error del usuario.
@@ -242,9 +247,94 @@ export function HermesDownloadPage({
         </CardBody>
       </Card>
 
+      {/* Guía de instalación del certificado de firma en Windows */}
+      <Card {...rise(1)}>
+        <CardHeader
+          title="Install the signing certificate on Windows"
+          description="Windows blocks the MSIX until the signing certificate is trusted. Each employee installs it once, using the certificate downloaded from this organization's page."
+          actions={
+            <Badge tone="neutral">
+              <ShieldCheck size={11} className="mr-1" /> Windows only
+            </Badge>
+          }
+        />
+        <CardBody className="space-y-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <a
+              href={`${downloadUrl}/certificate`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              <Button variant="secondary" size="sm">
+                <Download size={13} /> Download certificate (.cer)
+              </Button>
+            </a>
+            <span className="text-xs text-muted">
+              File: <code className="font-mono text-foreground">{certificateFile}</code>
+            </span>
+          </div>
+          <ol className="space-y-3">
+            <li className="flex gap-3">
+              <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-accent-soft font-mono text-[11px] text-accent">
+                1
+              </span>
+              <div>
+                <p className="text-sm font-medium text-foreground">
+                  Download the certificate
+                </p>
+                <p className="text-xs leading-relaxed text-muted">
+                  Use the button above. The downloaded filename is{" "}
+                  <code className="font-mono text-foreground">{certificateFile}</code>.
+                </p>
+              </div>
+            </li>
+            <li className="flex gap-3">
+              <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-accent-soft font-mono text-[11px] text-accent">
+                2
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-medium text-foreground">
+                  Open PowerShell as Administrator
+                </p>
+                <p className="text-xs leading-relaxed text-muted">
+                  Run this command to install the certificate in the{" "}
+                  <strong className="text-foreground">Trusted People</strong> store:
+                </p>
+                <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-border-subtle bg-surface-alt px-3 py-2.5">
+                  <code className="min-w-0 flex-1 break-all font-mono text-[11px] text-foreground">
+                    {certificateCommand}
+                  </code>
+                  <CopyButton
+                    value={certificateCommand}
+                    label="Copy command"
+                    variant="secondary"
+                  />
+                </div>
+              </div>
+            </li>
+            <li className="flex gap-3">
+              <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-accent-soft font-mono text-[11px] text-accent">
+                3
+              </span>
+              <div>
+                <p className="text-sm font-medium text-foreground">
+                  Reopen the MSIX
+                </p>
+                <p className="text-xs leading-relaxed text-muted">
+                  The publisher should now show <strong className="text-foreground">Shawm Agent</strong>{" "}
+                  instead of <em>Unknown</em>, and the <strong className="text-foreground">Install</strong>{" "}
+                  button will be enabled. If Windows still blocks it, repeat the
+                  command with the <code className="font-mono text-foreground">Root</code> store.
+                </p>
+              </div>
+            </li>
+          </ol>
+        </CardBody>
+      </Card>
+
       {/* CLI installation (spec 034, mandato Miller): mismo agente gobernado
           para el empleado de servidor/VPS/terminal — comando copiable. */}
-      <Card {...rise(1)}>
+      <Card {...rise(2)}>
         <CardHeader
           title="CLI installation"
           description="For employees working on a server, VPS or terminal: one command installs the governed CLI, already bound to this organization. Same enrollment, same policies, same audit as the desktop app."
@@ -283,7 +373,7 @@ export function HermesDownloadPage({
       </Card>
 
       {/* Enviar a un empleado */}
-      <Card {...rise(2)}>
+      <Card {...rise(3)}>
         <CardHeader
           title="Send the link to an employee"
           description="Generate a ready-to-send invitation with the link and the enrollment steps. Sending happens from your own email client — no email is sent by this console."
@@ -318,7 +408,7 @@ export function HermesDownloadPage({
       </Card>
 
       {/* Disponibilidad del link (enable/disable) — contrato spec 023 */}
-      <Card {...rise(3)}>
+      <Card {...rise(4)}>
         <CardHeader
           title="Link availability"
           description="Disable the public download page to stop new downloads (e.g. during an incident). Already-enrolled devices are not affected."
@@ -391,7 +481,7 @@ export function HermesDownloadPage({
       </Card>
 
       {/* Cómo funciona el flujo para el empleado */}
-      <Card {...rise(4)}>
+      <Card {...rise(5)}>
         <CardHeader
           title="What the employee experiences"
           description="The download binds the app to your organization from the very first run."
