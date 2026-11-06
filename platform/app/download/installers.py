@@ -96,3 +96,22 @@ def installer_path(slug: str, platform: str) -> Path | None:
         if info:
             return directory / info["filename"]
     return None
+
+
+# Certificate filenames used by the desktop build. Tenant builds keep the
+# signing certificate under ``msix/``; the universal publisher copies it at
+# the artifact root. Both are the same self-signed publisher used by the
+# MSIX, so it is served alongside the installer instead of being hunted down
+# in a GitHub release.
+_CERTIFICATE_FILENAMES = ("shawm-cert.cer", "msix/shawm-native.cer")
+
+
+def certificate_path(slug: str) -> Path | None:
+    """Signing certificate that matches the installer served for ``slug``."""
+    for candidate in (slug, UNIVERSAL_SLUG):
+        directory = current_installer_dir(candidate)
+        for filename in _CERTIFICATE_FILENAMES:
+            candidate_path = directory / filename
+            if candidate_path.is_file():
+                return candidate_path
+    return None

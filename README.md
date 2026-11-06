@@ -208,6 +208,7 @@ automáticamente para **cualquier tenant activo sin build propio**:
 GET /download/{slug}                      # página de descarga (Windows)
 GET /download/{slug}/desktop-config       # branding/modelo público del tenant
 GET /download/{slug}/installer/windows    # MSIX universal
+GET /download/{slug}/certificate          # certificado de firma (.cer)
 ```
 
 Flujo de activación: el admin del cliente crea un token one-time en

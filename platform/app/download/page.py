@@ -244,7 +244,9 @@ def _cli_section(slug: str, curl_cmd: str) -> str:
 </script>"""
 
 
-def _platform_section(slug: str, installers: dict) -> str:
+def _platform_section(
+    slug: str, installers: dict, certificate_available: bool = False
+) -> str:
     """Sección de instaladores por plataforma (spec 040, REQ-PI-001/002).
 
     Tres botones grandes — Windows (.exe), macOS (.dmg), Linux (AppImage) —
@@ -257,6 +259,7 @@ def _platform_section(slug: str, installers: dict) -> str:
     plugin/skin que consumen el CLI y los propios instaladores.
     """
     bundle_url = f"/download/{_esc(slug)}/bundle"
+    certificate_url = f"/download/{_esc(slug)}/certificate"
     cards = []
     # Descargas habilitadas: SOLO Windows hasta nuevo aviso. macOS y Linux
     # aparecen como "coming soon" — sin botón ni enlace descargable.
@@ -276,11 +279,17 @@ def _platform_section(slug: str, installers: dict) -> str:
             card = (
                 f'<div class="plat" data-os="{platform}">'
                 f'<span class="badge">Detected for your system</span>'
-                f'{_icon(icon, "lg")}<div><h3>{name}</h3>'
+                f"{_icon(icon, 'lg')}<div><h3>{name}</h3>"
                 f'<span class="tag">{_esc(tagline)}</span></div>'
                 f"<p>{blurb}</p>"
                 f'<a class="btn" href="{url}" download>Download for {name}</a>'
-                f"</div>"
+                + (
+                    f'<a class="btn ghost" href="{certificate_url}" download>Download certificate (.cer)</a>'
+                    f'<p class="note" style="margin-top:10px">Windows only: install this certificate in <strong>Trusted People</strong> before opening the MSIX.</p>'
+                    if certificate_available
+                    else ""
+                )
+                + f"</div>"
             )
         else:
             card = (
@@ -327,6 +336,7 @@ def render_page(
     enabled: bool,
     api_base: str = "",
     installers: dict | None = None,
+    certificate_available: bool = False,
 ) -> str:
     """Página pública 200 (estado sano o disabled — D-023-12).
 
@@ -344,7 +354,9 @@ def render_page(
     curl_cmd = f"curl -fsSL {cli_url} | bash"
 
     if enabled:
-        platform_section = _platform_section(slug, installers or {})
+        platform_section = _platform_section(
+            slug, installers or {}, certificate_available=certificate_available
+        )
         cta = (
             f'<div class="actions ta-rise">'
             f'<a class="btn ghost" href="#platforms">'

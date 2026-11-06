@@ -200,6 +200,9 @@ def download_page(slug: str, request: Request):
             installers=installers_service.available_installers(
                 tenant["slug"]
             ),
+            certificate_available=(
+                installers_service.certificate_path(tenant["slug"]) is not None
+            ),
         )
     )
 
@@ -480,6 +483,70 @@ def download_installer(slug: str, platform: str, request: Request):
                 f'attachment; filename="{info["filename"]}"'
             ),
             "X-Installer-SHA256": info["sha256"],
+        },
+    )
+
+
+@public_router.get("/download/{slug}/certificate")
+def download_certificate(slug: str, request: Request):
+    """Serve the signing certificate that matches this organization's MSIX.
+
+    Windows requires the self-signed publisher certificate to be installed
+    once (Trusted People) before it will enable the MSIX installer. The
+    certificate belongs to the build, not to the tenant, but exposing it on
+    the organization's download page removes the manual GitHub round-trip.
+    """
+    _page_throttle(request, slug)
+    tenant = _public_tenant(slug)
+    if tenant is None:
+        with get_engine().begin() as conn:
+            throttle.register_failure(
+                conn, [throttle.ip_key(_client_ip(request))]
+            )
+        raise not_found("Unknown organization code.")
+    if tenant["status"] != "active":
+        raise tenant_suspended()
+    if not tenant["download_enabled"]:
+        raise _link_disabled()
+
+    certificate = installers_service.certificate_path(tenant["slug"])
+    if certificate is None:
+        raise ApiError(
+            status_code=404,
+            code="not_found",
+            reason="certificate_not_built",
+            message=(
+                "No signing certificate is currently available for this "
+                "organization's installer."
+            ),
+        )
+
+    digest = hashlib.sha256(certificate.read_bytes()).hexdigest()
+    tenant_id = str(tenant["id"])
+    with get_engine().begin() as conn:
+        set_tenant(conn, tenant_id)
+        audit.emit(
+            conn,
+            tenant_id=tenant_id,
+            actor_role="system",
+            action="download.issued",
+            target_type="tenant",
+            target_id=tenant_id,
+            payload={
+                "slug": tenant["slug"],
+                "ip": _client_ip(request),
+                "user_agent": request.headers.get("user-agent", "")[:200],
+                "artifact": "certificate",
+                "certificate_sha256": digest,
+            },
+        )
+
+    return FileResponse(
+        certificate,
+        media_type="application/x-x509-ca-cert",
+        headers={
+            "Content-Disposition": 'attachment; filename="shawm-cert.cer"',
+            "X-Certificate-SHA256": digest,
         },
     )
 

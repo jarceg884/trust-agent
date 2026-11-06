@@ -42,6 +42,9 @@ def main() -> None:
     dest = target / args.msix.name
     if args.msix.resolve() != dest.resolve():
         dest.write_bytes(args.msix.read_bytes())
+    # The API may run as a non-root user while the artifact directory is owned
+    # by root. Keep the MSIX world-readable so FileResponse can stream it.
+    dest.chmod(0o644)
 
     digest = sha256(dest)
     manifest = {

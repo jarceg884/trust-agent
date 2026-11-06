@@ -229,9 +229,14 @@ export function HermesDownloadPage({
                 <ExternalLink size={13} /> Open download page
               </Button>
             </a>
+            <a href={`${downloadUrl}/certificate`} target="_blank" rel="noreferrer">
+              <Button variant="secondary" size="sm">
+                <ShieldCheck size={13} /> Download certificate
+              </Button>
+            </a>
             <span className="text-xs text-muted">
-              The link never changes — safe to pin in your intranet or
-              onboarding docs.
+              Windows requires this certificate in <strong>Trusted People</strong>{" "}
+              before installing the MSIX.
             </span>
           </div>
         </CardBody>

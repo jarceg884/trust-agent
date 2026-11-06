@@ -24,14 +24,17 @@ El MSIX universal incluye:
 
 1. El admin del cliente crea el token one-time desde su Admin Console
    (`Devices → + Enroll device`).
-2. El empleado abre el MSIX e introduce la URL pública del control plane, el
+2. En Windows, el empleado descarga el certificado de firma desde
+   `GET /download/{slug}/certificate` y lo instala una sola vez en
+   **Trusted People** (`certutil -addstore -f "TrustedPeople" shawm-cert.cer`).
+3. El empleado abre el MSIX e introduce la URL pública del control plane, el
    slug de la organización y el token.
-3. El desktop valida el tenant contra
+4. El desktop valida el tenant contra
    `GET /download/{slug}/desktop-config` (datos públicos: branding, modelo
    por defecto, gateway, OIDC) **antes** de consumir el token.
-4. `POST /api/devices/enroll/exchange` canjea el token y devuelve
+5. `POST /api/devices/enroll/exchange` canjea el token y devuelve
    `device_token` + `model_key`.
-5. El desktop escribe `~/.trust-agent/{config.yaml,SOUL.md,.env,skins/*}` con
+6. El desktop escribe `~/.trust-agent/{config.yaml,SOUL.md,.env,skins/*}` con
    el producto, color, modelo y gateway del tenant. A partir de ahí el agente
    corre gobernado por la organización.
 
