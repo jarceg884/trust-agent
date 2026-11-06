@@ -159,6 +159,7 @@ deriva solo de `TRUST_PUBLIC_BASE_URL`):
 | `TRUST_IDP_BIND` | `127.0.0.1` | `0.0.0.0` (el navegador del cliente debe llegar al IdP) |
 | `TRUST_API_HOST` | `127.0.0.1` | `0.0.0.0` |
 | `TRUST_COOKIE_SECURE` | `false` | `false` por ahora (http); `true` con HTTPS |
+| `TRUST_LITELLM_PUBLIC_BASE_URL` | vacío | `http://TU-IP:4000` (URL pública del gateway para desktops) |
 
 Las URLs **internas** (`TRUST_API_BASE_URL`, `TRUST_KEYCLOAK_ADMIN_URL`)
 siguen apuntando a `127.0.0.1` — con host networking el stack siempre se
@@ -177,6 +178,48 @@ dominio, y setup.sh NO deriva nada automáticamente. Fija a mano en `.env`:
 `TRUST_COOKIE_SECURE=true`, y en el servicio `idp` agrega
 `KC_HOSTNAME=idp.tudominio.com`. Los binds pueden quedarse en `127.0.0.1`
 (el proxy es el único que entra). Recomendado para producción real.
+
+### Instalador de escritorio universal (multi-organización)
+
+El repo de plataforma **no guarda el binario MSIX de ~744 MB en git**. El
+instalador se construye una vez con un bundle neutro y sirve para cualquier
+organización; el branding, portal, modelo y políticas se resuelven en la
+activación del empleado.
+
+La receta de build vive en
+`https://github.com/jarceg884/trust-agent-build` y se ejecuta con el workflow
+`Build Trust Agent Windows MSIX` (`workflow_dispatch`). Por defecto produce
+`Trust Agent` genérico, sin `org_code` ni credenciales.
+
+Después de construir, publica el MSIX en el host de la plataforma:
+
+```bash
+python3 scripts/bake_generic_desktop_bundle.py
+# Build del desktop/MSIX (ver docs/generic-installer.md)
+python3 scripts/publish_universal_installer.py \
+  --msix /ruta/TrustAgentDesktop-0.0.0-win-x64.msix \
+  --version 0.6.0
+```
+
+Eso deja `installer-artifacts/_universal/<version>/` y la API lo sirve
+automáticamente para **cualquier tenant activo sin build propio**:
+
+```text
+GET /download/{slug}                      # página de descarga (Windows)
+GET /download/{slug}/desktop-config       # branding/modelo público del tenant
+GET /download/{slug}/installer/windows    # MSIX universal
+```
+
+Flujo de activación: el admin del cliente crea un token one-time en
+`Devices → Enroll device`; el empleado abre el MSIX e introduce
+`Portal URL + Organization + Organization token`. El desktop valida el tenant
+y escribe su `config.yaml`, `SOUL.md`, skin y modelo **antes** de consumir el
+token. Para desktops remotos, `TRUST_LITELLM_PUBLIC_BASE_URL` debe ser la URL
+del gateway alcanzable desde la máquina del empleado (p. ej.
+`http://TU-IP:4000`). Si se deja vacía y el base URL interno es loopback, la
+API deriva el host de la petición.
+
+Detalle completo: `docs/generic-installer.md`.
 
 ---
 
