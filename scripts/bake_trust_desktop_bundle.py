@@ -84,6 +84,7 @@ def bake(slug: str, api_base: str, litellm_base: str, model: str = DEFAULT_MODEL
 
     bundle = {
         "org_code": slug,
+        "product_name": product_name,
         "api_base": api_base.rstrip("/"),
         "litellm_base": litellm_base.rstrip("/"),
         "model": model,
