@@ -1,5 +1,11 @@
 # Instaladores desktop por plataforma — Spec 040 (t_fff52ec1)
 
+> **Actualización (2026-11-06):** el camino recomendado para cualquier
+> organización es el **instalador universal** descrito en
+> `docs/generic-installer.md`: un solo MSIX neutro, activación con token y
+> branding/modelo resueltos por tenant. Este documento conserva el detalle
+> histórico del build **per-tenant** y debe leerse junto con esa guía.
+>
 > **Mandato Miller (2026-10-29)**: "No debería ser un .exe para Windows,
 > luego Mac y finalmente Linux — al estilo que hace Hermes en su página?"
 >
