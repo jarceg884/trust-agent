@@ -25,8 +25,9 @@ El MSIX universal incluye:
 1. El admin del cliente crea el token one-time desde su Admin Console
    (`Devices → + Enroll device`).
 2. En Windows, el empleado descarga el certificado de firma desde
-   `GET /download/{slug}/certificate` y lo instala una sola vez en
-   **Trusted People** (`certutil -addstore -f "TrustedPeople" shawm-cert.cer`).
+   `GET /download/{slug}/certificate` (se guarda como
+   `<slug>-certificate.cer`) y lo instala una sola vez en **Trusted People**
+   (`certutil -addstore -f "TrustedPeople" <slug>-certificate.cer`).
 3. El empleado abre el MSIX e introduce la URL pública del control plane, el
    slug de la organización y el token.
 4. El desktop valida el tenant contra

@@ -523,6 +523,7 @@ def download_certificate(slug: str, request: Request):
 
     digest = hashlib.sha256(certificate.read_bytes()).hexdigest()
     tenant_id = str(tenant["id"])
+    download_name = f"{tenant['slug']}-certificate.cer"
     with get_engine().begin() as conn:
         set_tenant(conn, tenant_id)
         audit.emit(
@@ -545,7 +546,9 @@ def download_certificate(slug: str, request: Request):
         certificate,
         media_type="application/x-x509-ca-cert",
         headers={
-            "Content-Disposition": 'attachment; filename="shawm-cert.cer"',
+            "Content-Disposition": (
+                f'attachment; filename="{download_name}"'
+            ),
             "X-Certificate-SHA256": digest,
         },
     )
