@@ -1,19 +1,19 @@
 import type { Metadata } from "next";
 import { PageHeader } from "@/components/ui";
-import { ModelsPage } from "./models-page";
+import { ModelsOverviewPage } from "./models-overview";
 
 export const metadata: Metadata = {
-  title: "Model Access",
+  title: "Models",
 };
 
 export default function Page() {
   return (
     <>
       <PageHeader
-        title="Model Access"
-        description="Approved models per level — central gateway or BYOK."
+        title="Models"
+        description="Proveedores de IA y catálogo. El proveedor del SaaS viene por defecto; los modelos se habilitan por política."
       />
-      <ModelsPage />
+      <ModelsOverviewPage />
     </>
   );
 }

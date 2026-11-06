@@ -130,6 +130,10 @@ services:
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KC_ADMIN_USER:-admin}
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_ADMIN_PASSWORD}
       KC_HEALTH_ENABLED: "true"
+      # Issuer estable: el mismo `iss` para el navegador del cliente y para
+      # los grants server-side del BFF (evita invalid_token por host mismatch).
+      KC_HOSTNAME: ${TRUST_IDP_PUBLIC_URL:-http://127.0.0.1:8080}
+      KC_HOSTNAME_STRICT: "false"
     ports:
       # TRUST_IDP_BIND: dev 127.0.0.1 (default); en servidor propio
       # setup.sh lo pone en 0.0.0.0 para que el navegador del cliente
@@ -177,6 +181,11 @@ services:
     container_name: ${TRUST_CONTAINER_PREFIX:-trust-agent}-api
     network_mode: host
     environment: *api-env
+    volumes:
+      # Spec 040 (D-040-05): host-built desktop installers served read-only
+      # by the public endpoints /download/{slug}/installer/{platform}.
+      # Built by scripts/build_desktop_installers.py on the HOST.
+      - ${TRUST_INSTALLER_ARTIFACTS_DIR:-./installer-artifacts}:/opt/trust-agent/installer-artifacts:ro
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -311,7 +320,7 @@ services:
     container_name: ${TRUST_CONTAINER_PREFIX:-trust-agent}-litellm
     profiles: ["litellm"]
     network_mode: host
-    command: ["--config", "/config/config.yaml", "--host", "127.0.0.1", "--port", "${TRUST_LITELLM_PORT:-4000}"]
+    command: ["--config", "/config/config.yaml", "--host", "${TRUST_LITELLM_BIND:-127.0.0.1}", "--port", "${TRUST_LITELLM_PORT:-4000}"]
     environment:
       # Upstream MaaS (o el proveedor que el cliente use en BYOK): la key
       # vive SOLO en el .env (nunca en el repo — constitution IV).
@@ -321,6 +330,12 @@ services:
       # PostgreSQL DEDICADO del proxy (budgets; sin DB fallan abiertos).
       DATABASE_URL: postgresql://litellm:${LITELLM_DB_PASSWORD:-litellm_dev}@127.0.0.1:${TRUST_LITELLM_DB_PORT:-55433}/litellm
       STORE_MODEL_IN_DB: "True"
+      # Cost map real: la plataforma sirve el pricing publicado por Huawei
+      # (app/models/huawei_pricing.py, fuente citada) — LiteLLM lo recarga
+      # solo (schedule 6h + POST /reload/model_cost_map inmediato desde
+      # pricing_sync, REQ-MDL-004). "Todo el pricing vive en LiteLLM", nunca
+      # en una tabla paralela mantenida a mano por fuera de él.
+      LITELLM_MODEL_COST_MAP_URL: ${TRUST_LITELLM_COST_MAP_URL:-http://127.0.0.1:8000/api/models/cost-map}
     volumes:
       - ./litellm-real/config.yaml:/config/config.yaml:ro
     depends_on:

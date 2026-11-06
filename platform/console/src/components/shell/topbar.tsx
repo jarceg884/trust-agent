@@ -74,7 +74,7 @@ export function Topbar({
           <Link
             href="/hermes-download"
             className="hidden sm:inline-flex"
-            title="Hermes Download — share the desktop app with employees"
+            title="Desktop Download — share the governed app with employees"
           >
             <Button variant="secondary" size="sm">
               <IconDownload size={13} /> Download desktop app

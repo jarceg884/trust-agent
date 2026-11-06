@@ -111,16 +111,24 @@ def _session_id(tokens) -> str:
 
 
 def _seed_tenant_b_admin(admin_conn):
+    # Mandatory department (migration 0044): every user must belong to one.
+    # Tenant B gets its own "General" department for the isolation fixture.
+    dept = "40000000-0000-0000-0000-000000000007"
+    admin_conn.execute(
+        "INSERT INTO departments (id, tenant_id, name) VALUES (%s, %s, 'General') "
+        "ON CONFLICT (tenant_id, name) DO UPDATE SET name = EXCLUDED.name",
+        (dept, TENANT_B),
+    )
     admin_conn.execute(
         "INSERT INTO users (id, tenant_id, department_id, email, display_name, "
         "status, mfa_enrolled, oidc_subject) VALUES "
-        f"('{USER_ERIN}', '{TENANT_B}', NULL, 'erin@tenant-b.test', 'Erin', "
+        f"('{USER_ERIN}', '{TENANT_B}', '{dept}', 'erin@tenant-b.test', 'Erin', "
         f"'active', true, '{SUB_ERIN}') ON CONFLICT (id) DO NOTHING"
     )
     admin_conn.execute(
         "INSERT INTO user_roles (id, tenant_id, user_id, role_key, "
         "department_id) VALUES "
-        f"(gen_random_uuid(), '{TENANT_B}', '{USER_ERIN}', 'org_admin', NULL)"
+        f"(gen_random_uuid(), '{TENANT_B}', '{USER_ERIN}', 'org_admin', '{dept}')"
     )
 
 

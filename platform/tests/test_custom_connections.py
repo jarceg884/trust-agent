@@ -571,3 +571,47 @@ def test_credential_type_not_allowed_422(client, idp, tenant_d):
     finally:
         _delete_policy(client, dana, "user", "vault_allowed_credential_types",
                        user_id=USER_JACK)
+
+
+# =============================================================================
+# Spec 037 (REQ-037-010) — allowed_for_caller en el listado de conexiones
+# =============================================================================
+def test_list_connections_policy_state(client, idp, tenant_d):
+    """El listado lleva el estado de policy por conexión: False cuando la
+    policy no la cubre, True en cuanto el token id entra en allowed_connections
+    (org_admin la ve siempre; el bool refleja la policy deny-overrides)."""
+    dana = mint_d(client, idp, "dana")
+    ivy = mint_d(client, idp, "ivy")
+
+    resp = _create_conn(client, dana, name="Policy State DB", kind="database",
+                        metadata={"type": "postgresql", "host": "h",
+                                  "port": 5432, "database": "st",
+                                  "username": "svc"}, secret="s3")
+    assert resp.status_code == 201, resp.text
+    cid = resp.json()["connection_id"]
+
+    # org_admin la ve (siempre visible) pero la policy aún no la permite.
+    resp = client.get("/api/vault/connections", headers=bearer_headers(dana))
+    assert resp.status_code == 200, resp.text
+    by_id = {c["id"]: c for c in resp.json()["connections"]}
+    assert by_id[cid]["allowed_for_caller"] is False
+
+    # La org la permite → el bool pasa a True para quien la ve.
+    resp = _put_policy(client, dana, "/api/policies/org",
+                       "allowed_connections", [cid])
+    assert resp.status_code == 200, resp.text
+    try:
+        resp = client.get("/api/vault/connections",
+                          headers=bearer_headers(dana))
+        assert resp.status_code == 200, resp.text
+        by_id = {c["id"]: c for c in resp.json()["connections"]}
+        assert by_id[cid]["allowed_for_caller"] is True
+
+        # Ivy (user) ahora la ve porque su policy efectiva la incluye.
+        resp = client.get("/api/vault/connections",
+                          headers=bearer_headers(ivy))
+        assert resp.status_code == 200, resp.text
+        by_id = {c["id"]: c for c in resp.json()["connections"]}
+        assert by_id[cid]["allowed_for_caller"] is True
+    finally:
+        _delete_policy(client, dana, "org", "allowed_connections")

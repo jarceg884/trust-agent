@@ -176,6 +176,13 @@ class Settings(BaseSettings):
     download_page_rate_window_seconds: int = 60
     download_bundle_rate_max: int = 5
     download_bundle_rate_window_seconds: int = 60
+
+    # --- Platform installers (spec 040, D-040-05) -------------------------------
+    # Host-built desktop installers (NSIS .exe / AppImage / .dmg) served by the
+    # control plane. The BUILD runs on the host (scripts/build_desktop_installers.py
+    # — needs node + electron-builder + network); the API only READS this dir
+    # (ro volume in docker-compose). Layout: {slug}/{plugin_version}/.
+    installer_artifacts_dir: str = "/opt/trust-agent/installer-artifacts"
     # Source tree of the trust-agent-governance plugin that gets packaged into
     # the download bundle (spec 022 converged tree). In the API container the
     # Dockerfile copies it to /opt/trust-agent/hermes-plugins; on a bare-metal

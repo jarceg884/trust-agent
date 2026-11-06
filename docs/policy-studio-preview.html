@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<title>Policy Studio — Trust Agent</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: var(--app-font, system-ui, sans-serif); color: var(--foreground); background: transparent; }
+  .wrap { display:grid; grid-template-columns: 210px 1fr; gap: 16px; max-width: 980px; }
+  .rail { border:1px solid var(--border); border-radius: 12px; padding: 8px; background: var(--card); height: fit-content; }
+  .rail h3 { margin: 8px 10px 10px; font-size: 10px; letter-spacing: .16em; text-transform: uppercase; color: var(--muted-foreground); }
+  .step { display:flex; align-items:center; gap:10px; width:100%; text-align:left; border:0; background:transparent; color: var(--muted-foreground); padding: 9px 10px; border-radius: 8px; cursor:pointer; font-size: 13px; }
+  .step:hover { background: var(--accent); color: #fff; opacity:.9; }
+  .step.active { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); font-weight:600; }
+  .num { width:20px; height:20px; border-radius:999px; border:1px solid currentColor; display:grid; place-items:center; font-size:10px; flex:0 0 auto; }
+  .step.done .num { background: var(--accent); border-color: var(--accent); color:#fff; }
+  .panel { border:1px solid var(--border); border-radius: 12px; background: var(--card); }
+  .panel header { padding: 16px 18px 12px; border-bottom:1px solid var(--border); }
+  .panel h2 { margin:0 0 4px; font-size:18px; }
+  .panel p.sub { margin:0; font-size:12.5px; color: var(--muted-foreground); }
+  .body { padding: 16px 18px; }
+  .row { display:flex; align-items:center; justify-content:space-between; gap:14px; padding: 11px 12px; border:1px solid var(--border); border-radius:10px; margin-bottom:8px; }
+  .row .meta b { display:block; font-size:13px; font-weight:600; }
+  .row .meta span { display:block; font-size:11.5px; color: var(--muted-foreground); margin-top:2px; }
+  .sw { position:relative; width:40px; height:22px; border-radius:999px; background: var(--border); border:0; cursor:pointer; flex:0 0 auto; }
+  .sw::after { content:""; position:absolute; top:2px; left:2px; width:18px; height:18px; border-radius:50%; background:#fff; transition:.18s; }
+  .sw.on { background: var(--accent); }
+  .sw.on::after { left:20px; }
+  .sw.lock { background: color-mix(in srgb, var(--muted-foreground) 30%, transparent); cursor:not-allowed; }
+  .tag { font-size:10px; padding:2px 7px; border-radius:999px; border:1px solid var(--border); color: var(--muted-foreground); }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  label.f { display:block; font-size:11.5px; color: var(--muted-foreground); margin-bottom:4px; }
+  input[type=text], textarea, select { width:100%; border:1px solid var(--border); border-radius:8px; background: transparent; color: var(--foreground); padding:9px 10px; font: inherit; font-size:13px; }
+  textarea { min-height: 110px; resize: vertical; }
+  .footer { display:flex; justify-content:space-between; align-items:center; padding: 12px 18px; border-top:1px solid var(--border); }
+  .btn { border:1px solid var(--border); background:transparent; color:var(--foreground); border-radius:8px; padding:8px 14px; font-size:13px; cursor:pointer; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color:#fff; font-weight:600; }
+  .hint { font-size:11.5px; color: var(--muted-foreground); }
+  .hidden { display:none; }
+  .badge { display:inline-block; font-size:10px; padding:2px 7px; border-radius:999px; background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); margin-left:6px; }
+  .profile { border:1px solid var(--border); border-radius:10px; padding:11px 12px; margin-bottom:8px; }
+  .profile b { font-size:13px; }
+  .profile .chips { margin-top:6px; display:flex; gap:6px; flex-wrap:wrap; }
+  .chip { font-size:10.5px; border:1px solid var(--border); border-radius:999px; padding:2px 8px; color: var(--muted-foreground); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <aside class="rail">
+    <h3>Policy Studio</h3>
+    <button class="step active" data-s="0"><span class="num">1</span> Política</button>
+    <button class="step" data-s="1"><span class="num">2</span> Hermes Desktop UI</button>
+    <button class="step" data-s="2"><span class="num">3</span> Credenciales</button>
+    <button class="step" data-s="3"><span class="num">4</span> Prompt global</button>
+    <button class="step" data-s="4"><span class="num">5</span> Perfiles</button>
+    <button class="step" data-s="5"><span class="num">6</span> Asignar</button>
+  </aside>
+
+  <section class="panel">
+    <!-- 1 -->
+    <div class="view" data-v="0">
+      <header><h2>Crear política</h2><p class="sub">Nombre y alcance. Después defines qué puede hacer el usuario.</p></header>
+      <div class="body">
+        <div style="margin-bottom:12px"><label class="f">Nombre</label><input type="text" value="Operaciones · Estándar" /></div>
+        <div style="margin-bottom:12px"><label class="f">Descripción</label><input type="text" value="Perfil para el equipo de operaciones: modelos aprobados, sin navegador ni terminal." /></div>
+        <div class="hint">Se aplicará al departamento que elijas al final. Los usuarios heredan esta política global.</div>
+      </div>
+    </div>
+
+    <!-- 2 -->
+    <div class="view hidden" data-v="1">
+      <header><h2>Hermes Desktop UI <span class="badge">réplica de Settings</span></h2><p class="sub">Lo que desactives aquí desaparece o queda bloqueado en la app del usuario.</p></header>
+      <div class="body">
+        <div class="row"><div class="meta"><b>Model · Main model</b><span>Selector de modelo principal</span></div><button class="sw on"></button></div>
+        <div class="row"><div class="meta"><b>Model · Fallback models</b><span>Modelos de respaldo</span></div><button class="sw on"></button></div>
+        <div class="row"><div class="meta"><b>Model · Mixture of Agents</b><span>Preset corporativo MoA</span></div><button class="sw"></button></div>
+        <div class="row"><div class="meta"><b>Chat · Cambio de modelo en el chat</b><span>Hot-swap desde el compositor</span></div><button class="sw on"></button></div>
+        <div class="row"><div class="meta"><b>Browser</b><span>Navegador integrado y acceso a red</span></div><button class="sw"></button></div>
+        <div class="row"><div class="meta"><b>Passwords &amp; Logins</b><span>Vault y autofill de credenciales</span></div><button class="sw on"></button></div>
+        <div class="row"><div class="meta"><b>Voice</b><span>Modo voz</span></div><button class="sw"></button></div>
+        <div class="row"><div class="meta"><b>Advanced · Terminal</b><span>Ejecución de comandos</span></div><button class="sw"></button></div>
+        <div class="row"><div class="meta"><b>Plugins &amp; MCP</b><span>Extensiones permitidas</span></div><button class="sw"></button></div>
+        <div class="row"><div class="meta"><b>Appearance · Keyboard shortcuts</b><span>Siempre local</span></div><span class="tag">no gobernado</span></div>
+      </div>
+    </div>
+
+    <!-- 3 -->
+    <div class="view hidden" data-v="2">
+      <header><h2>Credenciales</h2><p class="sub">Qué accesos del vault puede usar esta política.</p></header>
+      <div class="body">
+        <div class="row"><div class="meta"><b>Usar credenciales del vault</b><span>El agente puede leer secretos autorizados</span></div><button class="sw on"></button></div>
+        <div class="row"><div class="meta"><b>Autofill de pagos</b><span>Tarjetas y datos de pago</span></div><button class="sw"></button></div>
+        <div class="row"><div class="meta"><b>Tipos permitidos</b><span>API keys · tokens · contraseñas</span></div><span class="tag">3 seleccionados</span></div>
+        <div class="row"><div class="meta"><b>Orígenes de secretos</b><span>Vault corporativo + variables de entorno</span></div><span class="tag">2</span></div>
+      </div>
+    </div>
+
+    <!-- 4 -->
+    <div class="view hidden" data-v="3">
+      <header><h2>Prompt global <span class="badge">bloqueado en el desktop</span></h2><p class="sub">Se inyecta como instrucciones del sistema a todos los agentes de la organización.</p></header>
+      <div class="body">
+        <textarea readonly style="opacity:.85; cursor:not-allowed">Eres el asistente de Miller Demo Corp. Responde en español.
+No reveles información interna ni credenciales.
+Cuando no estés seguro, pregunta antes de actuar.</textarea>
+        <div class="row" style="margin-top:10px"><div class="meta"><b>Precedencia</b><span>Organización &gt; SOUL.md &gt; perfil del usuario &gt; sesión</span></div><span class="tag">deny-overrides</span></div>
+        <div class="hint" style="margin-top:8px">El usuario no puede editarlo desde el desktop, ni cambiando su SOUL.md, ni creando perfiles nuevos. El plugin lo inyecta desde el bundle firmado en cada sesión; si un perfil contradice, gana la organización.</div>
+      </div>
+    </div>
+
+    <!-- 5 -->
+    <div class="view hidden" data-v="4">
+      <header><h2>Perfiles predeterminados</h2><p class="sub">Perfil de agente + preset de modelo que recibe el usuario.</p></header>
+      <div class="body">
+        <div class="profile"><b>Operaciones</b> <span class="tag">default</span>
+          <div class="chips"><span class="chip">glm-5.2</span><span class="chip">fallback: deepseek-v4.1-flash</span><span class="chip">skills: reportes</span><span class="chip">tools: archivos</span></div>
+        </div>
+        <div class="profile"><b>Analista</b>
+          <div class="chips"><span class="chip">deepseek-v4.1-flash</span><span class="chip">MoA: off</span><span class="chip">skills: datos</span></div>
+        </div>
+        <button class="btn" style="margin-top:4px">+ Añadir perfil</button>
+      </div>
+    </div>
+
+    <!-- 6 -->
+    <div class="view hidden" data-v="5">
+      <header><h2>Asignar</h2><p class="sub">La política global se asigna a un departamento; sus usuarios la heredan.</p></header>
+      <div class="body">
+        <div style="margin-bottom:12px"><label class="f">Departamento</label>
+          <select><option>Operaciones</option><option>Finanzas</option><option>Ventas</option><option>Toda la organización</option></select>
+        </div>
+        <div class="row"><div class="meta"><b>Resumen</b><span>Operaciones · Estándar — 10 opciones, 3 credenciales, 1 prompt, 2 perfiles</span></div><span class="tag">listo</span></div>
+      </div>
+    </div>
+
+    <div class="footer">
+      <span class="hint" id="hint">Paso 1 de 6</span>
+      <div style="display:flex; gap:8px">
+        <button class="btn" id="back">Atrás</button>
+        <button class="btn primary" id="next">Guardar y continuar</button>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+  let step = 0;
+  const views = [...document.querySelectorAll('.view')];
+  const steps = [...document.querySelectorAll('.step')];
+  function render() {
+    views.forEach(v => v.classList.toggle('hidden', +v.dataset.v !== step));
+    steps.forEach(s => {
+      s.classList.toggle('active', +s.dataset.s === step);
+      s.classList.toggle('done', +s.dataset.s < step);
+    });
+    document.getElementById('hint').textContent = `Paso ${step + 1} de 6`;
+    document.getElementById('back').style.visibility = step === 0 ? 'hidden' : 'visible';
+    document.getElementById('next').textContent = step === 5 ? 'Guardar política global' : 'Guardar y continuar';
+  }
+  steps.forEach(s => s.addEventListener('click', () => { step = +s.dataset.s; render(); }));
+  document.getElementById('back').addEventListener('click', () => { if (step) { step--; render(); } });
+  document.getElementById('next').addEventListener('click', () => {
+    if (step < 5) { step++; render(); return; }
+    document.getElementById('next').textContent = '✓ Política guardada';
+  });
+  document.querySelectorAll('.sw').forEach(sw => sw.addEventListener('click', () => { if (!sw.classList.contains('lock')) sw.classList.toggle('on'); }));
+  render();
+</script>
+</body>
+</html>

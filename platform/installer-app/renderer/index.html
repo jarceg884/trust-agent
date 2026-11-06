@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'unsafe-inline'; img-src data:">
+<title>Setup</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <div class="logo" id="logo"></div>
+  <div>
+    <div class="product" id="product">Trust Agent</div>
+    <div class="tagline" id="tagline"></div>
+  </div>
+</header>
+
+<main>
+  <!-- 1 · Welcome -->
+  <section id="screen-welcome" class="screen">
+    <span class="kicker" id="kicker">organization edition</span>
+    <h1>Install your organization's<br><em>governed AI agent.</em></h1>
+    <p class="lede" id="lede">
+      This installer sets up the complete agent already bound to your
+      organization — no configuration needed. Sign in once with your
+      organization account and your device enrolls automatically.
+    </p>
+    <button class="btn" id="btn-install">Install now</button>
+    <p class="note">Install location: <code id="home"></code></p>
+  </section>
+
+  <!-- 2 · Installing -->
+  <section id="screen-install" class="screen hidden">
+    <h2>Installing…</h2>
+    <pre id="install-log" class="log"></pre>
+    <div class="banner bad hidden" id="install-error"></div>
+    <button class="btn hidden" id="btn-retry">Retry</button>
+  </section>
+
+  <!-- 3 · Sign in -->
+  <section id="screen-signin" class="screen hidden">
+    <h2>Sign in with your organization account</h2>
+    <p class="lede">A sign-in window will open with your organization's
+      identity provider (SSO + MFA). You will never type a password here.</p>
+    <pre id="signin-log" class="log"></pre>
+    <div class="banner bad hidden" id="signin-error"></div>
+    <div class="row">
+      <button class="btn" id="btn-signin">Sign in</button>
+      <button class="btn ghost" id="btn-skip-signin">Skip for now</button>
+    </div>
+  </section>
+
+  <!-- 4 · Done -->
+  <section id="screen-done" class="screen hidden">
+    <h2>All set — <em id="done-org"></em></h2>
+    <p class="lede">Your agent is installed and bound to your organization.
+      Once an administrator approves your device, organization policies
+      apply to every session.</p>
+    <div class="row">
+      <button class="btn" id="btn-launch">Start the agent</button>
+      <button class="btn ghost" id="btn-finish">Close</button>
+    </div>
+    <p class="note" id="launch-hint"></p>
+  </section>
+</main>
+
+<footer>
+  <span>Organization code: <code id="slug"></code></span>
+  <span>Plugin <code id="pversion"></code> · powered by Trust Agent</span>
+</footer>
+<script src="app.js"></script>
+</body>
+</html>

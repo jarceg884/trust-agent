@@ -38,10 +38,14 @@ import {
 } from "@/components/ui";
 import { IconDepartments, IconPlus } from "@/components/icons";
 import { AllowedConnectionsSelector } from "@/components/connection-policy";
+import { StructureWizard } from "@/components/structure-wizard";
 
 export function DepartmentsPage() {
   const overview = useApi<BudgetOverview>("/api/budgets/overview");
   const { push } = useToast();
+
+  // Spec 038 (REQ-DO-023): the structure wizard re-opens from here.
+  const [wizardOpen, setWizardOpen] = useState(false);
 
   // Editar presupuesto de un depto (spec 009)
   const [editId, setEditId] = useState<string | null>(null);
@@ -233,9 +237,18 @@ export function DepartmentsPage() {
           title="Departments"
           description="Monthly budgets and policies per department. Department budgets must sum within the organization budget."
           actions={
-            <Button variant="primary" size="sm" onClick={() => setAddOpen(true)}>
-              <IconPlus size={13} /> Add department
-            </Button>
+            <div className="flex items-center gap-1.5">
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => setWizardOpen(true)}
+              >
+                Set up structure
+              </Button>
+              <Button variant="primary" size="sm" onClick={() => setAddOpen(true)}>
+                <IconPlus size={13} /> Add department
+              </Button>
+            </div>
           }
         />
         {overview.loading ? (
@@ -246,7 +259,12 @@ export function DepartmentsPage() {
           <EmptyState
             icon={<IconDepartments size={18} />}
             title="No departments yet"
-            description="Create the first department with “Add department” — an initial monthly budget is optional and can be set later from each row."
+            description="Declare the real structure of your organization — suggested templates (editable names) or your own custom departments."
+            action={
+              <Button variant="primary" size="sm" onClick={() => setWizardOpen(true)}>
+                Set up structure
+              </Button>
+            }
           />
         ) : (
           <Table>
@@ -530,6 +548,12 @@ export function DepartmentsPage() {
           </div>
         )}
       </Dialog>
+      {/* Wizard de estructura (spec 038): re-abrible desde esta página */}
+      <StructureWizard
+        open={wizardOpen}
+        onClose={() => setWizardOpen(false)}
+        onCompleted={() => overview.refetch()}
+      />
     </div>
   );
 }

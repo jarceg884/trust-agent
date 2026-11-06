@@ -197,6 +197,79 @@ def enroll(
     }
 
 
+def preauthorize(
+    conn: Connection,
+    *,
+    tenant_id: str,
+    user_id: str,
+    actor: Principal,
+    device_name: str | None = None,
+    platform: str | None = None,
+) -> dict:
+    """Admin-issued enrollment token (Helios-style, spec 044).
+
+    Unlike :func:`enroll`, this flow is STARTED BY THE ADMIN: they pick the
+    user in the console and the control plane creates an ALREADY-AUTHORIZED
+    device slot plus its one-time token. The employee then only enters
+    URL + organization + token in the app — no OIDC id_token file, no
+    trust-login, no second approval step.
+
+    The token is minted here and returned EXACTLY ONCE (ADR-006); only
+    sha256(secret) is stored. The slot starts ``active`` because the admin's
+    choice IS the authorization (approved_by records who granted it).
+    """
+    row = conn.execute(
+        text("SELECT id, email, status FROM users WHERE id = CAST(:u AS uuid)"),
+        {"u": user_id},
+    ).mappings().first()
+    if row is None:
+        raise not_found("User not found.")
+    if row["status"] != "active":
+        raise validation_failed("The user must be active before issuing a token.")
+
+    secret = secrets.token_urlsafe(32)
+    device_id = str(uuid.uuid4())
+    # Placeholder fingerprint: unique per slot and replaced with the real
+    # machine fingerprint on redemption (exchange binds it).
+    placeholder = f"unclaimed:{device_id}"
+    conn.execute(
+        text(
+            "INSERT INTO devices (id, tenant_id, user_id, fingerprint, device_name,"
+            " platform, status, enrollment_token_hash, approved_at, approved_by)"
+            " VALUES (CAST(:did AS uuid), CAST(:t AS uuid), CAST(:u AS uuid),"
+            " :fp, :name, :platform, 'active', :hash, now(), CAST(:by AS uuid))"
+        ),
+        {
+            "did": device_id,
+            "t": tenant_id,
+            "u": user_id,
+            "fp": placeholder,
+            "name": device_name,
+            "platform": platform,
+            "hash": _hash(secret),
+            "by": actor.user_id,
+        },
+    )
+    audit_service.emit(
+        conn,
+        tenant_id=tenant_id,
+        actor_role=_actor_role(actor),
+        action="device.enrollment_token_issued",
+        actor_id=actor.user_id,
+        target_type="user",
+        target_id=user_id,
+        device_id=device_id,
+        payload={"device_id": device_id, "issued_to": row["email"]},
+    )
+    return {
+        "device_id": device_id,
+        "user_id": user_id,
+        "user_email": row["email"],
+        "status": "active",
+        "enrollment_token": f"{ENROLLMENT_PREFIX}{tenant_id}.{device_id}.{secret}",
+    }
+
+
 # ---------------------------------------------------------------------------
 # One-time exchange (no principal: the enrollment token IS the credential)
 # ---------------------------------------------------------------------------
@@ -216,11 +289,27 @@ def _parse_enrollment_token(token: str) -> tuple[str, str, str]:
     return tenant_hint, device_id, secret
 
 
-def exchange(engine: Engine, enrollment_token: str) -> dict:
+def exchange(
+    engine: Engine,
+    enrollment_token: str,
+    *,
+    fingerprint: str | None = None,
+    public_key: str | None = None,
+    device_name: str | None = None,
+    platform: str | None = None,
+    issue_model_key: bool = True,
+) -> dict:
     """Redeem the enrollment token for the signed device token (one-time).
 
     pending -> {"status": "pending"} (router answers 202, nothing consumed)
     active  -> device token, hash consumed (second redemption -> 410)
+
+    Spec 044 (Helios-style admin tokens): when the caller supplies the real
+    machine identity (fingerprint/public_key/device_name/platform) the device
+    slot created by :func:`preauthorize` is bound to this machine before the
+    token is consumed. The same call also provisions the LiteLLM virtual key
+    so the app is usable immediately — no separate trust-login step.
+
     anything else (unknown/consumed/rejected/revoked) -> 410 gone.
     """
     tenant_hint, device_id, secret = _parse_enrollment_token(enrollment_token)
@@ -247,6 +336,37 @@ def exchange(engine: Engine, enrollment_token: str) -> dict:
             # rejected/revoked: the enrollment token died with the device.
             raise gone("The enrollment token is invalid or already used.")
 
+        # Bind the real machine identity over the placeholder, if supplied.
+        if fingerprint:
+            # Re-enrolling the same machine must not trip the unique
+            # (tenant, fingerprint) constraint: retire any OTHER live row
+            # that already holds this fingerprint.
+            conn.execute(
+                text(
+                    "UPDATE devices SET status = 'revoked', "
+                    "fingerprint = 'retired:' || id::text, updated_at = now() "
+                    "WHERE fingerprint = :fp AND id <> CAST(:did AS uuid) "
+                    "AND status <> 'revoked'"
+                ),
+                {"fp": fingerprint, "did": device_id},
+            )
+            conn.execute(
+                text(
+                    "UPDATE devices SET fingerprint = :fp, "
+                    "public_key = COALESCE(:pk, public_key), "
+                    "device_name = COALESCE(:name, device_name), "
+                    "platform = COALESCE(:plat, platform), updated_at = now() "
+                    "WHERE id = CAST(:did AS uuid)"
+                ),
+                {
+                    "fp": fingerprint,
+                    "pk": public_key,
+                    "name": device_name,
+                    "plat": platform,
+                    "did": device_id,
+                },
+            )
+
         # Active: consume the hash (one-time redemption) and issue the token.
         conn.execute(
             text(
@@ -262,12 +382,33 @@ def exchange(engine: Engine, enrollment_token: str) -> dict:
         user_id=str(row["user_id"]),
         tenant_id=tenant_hint,
     )
-    return {
+    result = {
         "device_token": device_token,
         "device_id": device_id,
         "status": "active",
         "expires_in": settings.device_token_ttl_minutes * 60,
     }
+
+    # Spec 044: provision the model key in the same activation so the app is
+    # usable immediately. Fail-soft: a key outage must not void a valid
+    # device token (the admin can re-issue from the console).
+    if issue_model_key:
+        try:
+            from ..models.keys import _target_principal, issue_key
+
+            with engine.begin() as conn2:
+                from ..db import set_tenant as _set_tenant
+
+                _set_tenant(conn2, tenant_hint)
+                target = _target_principal(conn2, tenant_hint, str(row["user_id"]))
+                issued = issue_key(conn2, target, user_id=str(row["user_id"]))
+            result["model_key"] = issued.get("key")
+            result["model_key_alias"] = issued.get("alias")
+            result["allowed_models"] = issued.get("allowed_models") or []
+        except Exception:  # health: activation must survive a key outage
+            result["model_key"] = None
+
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -755,3 +896,40 @@ def revoke(conn: Connection, *, principal: Principal, device_id: str) -> dict:
         "status": "revoked",
         "sweep": sweep,
     }
+
+
+def delete(conn: Connection, *, principal: Principal, device_id: str) -> None:
+    """Hard-delete an enrolled device and its dependent rows.
+
+    Admin action from the console. Sessions and API keys are removed first so
+    the device row can be deleted without dangling references. Audit keeps the
+    fact (and the device id) after the row is gone.
+    """
+    row = _get_scoped_device(conn, principal, device_id)
+    audit_service.emit(
+        conn,
+        tenant_id=principal.tenant_id,
+        actor_role=_actor_role(principal),
+        action="device.deleted",
+        actor_id=principal.user_id,
+        target_type="device",
+        target_id=device_id,
+        device_id=device_id,
+        payload={
+            "device_name": row["device_name"],
+            "user_id": str(row["user_id"]),
+            "previous_status": row["status"],
+        },
+    )
+    conn.execute(
+        text("DELETE FROM sessions WHERE device_id = CAST(:did AS uuid)"),
+        {"did": device_id},
+    )
+    conn.execute(
+        text("DELETE FROM api_keys WHERE device_id = CAST(:did AS uuid)"),
+        {"did": device_id},
+    )
+    conn.execute(
+        text("DELETE FROM devices WHERE id = CAST(:did AS uuid)"),
+        {"did": device_id},
+    )

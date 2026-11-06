@@ -236,6 +236,34 @@ def sweep_after_policy_change(
     return {"disconnected": disconnected, "notified": notified}
 
 
+def catalog_with_policy(conn: Connection, principal: Principal) -> list[dict]:
+    """Catálogo COMPLETO con el estado de policy del caller por entrada
+    (spec 037, REQ-037-009): cada conector lleva ``allowed_for_caller``
+    computado con la MISMA regla deny-overrides que aplica el runtime
+    (``allowed_connectors`` ∩ tokens ``allowed_connections``). A diferencia
+    de ``list_available`` NO filtra: la UI muestra los bloqueados con su
+    estado (D-37-06), no los oculta."""
+    policy = effective_policy_for_user(conn, principal)
+    allowed = set(policy.get("allowed_connectors") or [])
+    tokens = set(policy.get("allowed_connections") or [])
+    rows = conn.execute(
+        text(
+            "SELECT slug, name, category, capabilities, required_scopes, "
+            "status FROM catalog.connector_catalog ORDER BY slug"
+        )
+    ).mappings()
+    return [
+        {
+            **dict(r),
+            "allowed_for_caller": (
+                r["slug"] in allowed
+                and connection_tokens_allow(tokens, r["slug"])
+            ),
+        }
+        for r in rows
+    ]
+
+
 def list_available(conn: Connection, principal: Principal) -> list[dict]:
     """Catalog filtered by the principal's effective allowed_connectors
     (REQ-CON-003: the desktop shows only what policy allows)."""

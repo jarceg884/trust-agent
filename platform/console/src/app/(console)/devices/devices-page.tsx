@@ -24,8 +24,10 @@ import {
   Card,
   CardHeader,
   ConfirmDialog,
+  Dialog,
   EmptyState,
   ErrorState,
+  OneTimeSecret,
   Select,
   Table,
   TableSkeleton,
@@ -34,6 +36,7 @@ import {
   useToast,
 } from "@/components/ui";
 import { IconDevices } from "@/components/icons";
+import type { DirectoryList } from "@/lib/types";
 
 const STATUS_TONES: Record<DeviceStatus, "success" | "warning" | "danger" | "neutral"> = {
   active: "success",
@@ -48,15 +51,23 @@ export function DevicesPage() {
   const [status, setStatus] = useState("");
   const [action, setAction] = useState<{
     device: DeviceRow;
-    kind: "approve" | "reject" | "revoke";
+    kind: "approve" | "reject" | "revoke" | "delete";
   } | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [enrollOpen, setEnrollOpen] = useState(false);
+  const [enrollUser, setEnrollUser] = useState("");
+  const [issuing, setIssuing] = useState(false);
+  const [issued, setIssued] = useState<{
+    enrollment_token: string;
+    user_email: string;
+  } | null>(null);
   const { push } = useToast();
 
   const devices = useApi<DeviceList>(
     `/api/devices${status ? `?status=${status}` : ""}`,
   );
   const presence = useApi<PresenceResponse>("/api/devices/presence");
+  const directory = useApi<DirectoryList>(enrollOpen ? "/api/users" : null);
 
   // Live auto-refresh (REQ-027-06): poll both endpoints every 15 s while
   // the page is mounted. Cleanup on unmount; no setState outside callbacks.
@@ -80,10 +91,10 @@ export function DevicesPage() {
     if (!action) return;
     setSubmitting(true);
     try {
-      await api(`/api/devices/${action.device.id}/${action.kind}`, {
-        method: "POST",
+      await api(`/api/devices/${action.device.id}${action.kind === "delete" ? "" : `/${action.kind}`}`, {
+        method: action.kind === "delete" ? "DELETE" : "POST",
       });
-      const verbs = { approve: "approved", reject: "rejected", revoke: "revoked" };
+      const verbs = { approve: "approved", reject: "rejected", revoke: "revoked", delete: "deleted" };
       push(
         "success",
         `Device ${action.device.device_name || action.device.fingerprint.slice(0, 12)} ${verbs[action.kind]}.`,
@@ -98,6 +109,33 @@ export function DevicesPage() {
     }
   }
 
+  async function issueEnrollmentToken() {
+    if (!enrollUser) return;
+    setIssuing(true);
+    try {
+      const result = await api<{
+        enrollment_token: string;
+        user_email: string;
+      }>("/api/devices/preauthorize", {
+        method: "POST",
+        body: { user_id: enrollUser },
+      });
+      setIssued(result);
+      devices.refetch();
+      presence.refetch();
+    } catch (cause) {
+      push("error", cause instanceof ApiError ? cause.message : "Could not issue the token.");
+    } finally {
+      setIssuing(false);
+    }
+  }
+
+  function closeEnroll() {
+    setEnrollOpen(false);
+    setEnrollUser("");
+    setIssued(null);
+  }
+
   const live = presence.data;
 
   return (
@@ -107,6 +145,16 @@ export function DevicesPage() {
         description="Devices link desktop clients to users. Revocation invalidates their sessions immediately."
         actions={
           <div className="flex items-center gap-2">
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => {
+                setEnrollOpen(true);
+                setIssued(null);
+              }}
+            >
+              + Enrol device
+            </Button>
             {live && (
               <div
                 className="flex items-center gap-2 rounded-lg border border-border bg-surface-alt/60 px-3 py-1.5"
@@ -158,7 +206,7 @@ export function DevicesPage() {
         <EmptyState
           icon={<IconDevices size={18} />}
           title={status ? `No ${status} devices` : "No devices enrolled yet"}
-          description="Users download Hermes from your organization's download link; after they sign in with SSO, their Hermes enrolls automatically and the request appears here for approval."
+          description="Users download the governed desktop app from your organization's download link; after they sign in with SSO, their device enrolls automatically and the request appears here for approval."
         />
       ) : (
         <Table>
@@ -239,11 +287,18 @@ export function DevicesPage() {
                           </Button>
                         </>
                       ) : d.status === "active" ? (
-                        <Button variant="danger" size="sm" onClick={() => setAction({ device: d, kind: "revoke" })}>
-                          Revoke
-                        </Button>
+                        <>
+                          <Button variant="danger" size="sm" onClick={() => setAction({ device: d, kind: "revoke" })}>
+                            Revoke
+                          </Button>
+                          <Button variant="secondary" size="sm" onClick={() => setAction({ device: d, kind: "delete" })}>
+                            Delete
+                          </Button>
+                        </>
                       ) : (
-                        <span className="text-[11px] text-faint">No actions</span>
+                        <Button variant="secondary" size="sm" onClick={() => setAction({ device: d, kind: "delete" })}>
+                          Delete
+                        </Button>
                       )}
                     </div>
                   </Td>
@@ -253,6 +308,74 @@ export function DevicesPage() {
           </tbody>
         </Table>
       )}
+
+      <Dialog
+        open={enrollOpen}
+        onClose={closeEnroll}
+        title={issued ? "Enrollment token" : "Enrol a device"}
+        description={
+          issued
+            ? "This token is shown exactly once. Send it to the person together with the organization ID."
+            : "Pick the person who will activate the device. The token is valid for a single activation."
+        }
+        footer={
+          issued ? (
+            <Button variant="primary" onClick={closeEnroll}>
+              Done
+            </Button>
+          ) : (
+            <>
+              <Button variant="secondary" onClick={closeEnroll}>
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                onClick={issueEnrollmentToken}
+                disabled={!enrollUser || issuing}
+              >
+                {issuing ? "Issuing…" : "Issue token"}
+              </Button>
+            </>
+          )
+        }
+      >
+        {issued ? (
+          <div className="space-y-3">
+            <p className="text-xs text-muted">
+              For <span className="font-medium text-foreground">{issued.user_email}</span>
+            </p>
+            <OneTimeSecret value={issued.enrollment_token} />
+            <p className="text-xs text-muted">
+              In the Trust Agent app: enter the portal URL, the organization ID, and this
+              token. The device is activated automatically — no further approval.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            <label htmlFor="enroll-user" className="text-xs font-medium text-foreground">
+              Person
+            </label>
+            <Select
+              id="enroll-user"
+              value={enrollUser}
+              onChange={(e) => setEnrollUser(e.target.value)}
+              className="w-full"
+            >
+              <option value="">Select a user…</option>
+              {(directory.data?.users ?? [])
+                .filter((u) => u.status === "active")
+                .map((u) => (
+                  <option key={u.user_id} value={u.user_id}>
+                    {u.display_name ? `${u.display_name} · ${u.email}` : u.email}
+                  </option>
+                ))}
+            </Select>
+            {directory.loading ? (
+              <p className="text-[11px] text-faint">Loading directory…</p>
+            ) : null}
+          </div>
+        )}
+      </Dialog>
 
       <ConfirmDialog
         open={action !== null}
@@ -264,17 +387,21 @@ export function DevicesPage() {
             ? "Approve device"
             : action?.kind === "reject"
               ? "Reject device"
-              : "Revoke device"
+              : action?.kind === "delete"
+                ? "Delete device"
+                : "Revoke device"
         }
         message={
           action?.kind === "approve"
-            ? `Approve "${action.device.device_name || "this device"}" for ${action.device.email}? Their Hermes completes its enrollment automatically on the next poll.`
+            ? `Approve "${action.device.device_name || "this device"}" for ${action.device.email}? The app completes its enrollment automatically on the next poll.`
             : action?.kind === "reject"
               ? `Reject the enrollment of "${action.device.device_name || "this device"}"? The user will need to enroll again.`
-              : `Revoke "${action?.device.device_name || "this device"}"? Its ${action?.device.active_sessions ?? 0} active session(s) are invalidated immediately and the device loses access.`
+              : action?.kind === "delete"
+                ? `Delete "${action.device.device_name || "this device"}" permanently? Its sessions and model keys are removed. This cannot be undone.`
+                : `Revoke "${action?.device.device_name || "this device"}"? Its ${action?.device.active_sessions ?? 0} active session(s) are invalidated immediately and the device loses access.`
         }
         confirmLabel={
-          action?.kind === "approve" ? "Approve" : action?.kind === "reject" ? "Reject" : "Revoke now"
+          action?.kind === "approve" ? "Approve" : action?.kind === "reject" ? "Reject" : action?.kind === "delete" ? "Delete permanently" : "Revoke now"
         }
       />
     </Card>

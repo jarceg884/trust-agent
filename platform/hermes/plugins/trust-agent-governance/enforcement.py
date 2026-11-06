@@ -421,6 +421,28 @@ class GovernanceState:
                 "action": "block",
                 "message": _BLOCK_MSG.format(tool=tool, allowed=", ".join(allowed) or "none"),
             }
+        # REQ-PE-011/012 (spec 042, GAP-42-A): enforcement cross-surface de
+        # allowed_connectors. Las tools de conector se nombran
+        # ``connectors__<slug>__<tool>`` (tools/connectors/gateway/names.py).
+        # Veto si el slug del conector no está en allowed_connectors, leído
+        # SIEMPRE vía policy_value() (deny-by-default: key ausente = []).
+        if tool.startswith("connectors__") and tool != "connectors__execute":
+            parts = tool.split("__", 2)
+            if len(parts) == 3 and parts[1]:
+                connector_slug = parts[1]
+                allowed_connectors = list(
+                    policy_contract.policy_value(state["payload"], "allowed_connectors")
+                )
+                if connector_slug not in allowed_connectors:
+                    self._count_veto(tool, f"connector '{connector_slug}' not in allowed_connectors")
+                    return {
+                        "action": "block",
+                        "message": (
+                            f"BLOCKED by organization policy: connector "
+                            f"'{connector_slug}' is not allowed. Allowed "
+                            f"connectors: {', '.join(allowed_connectors) or 'none'}."
+                        ),
+                    }
         return None
 
     def on_pre_llm_call(self, **_: Any):

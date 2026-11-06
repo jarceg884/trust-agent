@@ -1,16 +1,21 @@
 "use client";
 
 /**
- * Policies — shell de la página (spec 036 sobre la spec 033).
+ * Policies — shell de la página (spec 041 D-41-10 sobre las specs 036/033).
  *
- * - Vista por DEFECTO: panel legible de tarjetas por categoría (D-36-02) —
- *   sin keys crudas, con asignador "Apply to" y frases del valor efectivo.
- * - "Technical view" (tabla maestra + diff por usuario de la spec 033):
- *   conmutable SOLO para org_admin; dept_admin no ve el conmutador.
- * - Estados reales compartidos: loading (skeleton), 403 (empty state por
- *   rol), error de red (retry). Cero simulación (REQ-036-009): todo el
- *   render proviene de /api/policies/matrix, /api/policies/effective y
- *   /api/users.
+ * Tres pestañas:
+ * - "Policies" (VISTA POR DEFECTO): el Policy Builder de políticas nombradas
+ *   (spec 041) — lista, editor con sidebar de capacidades y asignación con
+ *   preview. Todo proviene de GET /api/named-policies (bloque `builder`,
+ *   D-41-02) — cero hardcodeo.
+ * - "Individual settings": el panel legible por key de la spec 036, INTACTO
+ *   (solo re-etiquetado), con los chips de políticas nombradas asignadas
+ *   por destinatario (REQ-041-014).
+ * - "Technical view": la tabla maestra + diff por usuario de la spec 033,
+ *   SOLO para org_admin (dept_admin no ve la pestaña).
+ *
+ * Estados reales compartidos por pestaña (loading/403/error); cero
+ * simulación (REQ-041-016): todo el render proviene de la API.
  */
 import { useState } from "react";
 import { useApi } from "@/hooks/use-api";
@@ -21,86 +26,93 @@ import {
   EmptyState,
   ErrorState,
   TableSkeleton,
+  Tabs,
 } from "@/components/ui";
 import { ReadablePoliciesPanel } from "./readable-policies-panel";
 import { TechnicalPoliciesView } from "./technical-view";
+import { PolicyBuilder } from "./builder/policy-builder";
+import type { NamedPolicyList } from "./builder/types";
 
-type View = "readable" | "technical";
+type View = "builder" | "readable" | "technical";
 
 export function PoliciesPage({ me }: { me: WhoAmI }) {
+  const namedPolicies = useApi<NamedPolicyList>("/api/named-policies");
   const matrix = useApi<PolicyMatrix>("/api/policies/matrix");
   const directory = useApi<DirectoryList>("/api/users");
 
-  // D-36-02: la vista técnica es un extra de depuración SOLO org_admin.
+  // D-41-10: la vista técnica es un extra de depuración SOLO org_admin.
   const isOrgAdmin = me.roles.some((r) => r.role_key === "org_admin");
-  const [view, setView] = useState<View>("readable");
+  const [view, setView] = useState<View>("builder");
 
-  if (matrix.loading) {
-    return (
-      <Card>
-        <CardHeader
-          title="Policies"
-          description="Loading the policy catalog…"
-        />
-        <TableSkeleton rows={8} cols={5} />
-      </Card>
-    );
-  }
-  if (matrix.error) {
-    return (
-      <Card>
-        <CardHeader title="Policies" />
-        {matrix.error.status === 403 ? (
-          <EmptyState
-            title="Only admins view policies"
-            description="Your role does not include the policies.org.manage, policies.dept.manage or audit.view permissions."
+  const tabs: { id: string; label: string }[] = [
+    { id: "builder", label: "Policies" },
+    { id: "readable", label: "Individual settings" },
+    ...(isOrgAdmin ? [{ id: "technical", label: "Technical view" }] : []),
+  ];
+
+  function matrixGate(children: React.ReactNode) {
+    if (matrix.loading) {
+      return (
+        <Card>
+          <CardHeader
+            title="Policies"
+            description="Loading the policy catalog…"
           />
-        ) : (
-          <ErrorState
-            error={matrix.error}
-            onRetry={matrix.refetch}
-            context="GET /api/policies/matrix"
-          />
-        )}
-      </Card>
-    );
+          <TableSkeleton rows={8} cols={5} />
+        </Card>
+      );
+    }
+    if (matrix.error) {
+      return (
+        <Card>
+          <CardHeader title="Policies" />
+          {matrix.error.status === 403 ? (
+            <EmptyState
+              title="Only admins view policies"
+              description="Your role does not include the policies.org.manage, policies.dept.manage or audit.view permissions."
+            />
+          ) : (
+            <ErrorState
+              error={matrix.error}
+              onRetry={matrix.refetch}
+              context="GET /api/policies/matrix"
+            />
+          )}
+        </Card>
+      );
+    }
+    return children;
   }
 
   return (
     <div className="space-y-4">
-      {isOrgAdmin ? (
-        <div
-          role="tablist"
-          aria-label="Policy view"
-          className="flex w-fit gap-1 rounded-lg border border-border-subtle bg-surface-alt p-1"
-        >
-          {(
-            [
-              ["readable", "Policy cards"],
-              ["technical", "Technical view"],
-            ] as [View, string][]
-          ).map(([id, label]) => (
-            <button
-              key={id}
-              role="tab"
-              aria-selected={view === id}
-              onClick={() => setView(id)}
-              className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-                view === id
-                  ? "bg-surface text-foreground shadow-sm"
-                  : "text-muted hover:text-foreground"
-              }`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-      ) : null}
+      <Tabs
+        tabs={tabs}
+        active={view}
+        onChange={(id) => setView(id as View)}
+      />
 
-      {view === "technical" && isOrgAdmin ? (
-        <TechnicalPoliciesView me={me} matrix={matrix} directory={directory} />
+      {view === "builder" ? (
+        <div role="tabpanel" id="panel-builder" aria-labelledby="tab-builder">
+          <PolicyBuilder
+            me={me}
+            namedPolicies={namedPolicies}
+            matrix={matrix}
+            directory={directory}
+          />
+        </div>
+      ) : view === "technical" && isOrgAdmin ? (
+        <div role="tabpanel" id="panel-technical" aria-labelledby="tab-technical">
+          {matrixGate(
+            <TechnicalPoliciesView me={me} matrix={matrix} directory={directory} />,
+          )}
+        </div>
       ) : (
-        <ReadablePoliciesPanel me={me} matrix={matrix} directory={directory} />
+        <div role="tabpanel" id="panel-readable" aria-labelledby="tab-readable">
+          {matrixGate(
+            <ReadablePoliciesPanel me={me} matrix={matrix} directory={directory} />,
+          )}
+        </div>
       )}
     </div>
   );

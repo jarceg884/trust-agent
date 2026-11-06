@@ -49,6 +49,21 @@ class EnrollBody(BaseModel):
 
 class ExchangeBody(BaseModel):
     enrollment_token: str
+    # Spec 044: real machine identity supplied at redemption so the
+    # admin-issued slot binds to this device (optional for backwards
+    # compatibility with the legacy device-initiated flow).
+    fingerprint: str | None = None
+    public_key: str | None = None
+    device_name: str | None = None
+    platform: str | None = None
+
+
+class PreauthorizeBody(BaseModel):
+    """Admin-issued enrollment (Helios-style one-time token)."""
+
+    user_id: str
+    device_name: str | None = None
+    platform: str | None = None
 
 
 @router.post("/enroll", status_code=202)
@@ -131,10 +146,39 @@ def enroll(body: EnrollBody):
 @router.post("/enroll/exchange")
 def exchange(body: ExchangeBody):
     """Redeem the enrollment token (one-time). Polls as 202 while pending."""
-    result = service.exchange(get_engine(), body.enrollment_token)
+    result = service.exchange(
+        get_engine(),
+        body.enrollment_token,
+        fingerprint=body.fingerprint,
+        public_key=body.public_key,
+        device_name=body.device_name,
+        platform=body.platform,
+    )
     if result.get("status") == "pending":
         return JSONResponse(status_code=202, content=result)
     return result
+
+
+@router.post("/preauthorize", dependencies=_MANAGE)
+def preauthorize(
+    body: PreauthorizeBody,
+    principal: Principal = Depends(get_principal),
+    conn: Connection = Depends(get_tx),
+):
+    """Issue a one-time enrollment token for a user (Helios-style).
+
+    The admin picks the person; the returned ``enrollment_token`` is shown
+    EXACTLY ONCE and then redeemed by the app with URL + organization + token.
+    """
+    user_id = require_uuid(body.user_id, "user_id")
+    return service.preauthorize(
+        conn,
+        tenant_id=principal.tenant_id,
+        user_id=user_id,
+        actor=principal,
+        device_name=body.device_name,
+        platform=body.platform,
+    )
 
 
 @router.post("/{device_id}/token")
@@ -225,3 +269,15 @@ def revoke(
 ):
     device_id = require_uuid(device_id, "device_id")  # t_378503a1: 422, not 500
     return service.revoke(conn, principal=principal, device_id=device_id)
+
+
+@router.delete("/{device_id}", status_code=204, dependencies=_MANAGE)
+def delete_device(
+    device_id: str,
+    principal: Principal = Depends(get_principal),
+    conn: Connection = Depends(get_tx),
+):
+    """Delete an enrolled device (and its sessions/keys) from the console."""
+    device_id = require_uuid(device_id, "device_id")
+    service.delete(conn, principal=principal, device_id=device_id)
+    return None

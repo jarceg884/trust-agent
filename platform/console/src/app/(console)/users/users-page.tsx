@@ -58,6 +58,7 @@ export function UsersPage() {
   const [deptFor, setDeptFor] = useState<DirectoryUser | null>(null);
   const [deptChoice, setDeptChoice] = useState<string>("");
   const [disableFor, setDisableFor] = useState<DirectoryUser | null>(null);
+  const [deleteFor, setDeleteFor] = useState<DirectoryUser | null>(null);
   const [reactivateFor, setReactivateFor] = useState<DirectoryUser | null>(null);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
@@ -65,6 +66,11 @@ export function UsersPage() {
   const [inviteDept, setInviteDept] = useState("");
   const [inviteRole, setInviteRole] = useState("user");
   const [submitting, setSubmitting] = useState(false);
+  // Per-user enrollment token (spec 044): admin generates it from the user row.
+  const [tokenFor, setTokenFor] = useState<DirectoryUser | null>(null);
+  const [enrollToken, setEnrollToken] = useState("");
+  const [tokenBusy, setTokenBusy] = useState(false);
+  const [tokenCopied, setTokenCopied] = useState(false);
 
   // spec 024: allowed_connections a nivel usuario (selector catálogo + custom)
   const [policiesFor, setPoliciesFor] = useState<DirectoryUser | null>(null);
@@ -96,6 +102,29 @@ export function UsersPage() {
       push("error", cause instanceof ApiError ? cause.message : "Save failed.");
     } finally {
       setSavingUserConn(false);
+    }
+  }
+
+  async function issueEnrollmentToken(user: DirectoryUser) {
+    setTokenFor(user);
+    setEnrollToken("");
+    setTokenCopied(false);
+    setTokenBusy(true);
+    try {
+      const result = await api<{ enrollment_token: string }>("/api/devices/preauthorize", {
+        method: "POST",
+        body: {
+          user_id: user.user_id,
+          device_name: `${user.display_name || user.email} · desktop`,
+          platform: "Windows",
+        },
+      });
+      setEnrollToken(result.enrollment_token);
+    } catch (cause) {
+      push("error", cause instanceof ApiError ? cause.message : "No se pudo generar el token.");
+      setTokenFor(null);
+    } finally {
+      setTokenBusy(false);
     }
   }
 
@@ -173,8 +202,12 @@ export function UsersPage() {
       () => setRevoke(null),
     );
 
-  const moveDept = () =>
-    run(
+  const moveDept = () => {
+    if (!deptChoice) {
+      push("error", "A department is required for every user.");
+      return;
+    }
+    return run(
       () =>
         api(`/api/users/${deptFor!.user_id}`, {
           method: "PUT",
@@ -183,6 +216,7 @@ export function UsersPage() {
       `${deptFor?.email} moved to ${deptName(deptChoice)}.`,
       () => setDeptFor(null),
     );
+  };
 
   const disable = () =>
     run(
@@ -202,6 +236,13 @@ export function UsersPage() {
       () => setReactivateFor(null),
     );
 
+  const removeUser = () =>
+    run(
+      () => api(`/api/users/${deleteFor!.user_id}`, { method: "DELETE" }),
+      `${deleteFor?.email} deleted permanently.`,
+      () => setDeleteFor(null),
+    );
+
   const invite = () =>
     run(
       () =>
@@ -210,7 +251,7 @@ export function UsersPage() {
           body: {
             email: inviteEmail,
             display_name: inviteName || null,
-            ...(inviteDept ? { department_id: inviteDept } : {}),
+            department_id: inviteDept,
             role_key: inviteRole,
           },
         }),
@@ -363,6 +404,16 @@ export function UsersPage() {
                     </Td>
                     <Td>
                       <div className="flex justify-end gap-1.5">
+                        {canManageUsers && (
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            title="Generar token de enrolamiento para este usuario"
+                            onClick={() => void issueEnrollmentToken(u)}
+                          >
+                            Token
+                          </Button>
+                        )}
                         {canAssignRoles && (
                           <Button
                             variant="secondary"
@@ -384,6 +435,11 @@ export function UsersPage() {
                         {canManageUsers && !self && u.status === "disabled" && (
                           <Button variant="secondary" size="sm" onClick={() => setReactivateFor(u)}>
                             Reactivate
+                          </Button>
+                        )}
+                        {canManageUsers && !self && (
+                          <Button variant="danger" size="sm" onClick={() => setDeleteFor(u)}>
+                            Delete
                           </Button>
                         )}
                       </div>
@@ -485,7 +541,7 @@ export function UsersPage() {
             <Button variant="ghost" size="sm" onClick={() => setDeptFor(null)}>
               Cancel
             </Button>
-            <Button variant="primary" size="sm" loading={submitting} onClick={moveDept}>
+            <Button variant="primary" size="sm" loading={submitting} disabled={!deptChoice} onClick={moveDept}>
               Move user
             </Button>
           </>
@@ -497,7 +553,7 @@ export function UsersPage() {
             value={deptChoice}
             onChange={(e) => setDeptChoice(e.target.value)}
           >
-            <option value="">No department</option>
+            <option value="">Select a department…</option>
             {departments.data?.departments.map((d) => (
               <option key={d.department_id} value={d.department_id}>
                 {d.name}
@@ -516,6 +572,17 @@ export function UsersPage() {
         title={`Disable — ${disableFor?.email ?? ""}`}
         message={`Disable ${disableFor?.email}? Their sessions and devices are revoked immediately in the same transaction. Audited as user.disabled.`}
         confirmLabel="Disable user"
+      />
+
+      {/* Delete */}
+      <ConfirmDialog
+        open={deleteFor !== null}
+        onClose={() => setDeleteFor(null)}
+        onConfirm={removeUser}
+        loading={submitting}
+        title={`Delete — ${deleteFor?.email ?? ""}`}
+        message={`Delete ${deleteFor?.email} permanently? Their devices, sessions, keys and grants are removed. This cannot be undone. The last organization administrator cannot be deleted.`}
+        confirmLabel="Delete permanently"
       />
 
       {/* Reactivate */}
@@ -607,7 +674,7 @@ export function UsersPage() {
               variant="primary"
               size="sm"
               loading={submitting}
-              disabled={!inviteEmail.includes("@")}
+              disabled={!inviteEmail.includes("@") || !inviteDept}
               onClick={invite}
             >
               Send invitation
@@ -633,13 +700,13 @@ export function UsersPage() {
               placeholder="Jane Doe"
             />
           </Field>
-          <Field label="Department (optional)" htmlFor="invite-dept">
+          <Field label="Department (required)" htmlFor="invite-dept">
             <Select
               id="invite-dept"
               value={inviteDept}
               onChange={(e) => setInviteDept(e.target.value)}
             >
-              <option value="">No department</option>
+              <option value="">Select a department…</option>
               {departments.data?.departments.map((d) => (
                 <option key={d.department_id} value={d.department_id}>
                   {d.name}
@@ -660,6 +727,55 @@ export function UsersPage() {
               ))}
             </Select>
           </Field>
+        </div>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(tokenFor)}
+        onClose={() => setTokenFor(null)}
+        title="Token de enrolamiento"
+        description={
+          tokenFor
+            ? `Token de un solo uso para ${tokenFor.display_name || tokenFor.email}. Se muestra una sola vez.`
+            : ""
+        }
+        footer={
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" size="sm" onClick={() => setTokenFor(null)}>
+              Cerrar
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              disabled={!enrollToken}
+              onClick={async () => {
+                try {
+                  await navigator.clipboard.writeText(enrollToken);
+                  setTokenCopied(true);
+                  window.setTimeout(() => setTokenCopied(false), 1500);
+                } catch {
+                  push("error", "No se pudo copiar; selecciona el texto manualmente.");
+                }
+              }}
+            >
+              {tokenCopied ? "Copiado" : "Copiar token"}
+            </Button>
+          </div>
+        }
+      >
+        <div className="space-y-3">
+          {tokenBusy ? (
+            <p className="text-sm text-muted">Generando token…</p>
+          ) : (
+            <>
+              <p className="text-xs text-muted">
+                En el instalador de Trust Agent: Portal URL, organización y este token.
+              </p>
+              <pre className="max-h-40 overflow-auto rounded-lg border border-border-subtle bg-surface p-3 font-mono text-[11px] break-all whitespace-pre-wrap">
+                {enrollToken || "—"}
+              </pre>
+            </>
+          )}
         </div>
       </Dialog>
     </div>

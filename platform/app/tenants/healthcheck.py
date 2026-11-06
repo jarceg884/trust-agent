@@ -50,8 +50,12 @@ def healthcheck(
         drow = conn.execute(
             text("SELECT count(*) AS n FROM departments")
         ).mappings().first()
+        # Spec 038 (D-38-01): informational since the seed removal — a tenant
+        # born empty is HEALTHY (its admin declares the real structure on
+        # first login via the wizard); a declared structure is listed as-is.
         checks.append(_check(
-            "departments", drow["n"] > 0, f"{drow['n']} seeded",
+            "departments", True,
+            f"{drow['n']} department(s) (declared at birth or set post-activation)",
         ))
 
         brow = conn.execute(

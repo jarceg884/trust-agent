@@ -180,7 +180,13 @@ def test_revoke_sweeps_virtual_key_and_connectors(
     body = resp.json()
     assert body["status"] == "revoked"
     sweep = body["sweep"]
-    assert [k["key_id"] for k in sweep["keys_blocked"]] == [key["key_id"]]
+    # Spec 044: el enrolamiento del device emite su propio model_key
+    # (api_keys con device_id) además de la key explícita del usuario; la
+    # revocación integral corta TODAS las keys activas del dueño (docstring
+    # de _block_user_virtual_keys). La key del test debe estar entre ellas.
+    blocked_ids = [k["key_id"] for k in sweep["keys_blocked"]]
+    assert key["key_id"] in blocked_ids
+    assert len(blocked_ids) == len(set(blocked_ids))
     assert [c["instance_id"] for c in sweep["connectors_disconnected"]] == \
         [instance_id]
 
@@ -212,9 +218,11 @@ def test_revoke_sweeps_virtual_key_and_connectors(
     assert payload["sweep"]["connectors_disconnected"][0][
         "connector_slug"] == "vmware"
     key_ev = _audit(admin_conn, "model.key_blocked", device_id)
-    assert len(key_ev) == 1
-    assert key_ev[0]["payload"]["reason"] == "device_revoked"
-    assert key_ev[0]["target_id"] == key["key_id"]
+    # Spec 044: el device tiene su propio model_key además de la key del
+    # usuario; ambos se bloquean y ambos se auditan como device_revoked.
+    assert len(key_ev) >= 1
+    assert all(e["payload"]["reason"] == "device_revoked" for e in key_ev)
+    assert key["key_id"] in [e["target_id"] for e in key_ev]
     conn_ev = _audit(admin_conn, "connector.disconnected", device_id)
     assert len(conn_ev) == 1
     assert conn_ev[0]["payload"]["reason"] == "device_revoked"

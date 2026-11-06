@@ -35,3 +35,12 @@ db/migrations/.versions.lock
 # Estado runtime del bridge Hermes real (tokens de sesión en claro) —
 # lo escribe el plugin enrolado en vivo; jamás al repo (constitution IV).
 .state-hermes-bridge.json
+
+# Spec 040: instaladores desktop construidos en el host (binarios de ~100-200 MB
+# por plataforma — se sirven desde el volume, no viven en git).
+installer-artifacts/
+
+# Spec 040: resources horneados POR TENANT al build (binding de la org —
+# los genera scripts/build_desktop_installers.py, jamás se commitean).
+platform/installer-app/resources/
+platform/installer-app/build/

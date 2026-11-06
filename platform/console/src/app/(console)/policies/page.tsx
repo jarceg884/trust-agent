@@ -4,10 +4,10 @@ import { api } from "@/lib/control-plane";
 import { getSessionToken } from "@/lib/session";
 import type { WhoAmI } from "@/lib/types";
 import { PageHeader } from "@/components/ui";
-import { PoliciesPage } from "./policies-page";
+import { PolicyManagerPage } from "./policy-manager";
 
 export const metadata: Metadata = {
-  title: "Policies — Trust Agent Admin Console",
+  title: "Policies",
 };
 
 export default async function Page() {
@@ -23,9 +23,9 @@ export default async function Page() {
     <>
       <PageHeader
         title="Policies"
-        description="Every policy as a plain-language card you can apply to the organization, a department or a user. Lower levels can only tighten (deny-overrides)."
+        description="Una política se asigna a un departamento o a una persona. Dentro defines Desktop restrictions, prompt organizacional, modelos y agentes."
       />
-      <PoliciesPage me={me} />
+      <PolicyManagerPage />
     </>
   );
 }

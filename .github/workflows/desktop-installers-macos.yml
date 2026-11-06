@@ -1,0 +1,117 @@
+# Spec 040 (D-040-04): build del instalador macOS (.dmg) — GAP con plan.
+#
+# El .dmg de macOS NO se puede construir desde el servidor Linux (electron-
+# builder requiere macOS para firmar/notarizar y crear el dmg — evidencia en
+# specs/040-platform-installers/spec.md §2). Este workflow lo construye REAL
+# en un runner macos-14 de GitHub Actions con los mismos inputs que
+# scripts/build_desktop_installers.py usa en el host.
+#
+# Ejecución: workflow_dispatch con slug + api-base. El binding del tenant se
+# pasa como input (el runner no tiene acceso a la DB del control plane); el
+# manifest generado (sha256) se sube como artifact para verificarlo contra el
+# que sirve el control plane cuando el artefacto se publique.
+#
+# NOTA: el repo es privado — los minutos de los runners macOS consumen cuota;
+# por eso el workflow es manual (workflow_dispatch) y no corre en cada push.
+name: desktop-installers-macos
+
+on:
+  workflow_dispatch:
+    inputs:
+      slug:
+        description: "Tenant slug (org code) to bake into the installer"
+        required: true
+      api_base:
+        description: "Control plane origin the installer binds to"
+        required: true
+        default: "https://control-plane.example.com"
+      litellm_base_url:
+        description: "Tenant model gateway origin"
+        required: true
+        default: "http://127.0.0.1:4000"
+      oidc_issuer_url:
+        description: "Tenant OIDC issuer URL (Keycloak realm)"
+        required: true
+      oidc_client_id:
+        description: "OIDC client id"
+        required: true
+        default: "trust-agent-web"
+      product_name:
+        description: "Published product name (branding)"
+        required: true
+        default: "Trust Agent"
+      plugin_version:
+        description: "Plugin release version (installer versioning, D-040-07)"
+        required: true
+        default: "0.6.0"
+
+jobs:
+  macos-dmg:
+    name: Build macOS .dmg (runner macos-14)
+    runs-on: macos-14
+    defaults:
+      run:
+        working-directory: platform/installer-app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install build deps
+        run: npm install --save-dev electron@40.10.2 electron-builder@26.18.0
+      - name: Bake org binding + branding (D-040-02)
+        run: |
+          mkdir -p resources build
+          cat > resources/org-binding.json <<EOF
+          {
+            "slug": "${{ inputs.slug }}",
+            "api_base": "${{ inputs.api_base }}",
+            "litellm_base_url": "${{ inputs.litellm_base_url }}",
+            "model": "glm-5.2",
+            "oidc_issuer_url": "${{ inputs.oidc_issuer_url }}",
+            "oidc_client_id": "${{ inputs.oidc_client_id }}",
+            "device_type": "desktop",
+            "plugin_version": "${{ inputs.plugin_version }}"
+          }
+          EOF
+          cat > resources/branding.json <<EOF
+          {
+            "product_name": "${{ inputs.product_name }}",
+            "tagline": "",
+            "accent_color": "#4F46E5",
+            "logo_data_uri": null
+          }
+          EOF
+      - name: Build .dmg
+        env:
+          TA_PRODUCT_NAME: ${{ inputs.product_name }} Setup
+          TA_SLUG: ${{ inputs.slug }}
+          TA_PLUGIN_VERSION: ${{ inputs.plugin_version }}
+          # macOS: signing/notarization require Apple Developer credentials.
+          # Unsigned build (ad-hoc) is honest dev output; add CSC_LINK +
+          # CSC_KEY_PASSWORD + APPLE_ID secrets when the cert exists.
+        run: npx electron-builder --mac dmg --config electron-builder.config.cjs --publish never
+      - name: Manifest (sha256)
+        run: |
+          ARTIFACT=$(ls dist/trust-agent-setup-*-mac-*.dmg | head -1)
+          SHA=$(shasum -a 256 "$ARTIFACT" | cut -d' ' -f1)
+          cat > dist/installer-manifest-macos.json <<EOF
+          {
+            "slug": "${{ inputs.slug }}",
+            "plugin_version": "${{ inputs.plugin_version }}",
+            "platforms": {
+              "macos": {
+                "filename": "$(basename "$ARTIFACT")",
+                "sha256": "$SHA",
+                "size": $(stat -f%z "$ARTIFACT")
+              }
+            }
+          }
+          EOF
+          cat dist/installer-manifest-macos.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-installer-${{ inputs.slug }}
+          path: |
+            platform/installer-app/dist/*.dmg
+            platform/installer-app/dist/installer-manifest-macos.json

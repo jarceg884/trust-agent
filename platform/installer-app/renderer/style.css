@@ -1,0 +1,42 @@
+:root{--accent:#4F46E5;--bg:#f7f8fa;--surface:#fff;--text:#171b23;
+--muted:#5b6472;--border:#e3e6ec;--ok:#12805c;--bad:#8f2424}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+background:var(--bg);color:var(--text);line-height:1.6;height:100vh;display:flex;
+flex-direction:column;-webkit-font-smoothing:antialiased}
+header{display:flex;align-items:center;gap:12px;padding:18px 28px;
+background:var(--surface);border-bottom:1px solid var(--border)}
+.logo img{height:32px;width:auto;display:block}
+.logo .mark{display:flex;align-items:center;justify-content:center;width:36px;height:36px;
+border-radius:9px;background:var(--accent);color:#fff;font-weight:700;font-size:17px}
+.product{font-weight:650;font-size:15px;letter-spacing:-.01em}
+.tagline{color:var(--muted);font-size:12.5px}
+main{flex:1;display:flex;align-items:center;justify-content:center;padding:32px}
+.screen{max-width:560px;width:100%}
+.hidden{display:none!important}
+.kicker{display:inline-flex;font-size:12.5px;font-weight:600;color:var(--accent);
+background:color-mix(in srgb,var(--accent) 9%,white);
+border:1px solid color-mix(in srgb,var(--accent) 22%,white);
+padding:5px 12px;border-radius:999px}
+h1{font-size:32px;line-height:1.15;letter-spacing:-.025em;font-weight:700;margin-top:16px}
+h2{font-size:22px;letter-spacing:-.015em;font-weight:700}
+h1 em,h2 em{font-style:normal;color:var(--accent)}
+.lede{margin-top:12px;color:var(--muted);font-size:15px}
+.btn{display:inline-flex;align-items:center;gap:10px;background:var(--accent);color:#fff;
+font-weight:600;font-size:15px;padding:12px 24px;border-radius:10px;border:none;
+cursor:pointer;margin-top:22px;transition:filter .15s ease-out}
+.btn:hover{filter:brightness(1.06)}
+.btn:active{transform:scale(.98)}
+.btn.ghost{background:var(--surface);color:var(--text);border:1px solid var(--border)}
+.btn.ghost:hover{border-color:var(--accent);filter:none}
+.row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.note{margin-top:14px;color:var(--muted);font-size:12.5px}
+code{font-family:ui-monospace,Menlo,monospace;font-size:.9em;background:var(--surface);
+border:1px solid var(--border);border-radius:6px;padding:2px 7px}
+.log{margin-top:18px;background:#0f1218;color:#e7eaf0;border:1px solid #262c37;
+border-radius:12px;padding:16px;font:12px/1.55 ui-monospace,Menlo,monospace;
+max-height:220px;overflow-y:auto;white-space:pre-wrap;word-break:break-all}
+.banner{margin-top:16px;border-radius:12px;padding:14px 16px;font-size:13.5px}
+.banner.bad{background:#fdf0f0;border:1px solid #f0c6c6;color:var(--bad)}
+footer{display:flex;justify-content:space-between;gap:12px;padding:16px 28px;
+border-top:1px solid var(--border);color:var(--muted);font-size:12.5px;flex-wrap:wrap}

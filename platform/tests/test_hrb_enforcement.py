@@ -325,7 +325,10 @@ def test_device_token_store_permissions(plugin, home):
     mode = stat.S_IMODE(os.stat(path).st_mode)
     assert mode == 0o600
     loaded = plugin.enroll.load_device_token()
-    assert loaded == {"device_id": DEVICE_ID, "token": "tok"}
+    assert loaded["device_id"] == DEVICE_ID
+    assert loaded["token"] == "tok"
+    assert loaded["org_code"] == "acme"
+    assert loaded["model_key"] == ""
 
 
 def test_enroll_command_usage_without_args(plugin):

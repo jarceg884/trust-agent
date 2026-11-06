@@ -233,7 +233,9 @@ def delete_department(
 def list_departments(conn: Connection) -> dict:
     """GET /api/departments (spec 017 REQ-RA-006): minimal list for the
     console selectors — every department of the caller's tenant (RLS does
-    the scoping; budgets/overview only shows departments WITH a budget)."""
+    the scoping). Same population as budgets/overview, which also lists
+    budgetless departments (LEFT JOIN, spec 013 D-013-07) — the stale claim
+    that overview hid them was corrected then; both surfaces agree."""
     rows = conn.execute(
         text("SELECT id, name FROM departments ORDER BY name")
     ).mappings()

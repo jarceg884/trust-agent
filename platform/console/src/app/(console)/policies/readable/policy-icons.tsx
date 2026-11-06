@@ -13,6 +13,7 @@
  */
 import type { ComponentProps } from "react";
 import {
+  Activity,
   Archive,
   BadgeCheck,
   Ban,
@@ -28,6 +29,8 @@ import {
   Crosshair,
   Database,
   FileKey,
+  FilePen,
+  FileText,
   Gauge,
   GitBranch,
   Globe,
@@ -37,6 +40,7 @@ import {
   ListChecks,
   Lock,
   MessageSquare,
+  MessagesSquare,
   Mic,
   Network,
   Package,
@@ -45,6 +49,7 @@ import {
   Puzzle,
   Repeat,
   RefreshCw,
+  Search,
   Send,
   Server,
   Share2,
@@ -69,6 +74,7 @@ type IconProps = ComponentProps<"svg"> & { size?: number };
 
 /** Mapa nombre-contrato → componente lucide (D-36-06). */
 const ICONS = {
+  Activity,
   Archive,
   BadgeCheck,
   Ban,
@@ -84,6 +90,8 @@ const ICONS = {
   Crosshair,
   Database,
   FileKey,
+  FilePen,
+  FileText,
   Gauge,
   GitBranch,
   Globe,
@@ -93,6 +101,7 @@ const ICONS = {
   ListChecks,
   Lock,
   MessageSquare,
+  MessagesSquare,
   Mic,
   Network,
   Package,
@@ -101,6 +110,7 @@ const ICONS = {
   Puzzle,
   Repeat,
   RefreshCw,
+  Search,
   Send,
   Server,
   Share2,
@@ -122,7 +132,9 @@ const ICONS = {
 
 export type PolicyIconName = keyof typeof ICONS;
 
-/** Icono de categoría (fallback cuando el de la key no existe). */
+/** Icono de categoría (fallback cuando el de la key no existe). Incluye
+ *  los 6 grupos del builder de spec 041 (D-41-03) además de las 9
+ *  categorías legibles de spec 036. */
 const CATEGORY_FALLBACK: Record<string, PolicyIconName> = {
   security: "ShieldCheck",
   web: "Globe",
@@ -133,6 +145,8 @@ const CATEGORY_FALLBACK: Record<string, PolicyIconName> = {
   models: "Cpu",
   integrations: "Plug",
   access: "Users",
+  system: "SquareTerminal",
+  comms: "MessagesSquare",
 };
 
 function opts({ size = 18, ...props }: IconProps) {

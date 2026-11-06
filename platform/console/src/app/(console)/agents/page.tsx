@@ -10,8 +10,8 @@ export default function Page() {
   return (
     <>
       <PageHeader
-        title="Shared Agents"
-        description="Organization agents with explicit, auditable access grants."
+        title="Agents"
+        description="Crea agentes compartidos y luego inclúyelos en una política. El acceso se define en la política, nunca implícito."
       />
       <AgentsPage />
     </>

@@ -131,7 +131,9 @@ def register_user(
                 "INSERT INTO users (id, tenant_id, department_id, email, "
                 " display_name, status, mfa_enrolled, oidc_subject) "
                 "VALUES (CAST(:id AS uuid), CAST(:tid AS uuid), "
-                " NULL, :email, :display, 'active', false, :sub) "
+                " (SELECT id FROM departments WHERE tenant_id = CAST(:tid AS uuid) "
+                "  ORDER BY (name = 'General') DESC, created_at LIMIT 1), "
+                " :email, :display, 'active', false, :sub) "
                 "ON CONFLICT (tenant_id, email) DO NOTHING "
                 "RETURNING id"
             ),
@@ -189,7 +191,9 @@ def auto_provision_brokered(
             "INSERT INTO users (id, tenant_id, department_id, email, "
             " display_name, status, mfa_enrolled, oidc_subject) "
             "VALUES (CAST(:id AS uuid), CAST(:tid AS uuid), "
-            " NULL, :email, :display, 'active', false, :sub) "
+            " (SELECT id FROM departments WHERE tenant_id = CAST(:tid AS uuid) "
+            "  ORDER BY (name = 'General') DESC, created_at LIMIT 1), "
+            " :email, :display, 'active', false, :sub) "
             "RETURNING id"
         ),
         {

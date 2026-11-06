@@ -31,11 +31,10 @@ await ctx.addCookies(
 );
 const page = await ctx.newPage();
 
-// --- Vista por defecto (org): panel legible --------------------------------
+// --- Vista por defecto (org): builder spec 041 → pestaña Individual settings --
+// (D-41-10: el builder es ahora la vista por defecto; el panel legible de
+// la spec 036 vive en la pestaña "Individual settings", intacto.)
 await page.goto(`${BASE}/policies`, { waitUntil: "networkidle" });
-await page.waitForSelector("#apply-level");
-// Cerrar cualquier diálogo modal abierto (p. ej. el wizard de estructura
-// de spec 038 que aparece en la primera visita del org_admin).
 for (let i = 0; i < 3; i++) {
   const backdrop = await page.locator(".ta-dialog-backdrop").count();
   if (!backdrop) break;
@@ -47,6 +46,13 @@ for (let i = 0; i < 3; i++) {
     await page.waitForTimeout(400);
   }
 }
+// El builder (spec 041) es la vista por defecto (D-41-10).
+const newPolicyBtn = await page.locator("button", { hasText: "New policy" }).count();
+check("D-41-10: el Policy Builder es la vista por defecto", newPolicyBtn === 1,
+  `count=${newPolicyBtn}`);
+await page.screenshot({ path: `${outdir}/policies-ux-builder-default.png`, fullPage: true });
+await page.locator("button", { hasText: "Individual settings" }).click();
+await page.waitForSelector("#apply-level");
 const h2s = await page.$$eval("h2", (els) => els.map((e) => e.textContent.trim()));
 const CATEGORIES = [
   "Security & session", "Internet & network", "Agent & automation",
@@ -67,7 +73,7 @@ const leaked = keys.filter((k) => bodyText.includes(k));
 check("AC-036-002: 0 keys crudas en el DOM legible", leaked.length === 0,
   `leaked=${JSON.stringify(leaked)}`);
 const techBtn = await page.locator("button", { hasText: "Technical view" }).count();
-check("AC-036-002: org_admin VE el conmutador Technical view", techBtn === 1);
+check("AC-036-002: org_admin VE la pestaña Technical view", techBtn === 1);
 await page.screenshot({ path: `${outdir}/policies-ux-default-panel.png`, fullPage: true });
 
 // --- Vista técnica (spec 033) conmutable ------------------------------------
@@ -77,7 +83,7 @@ const ths = await page.$$eval("table th", (els) => els.map((e) => e.textContent.
 check("AC-036-002: Vista técnica = tabla maestra spec 033",
   ths.includes("Key") && ths.includes("Provider default") && ths.includes("Origin"),
   `th=${JSON.stringify(ths)}`);
-await page.locator("button", { hasText: "Policy cards" }).click();
+await page.locator("button", { hasText: "Individual settings" }).click();
 await page.waitForSelector("#apply-level");
 
 // Busca la card completa desde su h3: sube hasta incluir el cuerpo
@@ -187,15 +193,16 @@ await ctx2.addCookies(
 );
 const page2 = await ctx2.newPage();
 await page2.goto(`${BASE}/policies`, { waitUntil: "networkidle" });
-await page2.waitForSelector("#apply-level");
 for (let i = 0; i < 3; i++) {
   const backdrop = await page2.locator(".ta-dialog-backdrop").count();
   if (!backdrop) break;
   await page2.keyboard.press("Escape");
   await page2.waitForTimeout(400);
 }
+await page2.locator("button", { hasText: "Individual settings" }).click();
+await page2.waitForSelector("#apply-level");
 const techBtn2 = await page2.locator("button", { hasText: "Technical view" }).count();
-check("AC-036-002: dept_admin NO ve el conmutador Technical view", techBtn2 === 0,
+check("AC-036-002: dept_admin NO ve la pestaña Technical view", techBtn2 === 0,
   `count=${techBtn2}`);
 const h2s2 = await page2.$$eval("h2", (els) => els.map((e) => e.textContent.trim()));
 check("AC-036-002: dept_admin ve el panel legible por defecto",

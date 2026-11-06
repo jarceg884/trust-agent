@@ -46,6 +46,7 @@ import {
 import { Lock } from "lucide-react";
 import { PolicyCard, type ScopeLevel } from "./readable/policy-card";
 import { PolicyIcon } from "./readable/policy-icons";
+import { RecipientPolicyChips } from "./builder/recipient-chips";
 import {
   resolvePresentation,
   t,
@@ -407,6 +408,19 @@ export function ReadablePoliciesPanel({
           ) : null}
         </CardBody>
       </Card>
+
+      {/* Chips de políticas nombradas asignadas a este destinatario
+          (REQ-041-014, spec 041): hecho de asignación leído de
+          /api/named-policies/recipients, junto a las frases efectivas. */}
+      <RecipientPolicyChips
+        level={level}
+        departmentId={level === "dept" ? deptId || null : null}
+        userId={level === "user" ? userId || null : null}
+        onUnassigned={() => {
+          matrix.refetch();
+          if (level === "user" && userId) diff.refetch();
+        }}
+      />
 
       {/* Estados reales del destinatario (REQ-036-008) */}
       {needsRecipient ? (

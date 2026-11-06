@@ -32,7 +32,14 @@ def new_request_id() -> str:
 
 
 class ApiError(Exception):
-    """Domain error carrying the stable reason code and HTTP status."""
+    """Domain error carrying the stable reason code and HTTP status.
+
+    ``details`` (spec 041) is an OPTIONAL structured payload merged at the
+    top level of the error envelope (next to ``error``) — e.g. the list of
+    active assignments behind a 409, or the per-key validation errors
+    behind a 422. Backward compatible: without it the envelope is exactly
+    the §5.2 contract.
+    """
 
     def __init__(
         self,
@@ -42,6 +49,7 @@ class ApiError(Exception):
         reason: str,
         message: str,
         retry_after: int | None = None,
+        details: dict | None = None,
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
@@ -49,6 +57,7 @@ class ApiError(Exception):
         self.reason = reason
         self.message = message
         self.retry_after = retry_after
+        self.details = details
 
 
 def invalid_token(message: str = "Invalid or expired token.") -> ApiError:
@@ -187,10 +196,10 @@ def messaging_mode_not_allowed(message: str = "Messaging mode exceeds the policy
     )
 
 
-def validation_failed(message: str) -> ApiError:
+def validation_failed(message: str, details: dict | None = None) -> ApiError:
     return ApiError(
         status_code=HTTP_422_UNPROCESSABLE_ENTITY, code="invalid_request",
-        reason="validation_failed", message=message,
+        reason="validation_failed", message=message, details=details,
     )
 
 
@@ -227,10 +236,10 @@ def gone(message: str = "This resource was already consumed.") -> ApiError:
     )
 
 
-def conflict(message: str) -> ApiError:
+def conflict(message: str, details: dict | None = None) -> ApiError:
     return ApiError(
         status_code=HTTP_409_CONFLICT, code="conflict", reason="conflict",
-        message=message,
+        message=message, details=details,
     )
 
 
@@ -258,9 +267,16 @@ async def api_error_handler(_: Request, exc: ApiError) -> JSONResponse:
         {"Retry-After": str(exc.retry_after)}
         if getattr(exc, "retry_after", None) is not None else None
     )
+    content = _envelope(exc.code, exc.reason, exc.message)
+    # Spec 041: structured detail (e.g. 409 assignments, 422 per-key
+    # errors) merges at the TOP LEVEL next to "error" — the §5.2 envelope
+    # itself is unchanged.
+    details = getattr(exc, "details", None)
+    if details:
+        content.update(details)
     return JSONResponse(
         status_code=exc.status_code,
-        content=_envelope(exc.code, exc.reason, exc.message),
+        content=content,
         headers=headers,
     )
 

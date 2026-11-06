@@ -232,6 +232,9 @@ def test_01_provision_tenant(client, admin_conn):
         "/api/admin/tenants", headers=PROVIDER,
         json={"organization_name": "E2E Corp", "admin_email": ADMIN_EMAIL,
               "initial_budget_usd": 500.0, "model_plan": "standard",
+              # Spec 038 (D-38-05): declared structure (backward-compatible
+              # template keys) — the seed of 4 no longer exists.
+              "departments": ["it_operations", "finance"],
               "slug": SLUG},
     )
     assert resp.status_code == 201, resp.text
@@ -250,7 +253,7 @@ def test_01_provision_tenant(client, admin_conn):
     rows = _q(admin_conn,
               "SELECT count(*) AS n FROM departments WHERE tenant_id = %s",
               (tid,))
-    assert rows[0]["n"] == 4
+    assert rows[0]["n"] == 2  # declared: it_operations + finance (spec 038)
     rows = _q(admin_conn,
               "SELECT id, profile_template FROM departments "
               "WHERE tenant_id = %s AND profile_template = 'it_operations'",

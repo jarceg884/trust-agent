@@ -1,7 +1,6 @@
 """Connector domain (spec 006): catalog, governance view and instances."""
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
-from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from ..auth.service import Principal, get_principal, get_tx, require_mfa
@@ -19,15 +18,13 @@ class InstanceCreate(BaseModel):
 
 
 @router.get("")
-def list_connectors(conn: Connection = Depends(get_tx)):
-    """Global connector catalog (REQ-CON-001: initial set of 6)."""
-    rows = conn.execute(
-        text(
-            "SELECT slug, name, category, capabilities, required_scopes, status "
-            "FROM catalog.connector_catalog ORDER BY slug"
-        )
-    ).mappings()
-    return {"connectors": [dict(r) for r in rows]}
+def list_connectors(
+    principal: Principal = Depends(get_principal),
+    conn: Connection = Depends(get_tx),
+):
+    """Global connector catalog (REQ-CON-001) + per-entry policy state of
+    the caller (spec 037 REQ-037-009: ``allowed_for_caller``)."""
+    return {"connectors": service.catalog_with_policy(conn, principal)}
 
 
 @router.get("/available")

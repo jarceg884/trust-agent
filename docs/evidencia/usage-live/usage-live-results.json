@@ -1,0 +1,83 @@
+{
+  "scenario": "spec 042 REQ-PE-007/AC-007-2 — Usage en vivo (GAP-42-C)",
+  "pickup_ledger_to_ui_seconds": 3.533,
+  "before_requests": 41,
+  "after_requests": 46,
+  "results": [
+    {
+      "name": "C1 badge live visible en el header de Usage (· live, lenguaje Devices)",
+      "pass": true,
+      "detail": "41 requests· live"
+    },
+    {
+      "name": "C2 paridad UI==API: el badge muestra el totals.requests de /api/usage",
+      "pass": true,
+      "detail": "badge=41 api=41"
+    },
+    {
+      "name": "C3a los 5 requests reales llegaron al ledger (spend-worker, ciclo 2 s)",
+      "pass": true,
+      "detail": "total esperado > 41"
+    },
+    {
+      "name": "C3b AC-007-2: la página muestra el request nuevo sin F5 ni clic, ≤ 15 s",
+      "pass": true,
+      "detail": "ledger→UI = 3.5 s (tolerancia +1.5 s de granularidad del poll)"
+    },
+    {
+      "name": "C3c la fila del usuario subió en vivo (requests y tokens del ledger)",
+      "pass": true,
+      "detail": "requests 41→46, tokens_in 112689→112774"
+    },
+    {
+      "name": "C3d cadencia del poll ≈ 15 s mientras la pestaña es visible",
+      "pass": true,
+      "detail": "deltas(s)=15.0"
+    },
+    {
+      "name": "C4a la pestaña pasa a oculta (document.hidden)",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "C4b el refresco se PAUSA con la pestaña oculta (0 fetches en 20 s)",
+      "pass": true,
+      "detail": "fetches durante oculta=0"
+    },
+    {
+      "name": "C4c al volver a ser visible se refresca al momento (≤ 3 s)",
+      "pass": true,
+      "detail": "fetch tras volver visible=2"
+    },
+    {
+      "name": "C5a hay >25 requests reales → el drill-down tiene 2 páginas",
+      "pass": true,
+      "detail": "total=46"
+    },
+    {
+      "name": "C5b drill-down en página 2 (offset 25)",
+      "pass": true,
+      "detail": "26–46 of 46"
+    },
+    {
+      "name": "C5c tras el ciclo de 15 s: diálogo abierto, MISMA página, offset intacto",
+      "pass": true,
+      "detail": "antes='26–46 of 46' después='26–46 of 46' dialog=true"
+    },
+    {
+      "name": "C5d el re-fetch en silencio del drill-down conservó offset=25 (sin reset)",
+      "pass": true,
+      "detail": "offsets=[25]"
+    },
+    {
+      "name": "C5e filtros de la página intactos (período sigue 'Last 30 days')",
+      "pass": true,
+      "detail": "period=30d"
+    },
+    {
+      "name": "C6 sin errores JS ni requests de API fallidos durante todo el flujo",
+      "pass": true,
+      "detail": "js=[] api=[] (excluidos como ruido pre-existing: favicon 404 + prefetch RSC abortados)"
+    }
+  ]
+}

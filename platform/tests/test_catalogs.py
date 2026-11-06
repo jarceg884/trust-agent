@@ -63,3 +63,23 @@ def test_model_catalog_lists_models_with_pricing(client, idp):
 def test_catalogs_require_authentication(client):
     assert client.get("/api/models").status_code == 401
     assert client.get("/api/connectors").status_code == 401
+
+
+def test_connector_catalog_policy_state(client, idp):
+    """Spec 037 (REQ-037-009): cada entrada del catálogo lleva
+    ``allowed_for_caller`` con la regla deny-overrides completa. Alice
+    (org ∩ dept A1) tiene efectivo ['vmware'] → solo vmware True, y el
+    conjunto True coincide con el catálogo ``/available``."""
+    tokens = mint(client, idp, "alice")
+    resp = client.get("/api/connectors", headers=bearer_headers(tokens))
+    assert resp.status_code == 200
+    entries = resp.json()["connectors"]
+    assert entries, "catálogo vacío"
+    for c in entries:
+        assert isinstance(c["allowed_for_caller"], bool), c
+    allowed = {c["slug"] for c in entries if c["allowed_for_caller"]}
+    assert allowed == {"vmware"}, allowed  # email la estrecha el depto A1
+
+    available = client.get("/api/connectors/available",
+                           headers=bearer_headers(tokens)).json()["connectors"]
+    assert {c["slug"] for c in available} == allowed

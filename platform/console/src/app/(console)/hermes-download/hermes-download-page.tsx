@@ -25,9 +25,9 @@ import {
   Link2,
   Mail,
   MousePointerClick,
+  KeyRound,
   ShieldCheck,
   Terminal,
-  UserCheck,
   Download,
   Scale,
 } from "lucide-react";
@@ -54,11 +54,13 @@ function inviteMessage(orgCode: string, downloadUrl: string): string {
   return (
     `Download Trust Agent for our organization (${orgCode}):\n\n` +
     `Desktop app:\n  ${downloadUrl}\n\n` +
-    `CLI (server / VPS / terminal — Linux, macOS, WSL2):\n` +
-    `  curl -fsSL ${downloadUrl}/cli | bash\n\n` +
-    `Install, sign in with your organization account (SSO + MFA) and your ` +
-    `device will be submitted for enrollment approval. From that moment ` +
-    `on, the agent runs under the organization's governance policies.`
+    `CLI (server / VPS / terminal — Linux, macOS, WSL2):\n  ` +
+    `curl -fsSL ${downloadUrl}/cli | bash\n\n` +
+    `Install the desktop app, then activate it with the one-time enrollment ` +
+    `token your admin generates in Users & Roles (it is shown exactly once). ` +
+    `First launch asks for: portal URL, organization (${orgCode}) and token. ` +
+    `No approval step is needed — the admin's token IS the authorization, and ` +
+    `from that moment the agent runs under the organization's governance policies.`
   );
 }
 
@@ -98,7 +100,7 @@ export function HermesDownloadPage({
       <Card {...rise(0)}>
         <CardHeader
           title="Organization admins only"
-          description="Managing the Hermes download link is restricted to organization admins."
+          description="Managing the desktop download link is restricted to organization admins."
         />
         <CardBody>
           <div className="flex flex-col items-center gap-3 px-6 py-10 text-center">
@@ -172,18 +174,18 @@ export function HermesDownloadPage({
     },
     {
       icon: Download,
-      title: "Install and sign in",
-      body: "The desktop app arrives pre-bound to your organization code. First run asks for SSO + MFA with their organization account.",
+      title: "Install the app",
+      body: "The desktop bundle arrives pre-bound to your organization code (portal URL and org are already filled in).",
     },
     {
-      icon: UserCheck,
-      title: "Enrollment approval",
-      body: "The device appears under Devices as a pending enrollment request — you approve it from this console.",
+      icon: KeyRound,
+      title: "Paste your enrollment token",
+      body: "An admin generates a one-time token in Users & Roles → Enrollment token. Paste it on first launch — it is shown exactly once and authorizes this device.",
     },
     {
       icon: Scale,
       title: "Governed from day one",
-      body: "Once approved, the agent runs under your policies: approved models, allowed tools, budget with cutoff, full audit trail.",
+      body: "Activation is immediate (no approval queue): the agent runs under your policies — approved models, allowed tools, budget with cutoff, full audit trail.",
     },
   ];
 
@@ -240,7 +242,7 @@ export function HermesDownloadPage({
       <Card {...rise(1)}>
         <CardHeader
           title="CLI installation"
-          description="For employees working on a server, VPS or terminal: one command installs the governed Hermes CLI, already bound to this organization. Same enrollment, same policies, same audit as the desktop app."
+          description="For employees working on a server, VPS or terminal: one command installs the governed CLI, already bound to this organization. Same enrollment, same policies, same audit as the desktop app."
           actions={
             <Badge tone="neutral">
               <Terminal size={11} className="mr-1" />
@@ -267,9 +269,9 @@ export function HermesDownloadPage({
             />
           </div>
           <p className="text-xs leading-relaxed text-muted">
-            The installer adds the Hermes CLI if it is missing, plus the
-            governance plugin and your branding. The device shows up under
-            Devices as type <span className="font-semibold text-foreground">CLI</span> —
+            The installer adds the CLI if it is missing, plus the governance
+            plugin and your branding. The device shows up under Devices as type
+            <span className="font-semibold text-foreground">CLI</span> —
             you approve it exactly like a desktop.
           </p>
         </CardBody>

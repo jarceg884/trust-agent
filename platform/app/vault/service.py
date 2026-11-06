@@ -71,6 +71,7 @@ def _meta(row: dict) -> dict:
         "credential_type": row["credential_type"],
         "connector_slug": row["connector_slug"],
         "scope": row["scope"],
+        "folder_id": str(row["folder_id"]) if row.get("folder_id") else None,
         "status": row["status"],
         "last_rotated_at": _iso(row.get("last_rotated_at")),
         "last_used_at": _iso(row.get("last_used_at")),
@@ -203,6 +204,7 @@ def create_credential(
     secret_value: str,
     connector_slug: str | None = None,
     scope: str | None = None,
+    folder_id: str | None = None,
 ) -> dict:
     """Register an encrypted credential; the value is returned ONE time only."""
     _check_governance(
@@ -210,6 +212,7 @@ def create_credential(
         credential_type=credential_type,
         connector_slug=connector_slug, scope=scope,
     )
+    folder_id = _validate_folder(conn, principal, folder_id)
     settings = get_settings()
     kek = crypto.load_kek(settings.vault_kek_b64)
     ct_secret, ct_dek, nonce, key_id = crypto.encrypt_secret(
@@ -220,15 +223,16 @@ def create_credential(
             text(
                 "INSERT INTO vault_credentials "
                 "(tenant_id, user_id, name, credential_type, connector_slug, "
-                " scope, ciphertext_secret, ciphertext_dek, nonce, key_id) "
+                " scope, folder_id, ciphertext_secret, ciphertext_dek, nonce, key_id) "
                 "VALUES (CAST(:tid AS uuid), CAST(:uid AS uuid), :name, :ctype, "
-                "        :cslug, :scope, :cts, :ctd, :nonce, :key_id) "
+                "        :cslug, :scope, CAST(:folder_id AS uuid), :cts, :ctd, :nonce, :key_id) "
                 "RETURNING id, created_at"
             ),
             {
                 "tid": principal.tenant_id, "uid": principal.user_id,
                 "name": name, "ctype": credential_type,
                 "cslug": connector_slug, "scope": scope,
+                "folder_id": folder_id,
                 "cts": ct_secret, "ctd": ct_dek, "nonce": nonce,
                 "key_id": key_id,
             },
@@ -249,6 +253,7 @@ def create_credential(
             "credential_type": credential_type,
             "connector_slug": connector_slug,
             "scope": scope,
+            "folder_id": folder_id,
         },
     )
     return {
@@ -261,6 +266,7 @@ def create_credential(
             "credential_type": credential_type,
             "connector_slug": connector_slug,
             "scope": scope,
+            "folder_id": folder_id,
             "status": "active",
             "last_rotated_at": None,
             "last_used_at": None,
@@ -289,6 +295,213 @@ def get_credential(
     """Metadata only — the value never leaves the vault on reads."""
     row = _load_credential(conn, principal, credential_id)
     return _meta(row)
+
+
+# --- Folders (Infisical-style tree, owner-scoped like credentials) --------
+
+def _folder_meta(row: dict) -> dict:
+    return {
+        "id": str(row["id"]),
+        "user_id": str(row["user_id"]),
+        "parent_folder_id": str(row["parent_folder_id"]) if row.get("parent_folder_id") else None,
+        "name": row["name"],
+        "created_at": _iso(row.get("created_at")),
+        "updated_at": _iso(row.get("updated_at")),
+    }
+
+
+def _validate_folder(
+    conn: Connection, principal: Principal, folder_id: str | None
+) -> str | None:
+    """None stays None (root); otherwise the folder must exist and be
+    visible to the caller (same visibility rule as credentials) or 404."""
+    if not folder_id:
+        return None
+    frag, params = _visibility_sql_folder(principal)
+    row = conn.execute(
+        text(
+            "SELECT f.id FROM vault_folders f "
+            "JOIN users owner ON owner.tenant_id = f.tenant_id "
+            "               AND owner.id = f.user_id "
+            f"WHERE f.id = CAST(:fid AS uuid) AND {frag}"
+        ),
+        {"fid": _to_uuid(folder_id), **params},
+    ).first()
+    if row is None:
+        raise not_found("Folder not found.")
+    return str(row[0])
+
+
+def _visibility_sql_folder(principal: Principal) -> tuple[str, dict]:
+    """Same owner/dept_admin/org_admin visibility rule as credentials,
+    applied to vault_folders (aliased ``f``)."""
+    if "org_admin" in principal.role_keys:
+        return "TRUE", {}
+    params: dict = {"uid": principal.user_id}
+    if "dept_admin" in principal.role_keys:
+        depts = dept_scope(principal) or []
+        if depts:
+            return (
+                "(f.user_id = CAST(:uid AS uuid) "
+                " OR owner.department_id = ANY(CAST(:depts AS uuid[])))",
+                {**params, "depts": [_uuid.UUID(d) for d in depts]},
+            )
+    return "f.user_id = CAST(:uid AS uuid)", params
+
+
+def create_folder(
+    conn: Connection,
+    principal: Principal,
+    *,
+    name: str,
+    parent_folder_id: str | None = None,
+) -> dict:
+    """Create a folder (owned by the caller) optionally nested under
+    another folder the caller can see."""
+    name = (name or "").strip()
+    if not name:
+        raise validation_failed("Folder name must not be empty.")
+    parent_folder_id = _validate_folder(conn, principal, parent_folder_id)
+    row = conn.execute(
+        text(
+            "INSERT INTO vault_folders (tenant_id, user_id, parent_folder_id, name) "
+            "VALUES (CAST(:tid AS uuid), CAST(:uid AS uuid), "
+            "        CAST(:parent AS uuid), :name) "
+            "RETURNING id, created_at, updated_at"
+        ),
+        {
+            "tid": principal.tenant_id, "uid": principal.user_id,
+            "parent": parent_folder_id, "name": name,
+        },
+    ).mappings().first()
+    folder_id = str(row["id"])
+    audit.emit(
+        conn,
+        tenant_id=principal.tenant_id,
+        actor_role=_actor_role(principal),
+        actor_id=principal.user_id,
+        action="vault.folder_created",
+        target_type="vault_folder",
+        target_id=folder_id,
+        payload={"name": name, "parent_folder_id": parent_folder_id},
+    )
+    return _folder_meta({
+        "id": folder_id, "user_id": principal.user_id,
+        "parent_folder_id": parent_folder_id, "name": name,
+        "created_at": row["created_at"], "updated_at": row["updated_at"],
+    })
+
+
+def list_folders(conn: Connection, principal: Principal) -> list[dict]:
+    frag, params = _visibility_sql_folder(principal)
+    rows = conn.execute(
+        text(
+            "SELECT f.* FROM vault_folders f "
+            "JOIN users owner ON owner.tenant_id = f.tenant_id "
+            "               AND owner.id = f.user_id "
+            f"WHERE {frag} ORDER BY f.name"
+        ),
+        params,
+    ).mappings()
+    return [_folder_meta(dict(r)) for r in rows]
+
+
+def _load_folder_owned(
+    conn: Connection, principal: Principal, folder_id: str
+) -> dict:
+    """Owner-only load (rename/delete/move are owner-only, same contract
+    as credential rotate: a folder belongs to one person)."""
+    row = conn.execute(
+        text(
+            "SELECT * FROM vault_folders "
+            "WHERE id = CAST(:fid AS uuid) AND user_id = CAST(:uid AS uuid)"
+        ),
+        {"fid": _to_uuid(folder_id), "uid": principal.user_id},
+    ).mappings().first()
+    if row is None:
+        raise not_found("Folder not found.")
+    return dict(row)
+
+
+def rename_folder(
+    conn: Connection, principal: Principal, folder_id: str, *, name: str
+) -> dict:
+    row = _load_folder_owned(conn, principal, folder_id)
+    name = (name or "").strip()
+    if not name:
+        raise validation_failed("Folder name must not be empty.")
+    conn.execute(
+        text(
+            "UPDATE vault_folders SET name = :name, updated_at = now() "
+            "WHERE id = CAST(:fid AS uuid)"
+        ),
+        {"name": name, "fid": row["id"]},
+    )
+    audit.emit(
+        conn, tenant_id=principal.tenant_id, actor_role=_actor_role(principal),
+        actor_id=principal.user_id, action="vault.folder_renamed",
+        target_type="vault_folder", target_id=str(row["id"]),
+        payload={"name": name},
+    )
+    return _folder_meta({**row, "name": name})
+
+
+def delete_folder(
+    conn: Connection, principal: Principal, folder_id: str
+) -> dict:
+    """Delete an EMPTY folder (no sub-folders, no credentials) — moving
+    contents out first keeps deletion non-destructive by default."""
+    row = _load_folder_owned(conn, principal, folder_id)
+    children = conn.execute(
+        text("SELECT count(*) FROM vault_folders WHERE parent_folder_id = CAST(:fid AS uuid)"),
+        {"fid": row["id"]},
+    ).scalar()
+    secrets_inside = conn.execute(
+        text("SELECT count(*) FROM vault_credentials WHERE folder_id = CAST(:fid AS uuid)"),
+        {"fid": row["id"]},
+    ).scalar()
+    if children or secrets_inside:
+        raise conflict(
+            "Folder is not empty. Move its secrets and sub-folders out "
+            "before deleting it."
+        )
+    conn.execute(
+        text("DELETE FROM vault_folders WHERE id = CAST(:fid AS uuid)"),
+        {"fid": row["id"]},
+    )
+    audit.emit(
+        conn, tenant_id=principal.tenant_id, actor_role=_actor_role(principal),
+        actor_id=principal.user_id, action="vault.folder_deleted",
+        target_type="vault_folder", target_id=str(row["id"]),
+        payload={"name": row["name"]},
+    )
+    return {"folder_id": str(row["id"]), "deleted": True}
+
+
+def move_credential(
+    conn: Connection, principal: Principal, credential_id: str,
+    *, folder_id: str | None,
+) -> dict:
+    """Move one secret into a folder (or back to root with folder_id=None).
+
+    Owner-only, same as rotate: moving between folders is a vault-tree
+    edit, not a governance action."""
+    row = _load_credential(conn, principal, credential_id, owner_only=True)
+    folder_id = _validate_folder(conn, principal, folder_id)
+    conn.execute(
+        text(
+            "UPDATE vault_credentials SET folder_id = CAST(:fid AS uuid), "
+            "updated_at = now() WHERE id = CAST(:cid AS uuid)"
+        ),
+        {"fid": folder_id, "cid": str(row["id"])},
+    )
+    audit.emit(
+        conn, tenant_id=principal.tenant_id, actor_role=_actor_role(principal),
+        actor_id=principal.user_id, action="vault.credential_moved",
+        target_type="vault_credential", target_id=str(row["id"]),
+        payload={"folder_id": folder_id},
+    )
+    return _meta({**row, "folder_id": folder_id})
 
 
 def rotate_credential(

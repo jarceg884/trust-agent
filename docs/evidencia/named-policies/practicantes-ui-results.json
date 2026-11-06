@@ -1,0 +1,97 @@
+[
+  {
+    "name": "UI: política 'Practicantes' creada desde la plantilla restringido-total",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "name": "UI: el control de modelos lista los modelos aprobados del tenant (API viva)",
+    "pass": true,
+    "detail": "[\"DeepSeek-V4.1-Flash\",\"DeepSeek-V4.1-Flash-1017\",\"DeepSeek-V4-Flash\",\"GLM-5.1\",\"GLM-5.2\",\"GLM-5.3\",\"Qwen3-32B\"]"
+  },
+  {
+    "name": "UI: se elige el modelo aprobado glm-5.2 (único incluido)",
+    "pass": true,
+    "detail": "matches=1"
+  },
+  {
+    "name": "UI: 'Web search' queda OFF (sin internet — allowed_tools sin web_search)",
+    "pass": true,
+    "detail": "aria-checked=false"
+  },
+  {
+    "name": "UI: 'Where commands run' ON con los 3 backends OFF (allowed_terminal_backends [])",
+    "pass": true,
+    "detail": "\"Where commands run\\n\\nWhich environment the agent may run terminal commands in. Empty = none.\\n\\n✗\\nIsolated Docker container\\n✗\\nDirectly on the machine\\n✗\\nRemote machine (SSH)\\n+ Add item\""
+  },
+  {
+    "name": "UI: 'Agent web browsing' ON en modo allowlist con lista vacía (allowlist vacía)",
+    "pass": true,
+    "detail": "mode=allowlist"
+  },
+  {
+    "name": "UI: 'Action approval' ON = manual",
+    "pass": true,
+    "detail": "\"Action approval\\n\\nHow much human oversight the agent requires before running actions (commands, writes).\\n\\nNo approval — agent acts directly\\nSmart approval — sensitive actions only\\nApprove every action \""
+  },
+  {
+    "name": "HALLAZGO UI: Apply con allowlist vacía → error del control 036 (definition intacta)",
+    "pass": true,
+    "detail": "\"Add at least one domain, or switch the mode back to open.\""
+  },
+  {
+    "name": "API: definition de Practicantes EXACTA (sin web_search, terminal [], solo glm-5.2, manual)",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "name": "UI: preview del diff antes de confirmar (nada escrito hasta confirmar)",
+    "pass": true,
+    "detail": "\"Assign “Practicantes”\\n\\nPreview exactly what will change before it changes — nothing is written until you confirm.\\n\\nAssign to\\nOrganization\\nDepartment\\nUser\\nUser\\nSelect a user…\\nadmin@policies-ux.test\\nDept Admin — deptadmin@policies-ux.test\\nPolicies Worker — worker@policies-ux.test\\n\\nWill be written (17)\\n\\nAgent tools\\n→ Available tools: View governance status, Read files, Write files\\nAction approval\\n→ A\""
+  },
+  {
+    "name": "UI: resultado legible de la asignación (aplicadas al usuario)",
+    "pass": true,
+    "detail": "\"Policy assigned\\n\\nApplied to user “Policies Worker — worker@policies-ux.test”.\\n\\n17 policy keys written with the existing audit and deny-overrides guarantees.\\n\\nDone\""
+  },
+  {
+    "name": "AC-041-014: chip 'Practicantes' en la vista del usuario",
+    "pass": true,
+    "detail": "\"Named policies applied here:\\nPracticantes\""
+  },
+  {
+    "name": "AC-041-014: frases efectivas coherentes (✗ Web search + badge 'Set for this user')",
+    "pass": true,
+    "detail": "\"Agent tools\\n\\nWhich base tools the agent may use. Unchecking \\\"Web search\\\" means: this user can never search the web.\\n\\nCurrent state:\\nAvailable tools: View governance status, Read files, Write files\\n\\nSet for this user\\n✗\\nWeb search\\n✓\\nRead files\\n✓\\nWrite files\\n✓\\nView governance status\\n+ Add item\\nReset to\""
+  },
+  {
+    "name": "API: allowed_tools SIN web_search (user)",
+    "pass": true,
+    "detail": "{\"key\":\"allowed_tools\",\"value_type\":\"list\",\"invariable\":false,\"org_only\":false,\"default_value\":[\"web_search\",\"read_file\",\"write_file\",\"governance_status\"],\"org_value\":null,\"dept_value\":null,\"user_value\":[\"governance_status\",\"read_file\",\"write_file\"],\"org_effective\":[\"web_search\",\"read_file\",\"write_file\",\"governance_status\"],\"dept_effective\":[\"web_search\",\"read_file\",\"write_file\",\"governance_status\"],\"effective\":[\"governance_status\",\"read_file\",\"write_file\"],\"source\":\"user\",\"tightened_by_dept\":false,\"tightened_by_user\":true,\"denied\":false}"
+  },
+  {
+    "name": "API: allowed_terminal_backends == [] (user)",
+    "pass": true,
+    "detail": "{\"key\":\"allowed_terminal_backends\",\"value_type\":\"list\",\"invariable\":false,\"org_only\":false,\"default_value\":[\"docker\"],\"org_value\":null,\"dept_value\":null,\"user_value\":[],\"org_effective\":[\"docker\"],\"dept_effective\":[\"docker\"],\"effective\":[],\"source\":\"user\",\"tightened_by_dept\":false,\"tightened_by_user\":true,\"denied\":true}"
+  },
+  {
+    "name": "API: allowed_models == [\"glm-5.2\"] (user)",
+    "pass": true,
+    "detail": "{\"key\":\"allowed_models\",\"value_type\":\"list\",\"invariable\":false,\"org_only\":false,\"default_value\":null,\"org_value\":null,\"dept_value\":null,\"user_value\":[\"glm-5.2\"],\"org_effective\":null,\"dept_effective\":null,\"effective\":[\"glm-5.2\"],\"source\":\"user\",\"tightened_by_dept\":false,\"tightened_by_user\":true,\"denied\":false}"
+  },
+  {
+    "name": "API: approval_mode == manual (user)",
+    "pass": true,
+    "detail": "{\"key\":\"approval_mode\",\"value_type\":\"string\",\"invariable\":false,\"org_only\":false,\"default_value\":\"smart\",\"org_value\":null,\"dept_value\":null,\"user_value\":\"manual\",\"org_effective\":\"smart\",\"dept_effective\":\"smart\",\"effective\":\"manual\",\"source\":\"user\",\"tightened_by_dept\":false,\"tightened_by_user\":true,\"denied\":false}"
+  },
+  {
+    "name": "API: web_domain_policy == allowlist vacía (user)",
+    "pass": true,
+    "detail": "{\"key\":\"web_domain_policy\",\"value_type\":\"map\",\"invariable\":false,\"org_only\":false,\"default_value\":{\"mode\":\"open\",\"domains\":[]},\"org_value\":null,\"dept_value\":null,\"user_value\":{\"mode\":\"allowlist\",\"domains\":[]},\"org_effective\":{\"mode\":\"open\",\"domains\":[]},\"dept_effective\":{\"mode\":\"open\",\"domains\":[]},\"effective\":{\"mode\":\"allowlist\",\"domains\":[]},\"source\":\"user\",\"tightened_by_dept\":false,\"tightened_by_user\":true,\"denied\":true}"
+  },
+  {
+    "name": "UI: sin errores de consola reales (favicon/prefetch RSC excluidos)",
+    "pass": true,
+    "detail": "{\"realErrors\":[],\"realFailed\":[]}"
+  }
+]

@@ -71,6 +71,7 @@ class GovernanceState:
             self.reason = ""
             self.last_sync_at = time.time()
             self.last_sync_error = None
+        self._persist_status_file()
 
     def enter_restricted(self, reason: str) -> None:
         """Fail-closed: modo RESTRINGIDO (sin gracia cuando reason=revoked)."""
@@ -81,10 +82,12 @@ class GovernanceState:
                 # Desligado/revocado o sin bundle: la caché deja de ser
                 # autoridad (REQ-GOH-010 la invalida; sin caché no hay nada).
                 self.payload = None
+        self._persist_status_file()
 
     def record_sync_error(self, message: str) -> None:
         with self._lock:
             self.last_sync_error = message
+        self._persist_status_file()
 
     def record_veto(self, tool: str) -> None:
         with self._lock:
@@ -127,6 +130,33 @@ class GovernanceState:
                 ),
                 "veto_counts": dict(self.veto_counts),
             }
+
+    def _persist_status_file(self) -> None:
+        """Best-effort mirror of :meth:`snapshot` to ``$HERMES_HOME/trust-agent/
+        governance_status.json`` (same dir/atomic-write convention as
+        ``capability-findings.json`` / ``veto-counts.json``) so a surface
+        OUTSIDE the agent process -- Trust Agent Desktop's Settings UI, read
+        by Electron's main process, never the renderer directly -- can show
+        live governance state without going through a chat turn. Lazy import:
+        ``bundle_client`` already imports this module, so a top-level import
+        here would cycle.
+        """
+        try:
+            from . import bundle_client  # local import: breaks the cycle
+
+            data = self.snapshot()
+            trust_dir = bundle_client.trust_dir()
+            tmp = trust_dir / "governance_status.json.tmp"
+            tmp.write_text(_json_dumps(data), encoding="utf-8")
+            tmp.replace(trust_dir / "governance_status.json")
+        except OSError:
+            pass  # best-effort: a stale/missing status file never blocks enforcement
+
+
+def _json_dumps(data: dict[str, Any]) -> str:
+    import json
+
+    return json.dumps(data, indent=2, default=str)
 
 
 _STATE = GovernanceState()

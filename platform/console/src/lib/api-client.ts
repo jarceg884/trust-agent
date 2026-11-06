@@ -10,18 +10,25 @@ export class ApiError extends Error {
   status: number;
   reason: string;
   requestId: string | null;
+  /** Envelope COMPLETO de la respuesta de error (spec 041): el control
+   *  plane fusiona los details al nivel superior (p. ej. `assignments`
+   *  de un 409 al borrar una política con asignaciones, o `errors` por
+   *  key de un 422). La UI los lee para diálogos con detalle real. */
+  payload: Record<string, unknown> | null;
 
   constructor(
     status: number,
     reason: string,
     message: string,
     requestId: string | null,
+    payload: Record<string, unknown> | null = null,
   ) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.reason = reason;
     this.requestId = requestId;
+    this.payload = payload;
   }
 }
 
@@ -95,6 +102,7 @@ export async function api<T = unknown>(
       err.reason ?? "error",
       err.message ?? `Request failed (HTTP ${res.status}).`,
       err.request_id ?? null,
+      (payload ?? null) as Record<string, unknown> | null,
     );
   }
   return payload as T;

@@ -45,6 +45,18 @@ STRUCTURAL_CLAIMS = frozenset({
     "tenant_id", "user_id", "device_id",
     "policy_version", "schema_version",
     "budget", "approved_models", "allowed_connections",
+    # Instrucciones de la organización (policy bundles spec 044): viajan en
+    # el bundle firmado y se INYECTAN en el system prompt como sección
+    # gobernada. No son una policy key con enforcement booleano — son texto.
+    "global_prompt",
+    # Superficies del Policy Bundle (spec 044) que el bundle firmado
+    # transporta para el desktop/gateway (modelos por defecto, perfiles,
+    # agentes, contratos, credenciales y flags de UI). Son datos
+    # estructurales del payload — no policy keys del catálogo — y el plugin
+    # los ignora deliberadamente (los consume la capa desktop), así que no
+    # deben contar como "unknown policy keys".
+    "ui_features", "policy_credentials", "policy_profiles", "policy_models",
+    "policy_default_model", "policy_agents", "policy_contracts",
 })
 
 # Keys del catálogo que este plugin conoce (18 existentes + 29 nuevas de la
@@ -58,7 +70,7 @@ KNOWN_POLICY_KEYS = frozenset({
     "vault_allowed_credential_types", "session_timeout_minutes",
     "artifact_sharing", "messaging_permissions", "max_daily_sessions",
     "allowed_tools", "offline_grace_minutes", "unbind_mode",
-    "attestation_overdue_hours",
+    "attestation_overdue_hours", "policy_models", "policy_default_model",
     # ``allowed_connections`` es STRUCTURAL (se compila aparte, spec 024).
     # --- 29 keys nuevas (matriz de capacidades §3, P-1..P-29) ---
     "approval_mode", "allowed_terminal_backends", "denied_command_patterns",
@@ -108,6 +120,8 @@ RESTRICTIVE_DEFAULTS: dict[str, Any] = {
     "allowed_env_passthrough": [],
     "allowed_providers": [],
     "allowed_models": [],
+    "policy_models": [],
+    "policy_default_model": "",
     "allowed_tools": [],
     "allowed_connectors": [],
     # deny-lists: ausente = sin denegaciones EXTRA (no desbloquean nada:

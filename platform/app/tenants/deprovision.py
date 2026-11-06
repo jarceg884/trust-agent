@@ -69,6 +69,10 @@ _DELETE_ORDER: list[str] = [
     "budget_counters",
     "spend_ledger",            # → users, departments
     "policies",                # → departments, users
+    # spec 041: las asignaciones referencian named_policies + departments/
+    # users; van ANTES que named_policies (FK) y que users/departments.
+    "named_policy_assignments",
+    "named_policies",
     "branding_versions",
     "branding_assets",
     "user_roles",              # → users, departments

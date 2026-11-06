@@ -87,12 +87,16 @@ INSERT INTO catalog.permissions (key, description) VALUES
   ('audit.view',             'View audit log (scoped by role).'),
   ('connectors.manage',      'Manage tenant/department connectors.'),
   ('vault.view_metadata',    'View vault credential metadata (never secrets).'),
-  ('desktop.use',            'Use the desktop and agents.')
+  ('desktop.use',            'Use the desktop and agents.'),
+  -- t_4f4b0eb1 (deprovisioning): permiso MÁS restrictivo que provision —
+  -- borrar es irreversible. Migración 0031 (paridad pg_dump).
+  ('tenants.delete',         'Deprovision/delete tenants and all their data (provider, irreversible).')
 ON CONFLICT (key) DO NOTHING;
 
 -- Matriz RBAC exacta de spec 001 §2.1
 INSERT INTO catalog.role_permissions (role_key, permission_key) VALUES
   ('platform_admin', 'tenants.provision'),
+  ('platform_admin', 'tenants.delete'),
   ('platform_admin', 'catalog.manage'),
   ('org_admin',      'branding.manage'),
   ('org_admin',      'departments.manage'),
@@ -234,20 +238,28 @@ CREATE TABLE IF NOT EXISTS catalog.model_catalog (
   context_tokens           bigint,                        -- contexto documentado (Model List intl)
   max_output_tokens        bigint,                        -- máx. output documentado
   -- Columnas de la migración 0024 (spec 032, discovery dinámico):
-  tenant_id                uuid,                          -- byok: tenant dueño de la conexión
+  tenant_id                uuid,                          -- byok/provider: tenant dueño (fila por cliente habilitado)
   connection_id            uuid,                          -- byok: conexión llm (FK se añade en §16)
-  source                   text NOT NULL DEFAULT 'central' CHECK (source IN ('central','byok')),
+  source                   text NOT NULL DEFAULT 'central' CHECK (source IN ('central','byok','provider')),
   last_seen_at             timestamptz,                   -- último refresh que vio el modelo en la API
   gateway_model_id         text,                          -- id del modelo en el gateway LiteLLM (/model/delete)
+  provider_id              uuid,                          -- provider: ops.model_providers (FK se añade en §22)
   CONSTRAINT model_catalog_source_scope_check CHECK (
-    (source = 'central' AND tenant_id IS NULL AND connection_id IS NULL) OR
-    (source = 'byok'   AND tenant_id IS NOT NULL AND connection_id IS NOT NULL)
+    (source = 'central'   AND tenant_id IS NULL AND connection_id IS NULL
+                          AND provider_id IS NULL) OR
+    (source = 'byok'      AND tenant_id IS NOT NULL AND connection_id IS NOT NULL) OR
+    (source = 'provider'  AND tenant_id IS NOT NULL AND provider_id IS NOT NULL
+                          AND connection_id IS NULL)
   )
 );
 CREATE UNIQUE INDEX IF NOT EXISTS model_catalog_central_name_uidx
   ON catalog.model_catalog (model_name) WHERE source = 'central';
 CREATE UNIQUE INDEX IF NOT EXISTS model_catalog_byok_uidx
   ON catalog.model_catalog (connection_id, model_name) WHERE source = 'byok';
+-- spec 036: el MISMO model_name prov:{provider}:{upstream} se comparte entre
+-- los tenants habilitados (una fila por tenant) — unicidad por (tenant, name).
+CREATE UNIQUE INDEX IF NOT EXISTS model_catalog_provider_uidx
+  ON catalog.model_catalog (tenant_id, model_name) WHERE source = 'provider';
 CREATE INDEX IF NOT EXISTS model_catalog_tenant_idx
   ON catalog.model_catalog (tenant_id, source);
 
@@ -335,6 +347,7 @@ INSERT INTO catalog.audit_actions (action, description) VALUES
   ('tenant.reactivated',         'Tenant reactivated.'),
   ('tenant.self_registered',     'Organization created via public self-signup (spec 026, pending activation).'),
   ('tenant.activated',           'Tenant activated by provider from pending_activation (spec 026).'),
+  ('tenant.deleted',             'Tenant deprovisioned by provider: Keycloak realm + every row removed (irreversible). Event lives in ops.provider_audit.'),
   ('budget.assigned',            'Initial budget assigned by the provider on activation (spec 026).'),
   ('audit.verified',             'Audit chain verification run.'),
   ('audit.purged',               'Audit retention purge executed.'),
@@ -500,7 +513,7 @@ CREATE TABLE IF NOT EXISTS spend_ledger (
   user_id           uuid,
   department_id     uuid,
   model_name        text NOT NULL,
-  mode              text NOT NULL CHECK (mode IN ('central','byok')),
+  mode              text NOT NULL CHECK (mode IN ('central','byok','provider')),  -- provider: modelos del provider (spec 036); espeja model_access.mode (D-GOV-06)
   cost_base_cents   numeric(12,3) NOT NULL CHECK (cost_base_cents >= 0),    -- milli-centavo (D-GOV-17, migración 0029)
   cost_billed_cents numeric(12,3) NOT NULL CHECK (cost_billed_cents >= 0),  -- milli-centavo (D-GOV-17, migración 0029)
   tokens_in         bigint NOT NULL DEFAULT 0 CHECK (tokens_in >= 0),
@@ -650,7 +663,7 @@ CREATE TABLE IF NOT EXISTS model_access (
   level         text NOT NULL CHECK (level IN ('org','dept','user')),
   department_id uuid,
   user_id       uuid,
-  mode          text NOT NULL DEFAULT 'central' CHECK (mode IN ('central','byok')),
+  mode          text NOT NULL DEFAULT 'central' CHECK (mode IN ('central','byok','provider')),
   status        text NOT NULL DEFAULT 'approved' CHECK (status IN ('approved','pending','denied')),
   created_at    timestamptz NOT NULL DEFAULT now(),
   updated_at    timestamptz NOT NULL DEFAULT now(),
@@ -1725,4 +1738,255 @@ GRANT ALL ON TABLE ops.auth_dances TO trust_migrator;
 INSERT INTO catalog.audit_actions (action, description) VALUES
   ('auth.totp_enrolled', 'TOTP (MFA) enrolled via the auth panel.'),
   ('auth.password_changed', 'Password set or changed via the auth panel.')
+ON CONFLICT (action) DO NOTHING;
+
+-- ============================================================================
+-- 22. Evolución spec 036 (model providers — repro Miller t_64e645c1):
+--     proveedores de modelos operados por el provider + habilitación por
+--     tenant. Misma migración: db/migrations/versions/20261028_0032_model_providers.py
+--     (paridad pg_dump exigida por db/tests/test_schema_parity.py)
+-- ============================================================================
+
+-- 22.1 ops.model_providers — registro del provider (D-036-01). La key vive
+--      SOLO como envelope ciphertext (mismo crypto que vault_connections);
+--      el descifrado es en memoria, por uso, server-side (KEK). Plano
+--      provider: sin RLS (D-DB-01/D-DB-14, patrón ops.provider_operators).
+CREATE TABLE IF NOT EXISTS ops.model_providers (
+  id                       uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name                     text NOT NULL UNIQUE,
+  display_name             text,
+  base_url                 text NOT NULL,
+  status                   text NOT NULL DEFAULT 'active'
+                             CHECK (status IN ('active','disabled')),
+  ciphertext_secret        bytea NOT NULL,
+  ciphertext_dek           bytea NOT NULL,
+  nonce                    bytea NOT NULL,
+  key_id                   text NOT NULL,
+  input_price_cents_per_m  numeric(12,3) CHECK (input_price_cents_per_m >= 0),
+  output_price_cents_per_m numeric(12,3) CHECK (output_price_cents_per_m >= 0),
+  created_at               timestamptz NOT NULL DEFAULT now(),
+  updated_at               timestamptz NOT NULL DEFAULT now()
+);
+
+-- 22.2 ops.model_provider_tenants — habilitación por cliente: la "política
+--      de accesos" del proveedor. Sin fila o enabled=false, el cliente NO
+--      ve los modelos del proveedor (gate compuesto D-036-03).
+CREATE TABLE IF NOT EXISTS ops.model_provider_tenants (
+  provider_id  uuid NOT NULL REFERENCES ops.model_providers(id)
+                 ON DELETE CASCADE,
+  tenant_id    uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  enabled      boolean NOT NULL DEFAULT true,
+  enabled_at   timestamptz NOT NULL DEFAULT now(),
+  disabled_at  timestamptz,
+  PRIMARY KEY (provider_id, tenant_id)
+);
+
+CREATE INDEX IF NOT EXISTS model_provider_tenants_tenant_idx
+  ON ops.model_provider_tenants (tenant_id);
+
+-- 22.3 FK de catalog.model_catalog.provider_id (la tabla ops se crea aquí;
+--      mismo patrón diferido que §16 para connection_id).
+ALTER TABLE catalog.model_catalog
+  ADD CONSTRAINT model_catalog_provider_id_fkey
+  FOREIGN KEY (provider_id) REFERENCES ops.model_providers(id)
+  ON DELETE SET NULL;
+
+GRANT SELECT, INSERT, UPDATE ON TABLE ops.model_providers TO trust_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE ops.model_provider_tenants TO trust_app;
+GRANT ALL ON TABLE ops.model_providers TO trust_migrator;
+GRANT ALL ON TABLE ops.model_provider_tenants TO trust_migrator;
+
+-- 22.4 Permiso nuevo (data-driven, D-ONB-02) + grant a platform_admin: el
+--      operador del provider gestiona proveedores de modelos.
+INSERT INTO catalog.permissions (key, description) VALUES
+  ('providers.manage',
+   'Register/refresh model providers and enable them per tenant (provider).')
+ON CONFLICT (key) DO NOTHING;
+
+INSERT INTO catalog.role_permissions (role_key, permission_key) VALUES
+  ('platform_admin', 'providers.manage')
+ON CONFLICT (role_key, permission_key) DO NOTHING;
+
+-- 22.5 Acciones de audit (enum versionado, extensión por datos): los
+--      eventos SOBRE el tenant. Los del operador viven en ops.provider_audit
+--      (spec 025 D-PS-07). Sin material de key jamás.
+INSERT INTO catalog.audit_actions (action, description) VALUES
+  ('model.provider_enabled',
+   'Provider model source enabled for the tenant by the provider (models approved at org level).'),
+  ('model.provider_disabled',
+   'Provider model source disabled for the tenant by the provider (its models went stale).'),
+  -- Operator-plane events (ops.provider_audit has FK → audit_actions,
+  -- data-driven I10). Migración 0032 (paridad pg_dump).
+  ('provider.created',
+   'Model provider registered by a provider operator (key in vault envelope, never in the payload).'),
+  ('provider.refreshed',
+   'Model provider catalog refreshed by a provider operator (real upstream fetch).'),
+  ('provider.tenant_enabled',
+   'Model provider enabled for a tenant by a provider operator.'),
+  ('provider.tenant_disabled',
+   'Model provider disabled for a tenant by a provider operator.'),
+  ('provider.suspended',
+   'Model provider suspended globally by a provider operator.'),
+  ('provider.reactivated',
+   'Model provider reactivated globally by a provider operator.')
+ON CONFLICT (action) DO NOTHING;
+
+-- ============================================================================
+-- 23. Evolución deprovisioning de tenants (t_4f4b0eb1, migración 0031).
+--     Los INSERT de catálogo (tenant.deleted / tenants.delete / grant a
+--     platform_admin) viven en las secciones 3.x de arriba. Aquí va el
+--     GRANT HEALING: las tablas creadas DESPUÉS del grant blanket de la
+--     sección 8 (agents, agent_grants, notifications, vault_connections,
+--     branding_assets, branding_versions) nunca recibieron DELETE para
+--     trust_migrator — el deprovisioning corre como migrator (BYPASSRLS)
+--     y revienta con InsufficientPrivilege (verificado en la DB real).
+--     Re-grant blanket idempotente; la migración 0031 ejecuta las MISMAS
+--     sentencias (paridad pg_dump, db/tests/test_schema_parity.py).
+-- ============================================================================
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public, catalog, ops TO trust_migrator;
+GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO trust_migrator;
+
+-- ============================================================================
+-- 24. Evolución spec 038 (departments onboarding — estructura real al nacer):
+--     flag por tenant que arranca PENDIENTE para todos (nuevos y existentes)
+--     + acción de audit del cierre. Misma migración:
+--     db/migrations/versions/20261028_0033_departments_onboarding.py
+--     (paridad pg_dump exigida por db/tests/test_schema_parity.py)
+-- ============================================================================
+
+-- 24.1 Flag de onboarding de estructura (D-38-02): DEFAULT true backfilla a
+--      los tenants existentes — cada org_admin ve el wizard "Organization
+--      structure" UNA vez en su próximo login con el tenant active.
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS
+  structure_onboarding_pending boolean NOT NULL DEFAULT true;
+
+-- 24.2 Acción de audit del cierre (D-38-06, técnica INSERT-only de la
+--      migración 0009): payload {source: "wizard"|"skip", created,
+--      renamed, deleted}; se emite solo en la transición pendiente ->
+--      completado (actor = el org_admin).
+INSERT INTO catalog.audit_actions (action, description) VALUES
+  ('onboarding.structure_completed',
+   'Organization structure onboarding completed (wizard confirm or skip).')
+ON CONFLICT (action) DO NOTHING;
+
+-- ============================================================================
+-- 25. Evolución spec 041 (políticas nombradas — visión Miller): una política
+--     nombrada = preset de policy keys; la asignación MATERIALIZA vía
+--     policies.upsert existente (engine intacto, D-41-01). Misma migración:
+--     db/migrations/versions/20261029_0034_named_policies.py
+--     (paridad pg_dump exigida por db/tests/test_schema_parity.py). El
+--     backfill de plantillas para tenants existentes vive SOLO en la
+--     migración (schema.sql corre sobre una DB vacía); el provisioning
+--     nuevo siembra desde platform/app/governance/named_policies.py.
+-- ============================================================================
+
+-- 25.1 named_policies — el preset: name + description + definition (mapa
+--      key→value sobre las 44 keys no invariables) + source_template
+--      ('builtin:<slug>' para las plantillas sembradas, D-41-08).
+CREATE TABLE IF NOT EXISTS named_policies (
+  id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id      uuid NOT NULL REFERENCES tenants(id),
+  name           text NOT NULL,
+  description    text,
+  definition     jsonb NOT NULL,
+  source_template text,
+  created_by     uuid,
+  created_at     timestamptz NOT NULL DEFAULT now(),
+  updated_at     timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS named_policies_tenant_name_uidx
+  ON named_policies (tenant_id, name);
+-- Seed idempotente POR SLUG (D-41-08): re-correr el seed no duplica; si el
+-- admin borra la plantilla, el slug queda libre (son políticas comunes).
+CREATE UNIQUE INDEX IF NOT EXISTS named_policies_template_uidx
+  ON named_policies (tenant_id, source_template)
+  WHERE source_template IS NOT NULL;
+CREATE INDEX IF NOT EXISTS named_policies_tenant_idx
+  ON named_policies (tenant_id);
+
+-- 25.2 named_policy_assignments — una fila por (política, destinatario):
+--      applied_keys = snapshot de ownership (D-41-05), applied_at = marcador
+--      de stale vs named_policies.updated_at (D-41-06).
+CREATE TABLE IF NOT EXISTS named_policy_assignments (
+  id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id        uuid NOT NULL REFERENCES tenants(id),
+  named_policy_id  uuid NOT NULL REFERENCES named_policies(id)
+                     ON DELETE CASCADE,
+  level            text NOT NULL CHECK (level IN ('org','dept','user')),
+  department_id    uuid,
+  user_id          uuid,
+  applied_keys     jsonb NOT NULL,
+  applied_at       timestamptz NOT NULL DEFAULT now(),
+  created_by       uuid,
+  created_at       timestamptz NOT NULL DEFAULT now(),
+  updated_at       timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT named_policy_assignments_scope_check CHECK (
+    (level = 'org'  AND department_id IS NULL     AND user_id IS NULL) OR
+    (level = 'dept' AND department_id IS NOT NULL AND user_id IS NULL) OR
+    (level = 'user' AND department_id IS NOT NULL AND user_id IS NOT NULL)
+  ),
+  FOREIGN KEY (tenant_id, department_id) REFERENCES departments (tenant_id, id),
+  FOREIGN KEY (tenant_id, user_id) REFERENCES users (tenant_id, id)
+);
+-- UNIQUE por (política, destinatario) — los NULL de org no colisionan
+-- (mismo truco que policies_scope_uidx).
+CREATE UNIQUE INDEX IF NOT EXISTS named_policy_assignments_scope_uidx
+  ON named_policy_assignments (named_policy_id, level,
+    COALESCE(department_id, '00000000-0000-0000-0000-000000000000'::uuid),
+    COALESCE(user_id,       '00000000-0000-0000-0000-000000000000'::uuid));
+CREATE INDEX IF NOT EXISTS named_policy_assignments_tenant_idx
+  ON named_policy_assignments (tenant_id);
+CREATE INDEX IF NOT EXISTS named_policy_assignments_policy_idx
+  ON named_policy_assignments (named_policy_id);
+
+DROP TRIGGER IF EXISTS named_policies_set_updated_at ON named_policies;
+CREATE TRIGGER named_policies_set_updated_at
+  BEFORE UPDATE ON named_policies
+  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+DROP TRIGGER IF EXISTS named_policy_assignments_set_updated_at
+  ON named_policy_assignments;
+CREATE TRIGGER named_policy_assignments_set_updated_at
+  BEFORE UPDATE ON named_policy_assignments
+  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- 25.3 RLS: mismo patrón fail-closed + FORCE que la sección 7.
+DO $$
+DECLARE
+  t text;
+  tables text[] := ARRAY['named_policies','named_policy_assignments'];
+BEGIN
+  FOREACH t IN ARRAY tables
+  LOOP
+    EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', t);
+    EXECUTE format('ALTER TABLE public.%I FORCE ROW LEVEL SECURITY', t);
+    EXECUTE format($p$
+      CREATE POLICY tenant_isolation ON public.%I
+        FOR ALL TO trust_app
+        USING      (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
+        WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
+    $p$, t);
+  END LOOP;
+END $$;
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
+  named_policies, named_policy_assignments TO trust_app;
+-- El deprovisioning (sección 23) borra por tenant_id como trust_migrator.
+GRANT ALL PRIVILEGES ON TABLE
+  named_policies, named_policy_assignments TO trust_migrator;
+
+-- 25.4 Acciones de audit (enum versionado, extensión por datos — FK de
+--      audit_log.action). Migración 0034 (paridad pg_dump).
+INSERT INTO catalog.audit_actions (action, description) VALUES
+  ('named_policy.created',
+   'Named policy created (preset of policy keys, spec 041).'),
+  ('named_policy.updated',
+   'Named policy edited; existing assignments become stale until reapplied.'),
+  ('named_policy.deleted',
+   'Named policy deleted (only without active assignments, or after cascade unassign).'),
+  ('named_policy.assigned',
+   'Named policy assigned to org/dept/user: keys materialized via policies.upsert in one transaction.'),
+  ('named_policy.unassigned',
+   'Named policy unassigned: only snapshot-owned keys deactivated; manually edited keys kept.'),
+  ('named_policy.reapplied',
+   'Stale assignment re-materialized (best-effort per recipient).')
 ON CONFLICT (action) DO NOTHING;

@@ -1,0 +1,959 @@
+{
+  "$schema_version": "1.0.0",
+  "$nota": "Contrato canónico del Policy Builder de políticas nombradas (spec 041, visión Miller). Grupos del sidebar + capacidades (items) mapeadas 1:1 sobre las 44 keys no invariables de catalog.policy_keys + plantillas pre-cargadas. La UI JAMÁS hardcodea este archivo: lo consume del backend (D-41-02). La verdad de validación/combinación sigue en el control plane (422/deny-overrides).",
+  "groups": [
+    {
+      "id": "web",
+      "icon": "Globe",
+      "name": {
+        "es": "Navegación y web",
+        "en": "Navigation & web"
+      },
+      "description": {
+        "es": "Qué puede hacer el agente en internet: buscar, navegar sitios, acceder a redes internas.",
+        "en": "What the agent can do on the internet: search, browse sites, reach internal networks."
+      }
+    },
+    {
+      "id": "system",
+      "icon": "SquareTerminal",
+      "name": {
+        "es": "Sistema y terminal",
+        "en": "System & terminal"
+      },
+      "description": {
+        "es": "Ejecución en el equipo: terminal, comandos, archivos, sandbox y aprobación de acciones.",
+        "en": "Machine execution: terminal, commands, files, sandbox and action approval."
+      }
+    },
+    {
+      "id": "comms",
+      "icon": "MessagesSquare",
+      "name": {
+        "es": "Comunicaciones",
+        "en": "Communications"
+      },
+      "description": {
+        "es": "Canales de salida del agente: conectores de aplicaciones, conexiones del vault, mensajería, voz y bots.",
+        "en": "Agent outbound channels: app connectors, vault connections, messaging, voice and bots."
+      }
+    },
+    {
+      "id": "models",
+      "icon": "Cpu",
+      "name": {
+        "es": "Modelos",
+        "en": "Models"
+      },
+      "description": {
+        "es": "Qué modelos de IA y proveedores puede usar el agente.",
+        "en": "Which AI models and providers the agent may use."
+      }
+    },
+    {
+      "id": "security",
+      "icon": "ShieldCheck",
+      "name": {
+        "es": "Seguridad",
+        "en": "Security"
+      },
+      "description": {
+        "es": "Sesión, dispositivo, datos y acceso: MFA, expiración, retención, vault y privilegios.",
+        "en": "Session, device, data and access: MFA, timeouts, retention, vault and privileges."
+      }
+    },
+    {
+      "id": "agent",
+      "icon": "Bot",
+      "name": {
+        "es": "Agente y automatización",
+        "en": "Agent & automation"
+      },
+      "description": {
+        "es": "Autonomía del agente: skills, plugins, MCP, memoria, personalidad, tareas y modos automáticos.",
+        "en": "Agent autonomy: skills, plugins, MCP, memory, personality, tasks and automatic modes."
+      }
+    }
+  ],
+  "items": [
+    {
+      "id": "allowed_tools:web_search",
+      "group": "web",
+      "type": "list-item",
+      "key": "allowed_tools",
+      "item": "web_search",
+      "icon": "Search",
+      "name": {
+        "es": "Búsqueda en internet",
+        "en": "Web search"
+      },
+      "description": {
+        "es": "Permite al agente buscar información en internet antes de responder.",
+        "en": "Lets the agent search the internet for information before answering."
+      },
+      "default_on": true
+    },
+    {
+      "id": "web_domain_policy",
+      "group": "web",
+      "type": "scalar",
+      "key": "web_domain_policy",
+      "icon": "Globe",
+      "name": {
+        "es": "Navegación web del agente",
+        "en": "Agent web browsing"
+      },
+      "description": {
+        "es": "Qué sitios puede visitar el agente cuando busca o lee páginas web. Ejemplo: «jamás podrá buscar en internet» se logra bloqueando la herramienta de búsqueda; aquí se afina a qué dominios puede entrar.",
+        "en": "Which sites the agent may visit when searching or reading web pages."
+      },
+      "default_value": {
+        "mode": "open",
+        "domains": []
+      }
+    },
+    {
+      "id": "allow_private_network_access",
+      "group": "web",
+      "type": "scalar",
+      "key": "allow_private_network_access",
+      "icon": "Network",
+      "name": {
+        "es": "Acceso a la red interna",
+        "en": "Private network access"
+      },
+      "description": {
+        "es": "Permite que el agente reachée direcciones de red interna (servidores, IPs privadas del cliente).",
+        "en": "Lets the agent reach internal network addresses (servers, private IPs)."
+      },
+      "default_value": false
+    },
+    {
+      "id": "allowed_tools:read_file",
+      "group": "system",
+      "type": "list-item",
+      "key": "allowed_tools",
+      "item": "read_file",
+      "icon": "FileText",
+      "name": {
+        "es": "Leer archivos",
+        "en": "Read files"
+      },
+      "description": {
+        "es": "Permite al agente leer archivos del equipo del usuario.",
+        "en": "Lets the agent read files on the user's machine."
+      },
+      "default_on": true
+    },
+    {
+      "id": "allowed_tools:write_file",
+      "group": "system",
+      "type": "list-item",
+      "key": "allowed_tools",
+      "item": "write_file",
+      "icon": "FilePen",
+      "name": {
+        "es": "Escribir archivos",
+        "en": "Write files"
+      },
+      "description": {
+        "es": "Permite al agente crear y modificar archivos del equipo del usuario.",
+        "en": "Lets the agent create and modify files on the user's machine."
+      },
+      "default_on": true
+    },
+    {
+      "id": "allowed_terminal_backends",
+      "group": "system",
+      "type": "scalar",
+      "key": "allowed_terminal_backends",
+      "icon": "SquareTerminal",
+      "name": {
+        "es": "Dónde ejecuta comandos",
+        "en": "Where commands run"
+      },
+      "description": {
+        "es": "En qué entorno puede el agente ejecutar comandos de terminal. Vacío = no puede ejecutar ninguno.",
+        "en": "Which environment the agent may run terminal commands in. Empty = none."
+      },
+      "default_value": [
+        "docker"
+      ]
+    },
+    {
+      "id": "allowed_command_patterns",
+      "group": "system",
+      "type": "scalar",
+      "key": "allowed_command_patterns",
+      "icon": "ListChecks",
+      "name": {
+        "es": "Comandos permitidos",
+        "en": "Allowed commands"
+      },
+      "description": {
+        "es": "Patrones de comandos que el agente puede ejecutar (p. ej. «git *», «ls *»). Vacío = ningún comando permitido.",
+        "en": "Command patterns the agent may run (e.g. \"git *\", \"ls *\"). Empty = no commands allowed."
+      },
+      "default_value": [],
+      "requires_choice": true
+    },
+    {
+      "id": "denied_command_patterns",
+      "group": "system",
+      "type": "scalar",
+      "key": "denied_command_patterns",
+      "icon": "Ban",
+      "name": {
+        "es": "Comandos bloqueados",
+        "en": "Blocked commands"
+      },
+      "description": {
+        "es": "Comandos que el agente jamás puede ejecutar, aunque estén permitidos arriba (p. ej. «rm -rf *»).",
+        "en": "Commands the agent may never run, even if allowed above (e.g. \"rm -rf *\")."
+      },
+      "default_value": []
+    },
+    {
+      "id": "require_write_sandbox",
+      "group": "system",
+      "type": "scalar",
+      "key": "require_write_sandbox",
+      "icon": "Box",
+      "name": {
+        "es": "Aislamiento de escrituras (sandbox)",
+        "en": "Write sandbox"
+      },
+      "description": {
+        "es": "Exige que toda escritura de archivos del agente ocurra dentro de un sandbox aislado, nunca directo al disco.",
+        "en": "Requires all agent file writes to happen inside an isolated sandbox, never directly to disk."
+      },
+      "default_value": true
+    },
+    {
+      "id": "allow_shell_hooks",
+      "group": "system",
+      "type": "scalar",
+      "key": "allow_shell_hooks",
+      "icon": "Webhook",
+      "name": {
+        "es": "Hooks de shell",
+        "en": "Shell hooks"
+      },
+      "description": {
+        "es": "Permite configurar disparadores automáticos que ejecutan comandos ante eventos del agente.",
+        "en": "Lets the user set up automatic triggers that run commands on agent events."
+      },
+      "default_value": false
+    },
+    {
+      "id": "allow_gateway_hooks",
+      "group": "system",
+      "type": "scalar",
+      "key": "allow_gateway_hooks",
+      "icon": "Zap",
+      "name": {
+        "es": "Hooks del gateway de IA",
+        "en": "AI gateway hooks"
+      },
+      "description": {
+        "es": "Permite interceptar el tráfico hacia los modelos de IA con hooks (filtros, redirecciones). Uso avanzado.",
+        "en": "Lets the user intercept AI-model traffic with hooks (filters, rerouting). Advanced use."
+      },
+      "default_value": false
+    },
+    {
+      "id": "approval_mode",
+      "group": "system",
+      "type": "scalar",
+      "key": "approval_mode",
+      "icon": "UserCheck",
+      "name": {
+        "es": "Aprobación de acciones",
+        "en": "Action approval"
+      },
+      "description": {
+        "es": "Cuánta supervisión humana exige el agente antes de ejecutar acciones (comandos, escrituras).",
+        "en": "How much human oversight the agent requires before running actions (commands, writes)."
+      },
+      "default_value": "smart"
+    },
+    {
+      "id": "allowed_connectors",
+      "group": "comms",
+      "type": "scalar",
+      "key": "allowed_connectors",
+      "icon": "Plug",
+      "name": {
+        "es": "Aplicaciones conectadas",
+        "en": "Connected apps"
+      },
+      "description": {
+        "es": "A qué aplicaciones puede conectarse el agente (VMware, correo, mensajerías…). Vacío = ninguna.",
+        "en": "Which apps the agent may connect to (VMware, email, messaging…). Empty = none."
+      },
+      "default_value": [],
+      "requires_choice": true
+    },
+    {
+      "id": "allowed_connections",
+      "group": "comms",
+      "type": "scalar",
+      "key": "allowed_connections",
+      "icon": "Cable",
+      "name": {
+        "es": "Conexiones personalizadas",
+        "en": "Custom connections"
+      },
+      "description": {
+        "es": "Qué conexiones personalizadas (registradas por el usuario) puede usar el agente.",
+        "en": "Which user-registered custom connections the agent may use."
+      },
+      "default_value": [
+        "*"
+      ]
+    },
+    {
+      "id": "messaging_permissions",
+      "group": "comms",
+      "type": "scalar",
+      "key": "messaging_permissions",
+      "icon": "Send",
+      "name": {
+        "es": "Mensajerías",
+        "en": "Messaging platforms"
+      },
+      "description": {
+        "es": "Plataforma por plataforma, si el agente puede usarla y con qué nivel: enviar y recibir, solo responder, o solo leer.",
+        "en": "Per platform, whether the agent may use it and at what level: send & receive, reply only, or read only."
+      },
+      "default_value": {}
+    },
+    {
+      "id": "allow_voice_mode",
+      "group": "comms",
+      "type": "scalar",
+      "key": "allow_voice_mode",
+      "icon": "Mic",
+      "name": {
+        "es": "Modo voz",
+        "en": "Voice mode"
+      },
+      "description": {
+        "es": "Permite hablar con el agente por voz y escuchar sus respuestas en audio.",
+        "en": "Lets the user talk to the agent by voice and hear spoken replies."
+      },
+      "default_value": false
+    },
+    {
+      "id": "allow_bot_mode",
+      "group": "comms",
+      "type": "scalar",
+      "key": "allow_bot_mode",
+      "icon": "MessageSquare",
+      "name": {
+        "es": "Modo bot (responder por él)",
+        "en": "Bot mode (answer on your behalf)"
+      },
+      "description": {
+        "es": "Permite que el agente responda mensajes entrantes automáticamente como un bot, sin el usuario delante.",
+        "en": "Lets the agent auto-answer incoming messages like a bot, without the user present."
+      },
+      "default_value": false
+    },
+    {
+      "id": "allowed_models",
+      "group": "models",
+      "type": "scalar",
+      "key": "allowed_models",
+      "icon": "Cpu",
+      "name": {
+        "es": "Modelos de IA disponibles",
+        "en": "Available AI models"
+      },
+      "description": {
+        "es": "Limita a qué modelos de IA puede acceder. Vacío = todos los modelos aprobados por la organización.",
+        "en": "Restricts which AI models may be used. Empty = all organization-approved models."
+      },
+      "default_value": null,
+      "requires_choice": true
+    },
+    {
+      "id": "allowed_providers",
+      "group": "models",
+      "type": "scalar",
+      "key": "allowed_providers",
+      "icon": "Cloud",
+      "name": {
+        "es": "Proveedores de modelos",
+        "en": "Model providers"
+      },
+      "description": {
+        "es": "Por dónde salen las peticiones a los modelos: el gateway central de la organización o claves propias (BYOK).",
+        "en": "Where model requests go: the organization's central gateway or the user's own keys (BYOK)."
+      },
+      "default_value": [
+        "litellm_gateway"
+      ]
+    },
+    {
+      "id": "require_mfa",
+      "group": "security",
+      "type": "scalar",
+      "key": "require_mfa",
+      "icon": "ShieldCheck",
+      "name": {
+        "es": "Autenticación multifactor (MFA)",
+        "en": "Multi-factor authentication (MFA)"
+      },
+      "description": {
+        "es": "Exige un segundo factor (código TOTP) además de la contraseña al iniciar sesión. Se define a nivel organización: aplica a todos los usuarios.",
+        "en": "Requires a second factor (TOTP code) in addition to the password at sign-in. Defined at organization level: applies to every user."
+      },
+      "default_value": true,
+      "org_only": true
+    },
+    {
+      "id": "allow_self_registration",
+      "group": "security",
+      "type": "scalar",
+      "key": "allow_self_registration",
+      "icon": "UserPlus",
+      "name": {
+        "es": "Auto-registro de usuarios",
+        "en": "User self-registration"
+      },
+      "description": {
+        "es": "Permite que nuevas personas se unan solas a la organización creando su cuenta. Si se bloquea, las cuentas las crea un administrador. Se define a nivel organización.",
+        "en": "Lets new people join the organization by creating their own account. When blocked, accounts are created by an admin. Defined at organization level."
+      },
+      "default_value": false,
+      "org_only": true
+    },
+    {
+      "id": "session_timeout_minutes",
+      "group": "security",
+      "type": "scalar",
+      "key": "session_timeout_minutes",
+      "icon": "Timer",
+      "name": {
+        "es": "Expiración de sesión",
+        "en": "Session timeout"
+      },
+      "description": {
+        "es": "Minutos de inactividad antes de que la sesión expire y haya que volver a iniciar sesión.",
+        "en": "Minutes of inactivity before the session expires and sign-in is required again."
+      },
+      "default_value": 60
+    },
+    {
+      "id": "offline_grace_minutes",
+      "group": "security",
+      "type": "scalar",
+      "key": "offline_grace_minutes",
+      "icon": "WifiOff",
+      "name": {
+        "es": "Tolerancia sin conexión",
+        "en": "Offline grace period"
+      },
+      "description": {
+        "es": "Cuánto tiempo puede seguir operando la app del usuario sin contactar el servidor de gobernanza. Al vencer, pasa a modo restringido.",
+        "en": "How long the user's app can keep working without contacting the governance server. Once it lapses, it drops to restricted mode."
+      },
+      "default_value": 60
+    },
+    {
+      "id": "attestation_overdue_hours",
+      "group": "security",
+      "type": "scalar",
+      "key": "attestation_overdue_hours",
+      "icon": "ClipboardCheck",
+      "name": {
+        "es": "Verificación periódica del dispositivo",
+        "en": "Device check-in interval"
+      },
+      "description": {
+        "es": "Cada cuántas horas debe el dispositivo enrolado reportar su estado de salud. Si no reporta en ese plazo, la app pasa a modo restringido.",
+        "en": "How often an enrolled device must report its health status. If it misses the window, the app drops to restricted mode."
+      },
+      "default_value": 24
+    },
+    {
+      "id": "unbind_mode",
+      "group": "security",
+      "type": "scalar",
+      "key": "unbind_mode",
+      "icon": "Unlink",
+      "name": {
+        "es": "Al desligar o revocar un dispositivo",
+        "en": "When a device is unbound or revoked"
+      },
+      "description": {
+        "es": "Qué puede seguir haciendo la app cuando el dispositivo se desliga de la organización o es revocado.",
+        "en": "What the app can still do once the device is unlinked from the organization or revoked."
+      },
+      "default_value": "readonly"
+    },
+    {
+      "id": "allow_self_updates",
+      "group": "security",
+      "type": "scalar",
+      "key": "allow_self_updates",
+      "icon": "RefreshCw",
+      "name": {
+        "es": "Auto-actualización de la app",
+        "en": "App self-updates"
+      },
+      "description": {
+        "es": "Permite que la app del usuario se descargue e instale actualizaciones por sí misma. Si se bloquea, las actualizaciones las controla TI.",
+        "en": "Lets the user's app download and install its own updates. When blocked, IT controls updates."
+      },
+      "default_value": false
+    },
+    {
+      "id": "require_checkpoints",
+      "group": "security",
+      "type": "scalar",
+      "key": "require_checkpoints",
+      "icon": "History",
+      "name": {
+        "es": "Puntos de restauración de sesión",
+        "en": "Session checkpoints"
+      },
+      "description": {
+        "es": "Guarda puntos de restauración durante la sesión para poder auditar y revertir lo que hizo el agente.",
+        "en": "Saves restore points during the session so agent actions can be audited and rolled back."
+      },
+      "default_value": true
+    },
+    {
+      "id": "session_retention_days",
+      "group": "security",
+      "type": "scalar",
+      "key": "session_retention_days",
+      "icon": "Archive",
+      "name": {
+        "es": "Cuánto se guardan las sesiones",
+        "en": "Session retention"
+      },
+      "description": {
+        "es": "Días que se conservan las sesiones (transcripciones) del usuario antes de eliminarse. Menor = más privado.",
+        "en": "Days a user's sessions (transcripts) are kept before deletion. Lower = more private."
+      },
+      "default_value": 30
+    },
+    {
+      "id": "artifact_sharing",
+      "group": "security",
+      "type": "scalar",
+      "key": "artifact_sharing",
+      "icon": "Share2",
+      "name": {
+        "es": "Compartir archivos generados",
+        "en": "Sharing generated files"
+      },
+      "description": {
+        "es": "Quién puede ver los archivos y resultados que genera el agente del usuario.",
+        "en": "Who can see the files and results the user's agent produces."
+      },
+      "default_value": "private"
+    },
+    {
+      "id": "allowed_secret_sources",
+      "group": "security",
+      "type": "scalar",
+      "key": "allowed_secret_sources",
+      "icon": "Lock",
+      "name": {
+        "es": "De dónde lee secretos",
+        "en": "Secret sources"
+      },
+      "description": {
+        "es": "De dónde puede leer el agente secretos para conectarse a servicios.",
+        "en": "Where the agent may read secrets from to connect to services."
+      },
+      "default_value": [
+        "env"
+      ]
+    },
+    {
+      "id": "allow_credential_vault",
+      "group": "security",
+      "type": "scalar",
+      "key": "allow_credential_vault",
+      "icon": "KeyRound",
+      "name": {
+        "es": "Caja fuerte de credenciales",
+        "en": "Credential vault"
+      },
+      "description": {
+        "es": "Permite que el usuario guarde credenciales (claves de API, cuentas) cifradas en la caja fuerte de la organización.",
+        "en": "Lets the user store credentials (API keys, accounts) encrypted in the organization's vault."
+      },
+      "default_value": false
+    },
+    {
+      "id": "vault_allowed_credential_types",
+      "group": "security",
+      "type": "scalar",
+      "key": "vault_allowed_credential_types",
+      "icon": "FileKey",
+      "name": {
+        "es": "Tipos de credencial admitidos",
+        "en": "Allowed credential types"
+      },
+      "description": {
+        "es": "Qué tipos de credencial pueden guardarse en la caja fuerte.",
+        "en": "Which kinds of credentials may be stored in the vault."
+      },
+      "default_value": [
+        "api_key",
+        "oauth2"
+      ]
+    },
+    {
+      "id": "allow_payment_autofill",
+      "group": "security",
+      "type": "scalar",
+      "key": "allow_payment_autofill",
+      "icon": "CreditCard",
+      "name": {
+        "es": "Datos de pago",
+        "en": "Payment details"
+      },
+      "description": {
+        "es": "Permite que el agente use tarjetas o datos de pago guardados para completar compras.",
+        "en": "Lets the agent use stored cards or payment details to complete purchases."
+      },
+      "default_value": false
+    },
+    {
+      "id": "allowed_env_passthrough",
+      "group": "security",
+      "type": "scalar",
+      "key": "allowed_env_passthrough",
+      "icon": "Variable",
+      "name": {
+        "es": "Variables de entorno visibles",
+        "en": "Visible environment variables"
+      },
+      "description": {
+        "es": "Qué variables de entorno del equipo se pasan al agente. Vacío = ninguna.",
+        "en": "Which machine environment variables are passed to the agent. Empty = none."
+      },
+      "default_value": []
+    },
+    {
+      "id": "shared_agent_grants_mode",
+      "group": "security",
+      "type": "scalar",
+      "key": "shared_agent_grants_mode",
+      "icon": "Users",
+      "name": {
+        "es": "Agentes compartidos del equipo",
+        "en": "Team shared agents"
+      },
+      "description": {
+        "es": "Cómo se comparten los agentes del equipo: cualquiera del departamento puede usarlos, o solo quien recibió permiso explícito.",
+        "en": "How team agents are shared: anyone in the department may use them, or only those explicitly granted access."
+      },
+      "default_value": "explicit"
+    },
+    {
+      "id": "max_daily_sessions",
+      "group": "security",
+      "type": "scalar",
+      "key": "max_daily_sessions",
+      "icon": "Gauge",
+      "name": {
+        "es": "Sesiones diarias máximas",
+        "en": "Max daily sessions"
+      },
+      "description": {
+        "es": "Cuántas sesiones puede abrir el usuario por día.",
+        "en": "How many sessions the user may open per day."
+      },
+      "default_value": 10
+    },
+    {
+      "id": "allowed_tools:governance_status",
+      "group": "agent",
+      "type": "list-item",
+      "key": "allowed_tools",
+      "item": "governance_status",
+      "icon": "Activity",
+      "name": {
+        "es": "Consultar su estado de gobernanza",
+        "en": "View governance status"
+      },
+      "description": {
+        "es": "Permite al agente consultar y reportar su propio estado de gobernanza.",
+        "en": "Lets the agent check and report its own governance status."
+      },
+      "default_on": true
+    },
+    {
+      "id": "allowed_skills",
+      "group": "agent",
+      "type": "scalar",
+      "key": "allowed_skills",
+      "icon": "Sparkles",
+      "name": {
+        "es": "Skills disponibles",
+        "en": "Available skills"
+      },
+      "description": {
+        "es": "Qué paquetes de habilidades (skills) puede cargar el agente. «Todas» permite el catálogo completo.",
+        "en": "Which skill packs the agent may load. \"All\" allows the full catalog."
+      },
+      "default_value": [
+        "*"
+      ]
+    },
+    {
+      "id": "max_delegation_depth",
+      "group": "agent",
+      "type": "scalar",
+      "key": "max_delegation_depth",
+      "icon": "GitBranch",
+      "name": {
+        "es": "Sub-agentes (delegación)",
+        "en": "Sub-agents (delegation)"
+      },
+      "description": {
+        "es": "Cuántos niveles de sub-agentes puede lanzar el agente. 0 = no puede delegar en absoluto.",
+        "en": "How many levels of sub-agents the agent may spawn. 0 = no delegation at all."
+      },
+      "default_value": 1
+    },
+    {
+      "id": "allow_goal_mode",
+      "group": "agent",
+      "type": "scalar",
+      "key": "allow_goal_mode",
+      "icon": "Target",
+      "name": {
+        "es": "Modo objetivo autónomo",
+        "en": "Autonomous goal mode"
+      },
+      "description": {
+        "es": "Permite que el agente persiga objetivos de varios pasos de forma autónoma, sin aprobar paso a paso.",
+        "en": "Lets the agent pursue multi-step goals autonomously, without step-by-step approval."
+      },
+      "default_value": false
+    },
+    {
+      "id": "allow_scheduled_tasks",
+      "group": "agent",
+      "type": "scalar",
+      "key": "allow_scheduled_tasks",
+      "icon": "CalendarClock",
+      "name": {
+        "es": "Tareas programadas",
+        "en": "Scheduled tasks"
+      },
+      "description": {
+        "es": "Permite programar tareas para que el agente las ejecute más tarde, sin el usuario presente.",
+        "en": "Lets the user schedule tasks for the agent to run later, unattended."
+      },
+      "default_value": false
+    },
+    {
+      "id": "allow_recurring_prompts",
+      "group": "agent",
+      "type": "scalar",
+      "key": "allow_recurring_prompts",
+      "icon": "Repeat",
+      "name": {
+        "es": "Prompts recurrentes",
+        "en": "Recurring prompts"
+      },
+      "description": {
+        "es": "Permite que el agente ejecute instrucciones de forma recurrente (p. ej. un resumen diario).",
+        "en": "Lets the agent run instructions on a recurring basis (e.g. a daily digest)."
+      },
+      "default_value": false
+    },
+    {
+      "id": "allowed_plugins",
+      "group": "agent",
+      "type": "scalar",
+      "key": "allowed_plugins",
+      "icon": "Puzzle",
+      "name": {
+        "es": "Plugins",
+        "en": "Plugins"
+      },
+      "description": {
+        "es": "Qué plugins puede cargar el agente. Vacío = ninguno.",
+        "en": "Which plugins the agent may load. Empty = none."
+      },
+      "default_value": [],
+      "requires_choice": true
+    },
+    {
+      "id": "allowed_mcp_servers",
+      "group": "agent",
+      "type": "scalar",
+      "key": "allowed_mcp_servers",
+      "icon": "Server",
+      "name": {
+        "es": "Servidores MCP",
+        "en": "MCP servers"
+      },
+      "description": {
+        "es": "A qué servidores de herramientas externas (Model Context Protocol) puede conectarse el agente. Vacío = ninguno.",
+        "en": "Which external tool servers (Model Context Protocol) the agent may connect to. Empty = none."
+      },
+      "default_value": [],
+      "requires_choice": true
+    },
+    {
+      "id": "allowed_memory_providers",
+      "group": "agent",
+      "type": "scalar",
+      "key": "allowed_memory_providers",
+      "icon": "Brain",
+      "name": {
+        "es": "Memoria del agente",
+        "en": "Agent memory"
+      },
+      "description": {
+        "es": "Dónde puede guardar y recuperar memoria el agente entre sesiones.",
+        "en": "Where the agent may store and recall memory across sessions."
+      },
+      "default_value": [
+        "builtin"
+      ]
+    },
+    {
+      "id": "allow_custom_personality",
+      "group": "agent",
+      "type": "scalar",
+      "key": "allow_custom_personality",
+      "icon": "Palette",
+      "name": {
+        "es": "Personalidad personalizada",
+        "en": "Custom personality"
+      },
+      "description": {
+        "es": "Permite que el usuario ajuste el tono y la personalidad de su agente. Si se bloquea, todos usan la personalidad estándar.",
+        "en": "Lets the user tweak their agent's tone and personality. When blocked, everyone uses the standard personality."
+      },
+      "default_value": false
+    },
+    {
+      "id": "allow_profile_distributions",
+      "group": "agent",
+      "type": "scalar",
+      "key": "allow_profile_distributions",
+      "icon": "Package",
+      "name": {
+        "es": "Perfiles distribuidos",
+        "en": "Profile distributions"
+      },
+      "description": {
+        "es": "Permite instalar perfiles distribuidos (configuraciones y temas compartidos) en la app del usuario.",
+        "en": "Lets the user install distributed profiles (shared configurations and themes) in their app."
+      },
+      "default_value": false
+    }
+  ],
+  "templates": [
+    {
+      "slug": "solo-lectura-web",
+      "name": {
+        "es": "Solo lectura web",
+        "en": "Web read-only"
+      },
+      "description": {
+        "es": "El agente puede buscar y leer información en internet y archivos, pero no ejecutar comandos, no escribir archivos ni usar conectores. Apto para investigación y consulta.",
+        "en": "The agent can search and read web pages and files, but cannot run commands, write files or use connectors. Suited for research and lookup."
+      },
+      "definition": {
+        "allowed_tools": [
+          "web_search",
+          "read_file",
+          "governance_status"
+        ],
+        "allowed_terminal_backends": [],
+        "web_domain_policy": {
+          "mode": "open",
+          "domains": []
+        },
+        "approval_mode": "manual",
+        "allow_credential_vault": false,
+        "allow_scheduled_tasks": false,
+        "allow_voice_mode": false,
+        "allow_bot_mode": false
+      }
+    },
+    {
+      "slug": "desarrollador",
+      "name": {
+        "es": "Desarrollador",
+        "en": "Developer"
+      },
+      "description": {
+        "es": "El agente puede usar terminal (contenedor Docker y equipo local), leer y escribir archivos, buscar en internet y programar tareas, con sandbox de escritura y aprobación inteligente.",
+        "en": "The agent can use the terminal (Docker container and local machine), read and write files, search the web and schedule tasks, with write sandbox and smart approval."
+      },
+      "definition": {
+        "allowed_tools": [
+          "web_search",
+          "read_file",
+          "write_file",
+          "governance_status"
+        ],
+        "allowed_terminal_backends": [
+          "docker",
+          "local"
+        ],
+        "require_write_sandbox": true,
+        "approval_mode": "smart",
+        "allow_shell_hooks": true,
+        "web_domain_policy": {
+          "mode": "open",
+          "domains": []
+        },
+        "allowed_skills": [
+          "*"
+        ],
+        "allow_scheduled_tasks": true
+      }
+    },
+    {
+      "slug": "restringido-total",
+      "name": {
+        "es": "Restringido total",
+        "en": "Fully restricted"
+      },
+      "description": {
+        "es": "El agente solo conversa y reporta su estado de gobernanza: sin internet, sin terminal, sin archivos, sin conectores, sin mensajería, sin automatización. Máximo encierro.",
+        "en": "The agent can only chat and report its governance status: no internet, no terminal, no files, no connectors, no messaging, no automation. Maximum lockdown."
+      },
+      "definition": {
+        "allowed_tools": [
+          "governance_status"
+        ],
+        "allowed_terminal_backends": [],
+        "allowed_connectors": [],
+        "allowed_connections": [],
+        "allowed_skills": [],
+        "web_domain_policy": {
+          "mode": "allowlist",
+          "domains": []
+        },
+        "messaging_permissions": {},
+        "approval_mode": "manual",
+        "max_daily_sessions": 2,
+        "allow_credential_vault": false,
+        "allow_payment_autofill": false,
+        "allow_voice_mode": false,
+        "allow_bot_mode": false,
+        "allow_goal_mode": false,
+        "allow_scheduled_tasks": false,
+        "allow_recurring_prompts": false
+      }
+    }
+  ]
+}

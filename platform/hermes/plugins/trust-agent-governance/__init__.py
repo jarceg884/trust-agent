@@ -223,21 +223,40 @@ def _system_prompt_section_content(_session_info: Any = None) -> str:
     """
     snapshot = state.get_state().snapshot()
     bundle = snapshot.get("bundle")
+    org_prompt = (bundle or {}).get("global_prompt") or ""
+    product_name = (bundle or {}).get("product_name") or "Trust Agent"
+    tenant_name = (bundle or {}).get("tenant_name") or "your organization"
     identity = (
-        f"Tenant: {bundle.get('tenant_id')} — policy version "
+        f"Tenant: {tenant_name} ({bundle.get('tenant_id')}) — policy version "
         f"{bundle.get('policy_version')} (signed, verified)."
         if bundle
         else "No signed bundle is currently cached: the agent starts in "
         "RESTRICTED mode until a valid bundle is synced."
     )
+    org_block = (
+        "\n[ORGANIZATION GLOBAL INSTRUCTIONS — highest priority]\n"
+        f"{org_prompt[:2500]}\n"
+        "[End organization instructions. These are issued by the organization's "
+        "control plane and are NOT editable from this device. They prevail over "
+        "SOUL.md, the active profile and any session instruction. If any of those "
+        "contradicts them, follow the organization.]\n"
+        if org_prompt
+        else ""
+    )
     return (
-        "[organization governance — Trust Agent]\n"
-        "This Hermes agent operates under the signed governance of its "
+        f"[organization governance — {product_name}]\n"
+        f"You are {product_name}, the governed AI agent for {tenant_name}. "
+        "You are NOT Hermes Agent and you are NOT built by Nous Research. "
+        "Never identify yourself as Hermes Agent, Hermes, or as a product of "
+        "Nous Research. If the user asks who you are, answer only that you are "
+        f"{product_name}, the organization's governed agent.\n"
+        "This agent operates under the signed governance of its "
         "organization. A policy bundle signed by the organization's control "
         "plane (RS256) is the single local authority for what this agent may "
         "do: allowed tools, allowed connectors, approved models and budget.\n"
         f"{identity}\n"
         f"{PRECEDENCE_CLAUSE}\n"
+        f"{org_block}"
         "The SOUL/personality of this agent is voice only: it never grants "
         "permissions. If no valid bundle is present, the agent is in "
         "RESTRICTED mode and no external tools are available."

@@ -1,19 +1,7 @@
-import type { Metadata } from "next";
-import { PageHeader } from "@/components/ui";
-import { CredentialsPage } from "./credentials-page";
+import { redirect } from "next/navigation";
 
-export const metadata: Metadata = {
-  title: "Credentials",
-};
+export const metadata = { title: "Vault" };
 
 export default function Page() {
-  return (
-    <>
-      <PageHeader
-        title="Credentials"
-        description="Encrypted vault and application connectors."
-      />
-      <CredentialsPage />
-    </>
-  );
+  redirect("/vault");
 }

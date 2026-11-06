@@ -5,11 +5,14 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, File, Form, Response, UploadFile
 from pydantic import BaseModel, Field
+from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
+from ..audit import service as audit
 from ..auth.service import Principal, get_principal, get_tx, require_mfa
-from ..errors import optional_uuid, permission_denied, require_uuid
-from . import branding, departments, directory, invite, roles
+from ..errors import conflict, not_found, optional_uuid, permission_denied, require_uuid
+from ..profiles import templates as profile_templates
+from . import branding, departments, directory, invite, onboarding, roles
 
 router = APIRouter(prefix="/api", dependencies=[Depends(require_mfa)])
 
@@ -18,7 +21,8 @@ router = APIRouter(prefix="/api", dependencies=[Depends(require_mfa)])
 
 class InviteBody(BaseModel):
     email: str
-    department_id: str | None = None
+    # Regla de producto: todo usuario pertenece a un departamento.
+    department_id: str
     role_key: str = "user"
     display_name: str | None = None
 
@@ -51,7 +55,7 @@ def invite_user(
     principal: Principal = Depends(get_principal),
     conn: Connection = Depends(get_tx),
 ):
-    department_id = optional_uuid(body.department_id, "department_id")
+    department_id = require_uuid(body.department_id, "department_id")
     if "users.invite" not in principal.permissions:
         raise permission_denied("Missing permission: users.invite")
     invite.validate_invite(
@@ -65,6 +69,82 @@ def invite_user(
         department_id=department_id, role_key=body.role_key,
         display_name=body.display_name,
     )
+
+
+@router.delete("/users/{user_id}", status_code=204)
+def delete_user(
+    user_id: str,
+    principal: Principal = Depends(get_principal),
+    conn: Connection = Depends(get_tx),
+):
+    """Hard-delete a user and everything that depends on them.
+
+    Order matters: dependent rows first (sessions, keys, devices, grants…),
+    the user row last. Self-deletion and deleting the last org_admin are
+    refused — the organization must never end up without an administrator.
+    """
+    user_id = require_uuid(user_id, "user_id")
+    if "users.manage" not in principal.permissions:
+        raise permission_denied("Missing permission: users.manage")
+    if user_id == principal.user_id:
+        raise permission_denied("You cannot delete your own account.")
+
+    target = conn.execute(
+        text(
+            "SELECT u.id, u.email, (SELECT count(*) FROM user_roles ur"
+            " JOIN catalog.roles r ON r.key = ur.role_key"
+            " WHERE ur.user_id = u.id AND r.key = 'org_admin') AS admin_roles"
+            " FROM users u WHERE u.id = CAST(:u AS uuid)"
+        ),
+        {"u": user_id},
+    ).mappings().first()
+    if target is None:
+        raise not_found("User not found.")
+
+    if target["admin_roles"]:
+        remaining = conn.execute(
+            text(
+                "SELECT count(DISTINCT ur.user_id) FROM user_roles ur"
+                " JOIN catalog.roles r ON r.key = ur.role_key"
+                " WHERE r.key = 'org_admin' AND ur.user_id <> CAST(:u AS uuid)"
+            ),
+            {"u": user_id},
+        ).scalar()
+        if not remaining:
+            raise conflict("Cannot delete the last organization administrator.")
+
+    cleanup = [
+        "DELETE FROM spend_ledger WHERE user_id = CAST(:u AS uuid)",
+        "DELETE FROM budgets WHERE user_id = CAST(:u AS uuid)",
+        "DELETE FROM policies WHERE user_id = CAST(:u AS uuid)",
+        "DELETE FROM model_access WHERE user_id = CAST(:u AS uuid)",
+        "DELETE FROM vault_credentials WHERE user_id = CAST(:u AS uuid)",
+        "DELETE FROM connector_instances WHERE user_id = CAST(:u AS uuid)",
+        "DELETE FROM api_keys WHERE user_id = CAST(:u AS uuid)",
+        "DELETE FROM sessions WHERE user_id = CAST(:u AS uuid)",
+        "DELETE FROM named_policy_assignments WHERE user_id = CAST(:u AS uuid)",
+        "DELETE FROM notifications WHERE user_id = CAST(:u AS uuid)",
+        "UPDATE vault_connections SET created_by = NULL WHERE created_by = CAST(:u AS uuid)",
+        "DELETE FROM agent_grants WHERE grantee_user_id = CAST(:u AS uuid) OR granted_by = CAST(:u AS uuid)",
+        "DELETE FROM agents WHERE owner_user_id = CAST(:u AS uuid)",
+        "DELETE FROM user_roles WHERE user_id = CAST(:u AS uuid)",
+        "DELETE FROM devices WHERE user_id = CAST(:u AS uuid)",
+        "DELETE FROM users WHERE id = CAST(:u AS uuid)",
+    ]
+    for statement in cleanup:
+        conn.execute(text(statement), {"u": user_id})
+
+    audit.emit(
+        conn,
+        tenant_id=principal.tenant_id,
+        actor_role=principal.role_keys[0] if principal.role_keys else "org_admin",
+        action="user.deleted",
+        actor_id=principal.user_id,
+        target_type="user",
+        target_id=user_id,
+        payload={"email": target["email"]},
+    )
+    return None
 
 
 @router.put("/users/{user_id}")
@@ -321,3 +401,62 @@ def list_departments(
     directory already exposes department ids; names are not sensitive
     within the tenant)."""
     return departments.list_departments(conn)
+
+
+# --- Organization structure onboarding (spec 038) ------------------------------
+
+@router.get("/org/profile-templates")
+def list_profile_templates(
+    principal: Principal = Depends(get_principal),
+    conn: Connection = Depends(get_tx),
+):
+    """GET /api/org/profile-templates (REQ-DO-001): the 12-template catalog
+    with es+en display fields, ordered by key. Read-only, no tenant data —
+    any authenticated principal of the tenant (the wizard needs it and the
+    CRUD already accepts template keys). `conn` is not used: the route
+    exists to enforce a valid tenant session (MFA per the router gate)."""
+    _ = principal, conn
+    return {"templates": profile_templates.catalog_payload()}
+
+
+@router.get("/org/onboarding")
+def get_onboarding_state(
+    principal: Principal = Depends(get_principal),
+    conn: Connection = Depends(get_tx),
+):
+    """GET /api/org/onboarding (REQ-DO-040): structure-onboarding flag for
+    the caller's tenant. `departments.manage` only (org_admin) — the wizard
+    gate is an org_admin surface; other roles get 403."""
+    if "departments.manage" not in principal.permissions:
+        raise permission_denied("Missing permission: departments.manage")
+    return onboarding.get_state(conn)
+
+
+class OnboardingCompleteBody(BaseModel):
+    # "wizard" = changes confirmed; "skip" = closed without mutating.
+    source: Literal["wizard", "skip"]
+    created: int = Field(default=0, ge=0)
+    renamed: int = Field(default=0, ge=0)
+    deleted: int = Field(default=0, ge=0)
+
+
+@router.put("/org/onboarding")
+def complete_onboarding(
+    body: OnboardingCompleteBody,
+    principal: Principal = Depends(get_principal),
+    conn: Connection = Depends(get_tx),
+):
+    """PUT /api/org/onboarding (REQ-DO-021): close the structure onboarding.
+
+    The wizard's mutations already traveled the department CRUD (each with
+    its own audit event); this only flips the flag and emits
+    `onboarding.structure_completed` {source, created, renamed, deleted} —
+    on the pending -> completed transition only (idempotent re-PUT).
+    """
+    if "departments.manage" not in principal.permissions:
+        raise permission_denied("Missing permission: departments.manage")
+    return onboarding.complete(
+        conn, principal,
+        source=body.source, created=body.created,
+        renamed=body.renamed, deleted=body.deleted,
+    )

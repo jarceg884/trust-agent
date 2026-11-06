@@ -49,6 +49,14 @@ from typing import Any
 from . import enroll, enforcement, policy_contract
 from .enforcement import INTERNAL_TOOLS, log_event
 
+# PyYAML is not part of the minimal base interpreter used by some desktop
+# installs; the governed plugin carries a private pure-Python copy so the
+# managed-config pin never depends on the host's site-packages.
+import sys as _sys
+_VENDOR_DIR = Path(__file__).resolve().parent / "_vendor"
+if _VENDOR_DIR.is_dir() and str(_VENDOR_DIR) not in _sys.path:
+    _sys.path.insert(0, str(_VENDOR_DIR))
+
 # ---------------------------------------------------------------------------
 # Superficies de tools (matriz C-003/C-004/C-011/C-001/C-005/C-045)
 # ---------------------------------------------------------------------------
@@ -596,29 +604,59 @@ def _managed_sync_marker_path() -> Path:
     return enroll.trust_dir() / _MANAGED_SYNC_MARKER
 
 
+def _blocked_messaging_platforms(payload: dict[str, Any]) -> list[str]:
+    """Plataformas de mensajería bloqueadas por ``messaging_permissions``
+    (REQ-PE-011, spec 042 GAP-42-A).
+
+    ``messaging_permissions`` es un map ``platform→{allowed: bool, mode: str}``
+    (o ``platform→false`` forma corta). Una plataforma con ``allowed=false``
+    (o ausente del map — deny-by-default) está bloqueada para despacho.
+
+    Como el catálogo de plataformas no se conoce en el plugin, solo se
+    reportan las EXPLÍCITAMENTE denegadas (presentes en el map con
+    ``allowed=false``). Las ausentes ya están bloqueadas por deny-by-default
+    del backend (``perm.get("allowed", False)`` → False).
+    """
+    perms = policy_contract.policy_value(payload, "messaging_permissions") or {}
+    if not isinstance(perms, dict):
+        return []
+    blocked: list[str] = []
+    for platform, perm in perms.items():
+        if isinstance(perm, dict):
+            allowed = bool(perm.get("allowed", False))
+        else:
+            allowed = bool(perm)
+        if not allowed:
+            blocked.append(str(platform))
+    return sorted(blocked)
+
+
 def sync_managed_config(payload: dict[str, Any], *, force: bool = False) -> bool:
-    """Impone en ``config.yaml`` las restricciones de ``security.*`` que la
-    policy gobierna (managed scope como vehículo, ADR-016):
+    """Impone en ``config.yaml`` las restricciones que la policy gobierna
+    (managed scope como vehículo, ADR-016):
 
     - ``web_domain_policy.mode=blocklist`` con dominios →
       ``security.website_blocklist = {enabled: true, domains: [...]}``
       (el mecanismo nativo M11 lo aplica con su TTL de recarga).
     - ``allow_private_network_access=false`` → ``security.allow_private_urls: false``.
     - ``allow_self_updates=false`` → ``security.allow_lazy_installs: false``.
+    - ``messaging_permissions[<plat>].allowed=false`` →
+      ``gateway.platforms.<plat>.enabled=false`` (REQ-PE-011, spec 042
+      GAP-42-A: el overlay GANA al config del usuario, M16 — el gateway
+      no despacha por la plataforma bloqueada en NINGUNA superficie).
 
     SOLO impone restricciones: jamás resetea una sección existente (una
-    blocklist stale es MÁS restrictiva — dirección fail-closed). Idempotente:
-    escribe solo si el contenido cambia; marca el jti sincronizado para no
-    repetir el trabajo por bundle. Retorna True si escribió.
+    blocklist stale o un platform.enabled=false stale son MÁS restrictivos
+    — dirección fail-closed). Idempotente: escribe solo si el contenido
+    cambia; marca el jti sincronizado para no repetir el trabajo por bundle.
+    Retorna True si escribió.
     """
     marker_path = _managed_sync_marker_path()
     jti = str(payload.get("jti") or "")
-    if not force and jti:
-        try:
-            if json.loads(marker_path.read_text(encoding="utf-8")).get("jti") == jti:
-                return False
-        except (OSError, ValueError):
-            pass
+    # NOTE: deliberately no early return on jti: the config file is
+    # user-writable on disk, so every turn re-checks and restores the
+    # organization-owned model/provider/credential fields even when the
+    # signed bundle itself did not change.
 
     policy = policy_contract.policy_value(payload, "web_domain_policy") or {}
     if not isinstance(policy, dict):
@@ -635,7 +673,37 @@ def sync_managed_config(payload: dict[str, Any], *, force: bool = False) -> bool
         security_updates["allow_private_urls"] = False
     if not policy_contract.capability_allowed(payload, "allow_self_updates"):
         security_updates["allow_lazy_installs"] = False
-    if not security_updates:
+
+    # P-26: the organization owns provider, model and credentials. Pin the
+    # local config to the signed policy every sync so editing config.yaml or
+    # a stale profile cannot select another provider/model/endpoint.
+    allowed_providers = {
+        str(p).strip().lower()
+        for p in (policy_contract.policy_value(payload, "allowed_providers") or [])
+    }
+    policy_models = policy_contract.policy_value(payload, "policy_models") or []
+    default_model = payload.get("policy_default_model") or (
+        policy_models[0] if isinstance(policy_models, list) and policy_models else None
+    )
+    device = enroll.load_device_token() or {}
+    model_pin: dict[str, Any] = {}
+    ui_features = payload.get("ui_features") or {}
+    webapp_pin = isinstance(ui_features, dict) and ui_features.get("web_access") is False
+    voice_pin = isinstance(ui_features, dict) and ui_features.get("voice") is False
+    if isinstance(default_model, str) and default_model.strip():
+        model_pin["default"] = default_model.strip()
+    if allowed_providers and "*" not in allowed_providers and "litellm_gateway" in allowed_providers:
+        model_pin["provider"] = "custom"
+        model_pin["fallback_providers"] = []
+    if isinstance(device.get("model_base_url"), str) and device["model_base_url"]:
+        model_pin["base_url"] = device["model_base_url"]
+    if isinstance(device.get("model_key"), str) and device["model_key"]:
+        model_pin["api_key"] = device["model_key"]
+
+    # REQ-PE-011: plataformas de mensajería bloqueadas → gateway.platforms.<plat>.enabled=false
+    blocked_platforms = _blocked_messaging_platforms(payload)
+
+    if not security_updates and not blocked_platforms and not model_pin and not webapp_pin and not voice_pin:
         return False
 
     try:
@@ -646,13 +714,79 @@ def sync_managed_config(payload: dict[str, Any], *, force: bool = False) -> bool
         if path.exists():
             loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
             existing = loaded if isinstance(loaded, dict) else {}
-        security = existing.get("security")
-        security = dict(security) if isinstance(security, dict) else {}
         changed = False
-        for key, value in security_updates.items():
-            if security.get(key) != value:
-                security[key] = value
+
+        # security.* updates
+        if security_updates:
+            security = existing.get("security")
+            security = dict(security) if isinstance(security, dict) else {}
+            for key, value in security_updates.items():
+                if security.get(key) != value:
+                    security[key] = value
+                    changed = True
+            existing["security"] = security
+
+        # P-26: model/provider/api_key pin + removal of alternate providers.
+        if model_pin:
+            model = existing.get("model")
+            model = dict(model) if isinstance(model, dict) else {}
+            for key, value in model_pin.items():
+                if model.get(key) != value:
+                    model[key] = value
+                    changed = True
+            model.pop("fallback", None)
+            existing["model"] = model
+            if model_pin.get("provider") == "custom":
+                # Alternate provider doors: each one could route around the
+                # organization's LiteLLM gateway/billing.
+                for key, empty in (
+                    ("fallback_providers", []),
+                    ("provider_routing", {}),
+                    ("auxiliary", {}),
+                    ("local_runtime", {}),
+                    ("moa", {}),
+                    ("providers", {}),
+                ):
+                    if existing.get(key) not in (None, empty):
+                        existing[key] = empty
+                        changed = True
+
+        # UI policy → backend function off: serving the web app and voice-only
+        # mode are not just hidden buttons; their gateway features are pinned off.
+        if webapp_pin:
+            webapp = existing.get("webapp")
+            webapp = dict(webapp) if isinstance(webapp, dict) else {}
+            if webapp.get("enabled") is not False:
+                webapp["enabled"] = False
+                existing["webapp"] = webapp
                 changed = True
+        if voice_pin:
+            gateway = existing.get("gateway")
+            gateway = dict(gateway) if isinstance(gateway, dict) else {}
+            voice = gateway.get("voice")
+            voice = dict(voice) if isinstance(voice, dict) else {}
+            if voice.get("enabled_voice_only") is not False:
+                voice["enabled_voice_only"] = False
+                gateway["voice"] = voice
+                existing["gateway"] = gateway
+                changed = True
+
+        # gateway.platforms.<plat>.enabled=false (messaging_permissions)
+        if blocked_platforms:
+            gateway = existing.get("gateway")
+            gateway = dict(gateway) if isinstance(gateway, dict) else {}
+            platforms = gateway.get("platforms")
+            platforms = dict(platforms) if isinstance(platforms, dict) else {}
+            for plat in blocked_platforms:
+                plat_cfg = platforms.get(plat)
+                plat_cfg = dict(plat_cfg) if isinstance(plat_cfg, dict) else {}
+                if plat_cfg.get("enabled") is not False:
+                    plat_cfg["enabled"] = False
+                    platforms[plat] = plat_cfg
+                    changed = True
+            gateway["platforms"] = platforms
+            existing["gateway"] = gateway
+
         if not changed:
             try:
                 marker_path.write_text(json.dumps({"jti": jti, "at": int(time.time())}),
@@ -660,11 +794,19 @@ def sync_managed_config(payload: dict[str, Any], *, force: bool = False) -> bool
             except OSError:
                 pass
             return False
-        existing["security"] = security
         tmp = path.with_suffix(path.suffix + ".tmp")
         tmp.write_text(yaml.safe_dump(existing, sort_keys=False), encoding="utf-8")
         tmp.replace(path)
-        log_event("managed_config_synced", keys=sorted(security_updates))
+        synced_keys = sorted(security_updates) + [
+            f"gateway.platforms.{p}.enabled" for p in blocked_platforms
+        ]
+        if model_pin:
+            synced_keys += [f"model.{k}" for k in sorted(model_pin)]
+        if webapp_pin:
+            synced_keys.append("webapp.enabled")
+        if voice_pin:
+            synced_keys.append("gateway.voice.enabled_voice_only")
+        log_event("managed_config_synced", keys=synced_keys)
         try:
             marker_path.write_text(json.dumps({"jti": jti, "at": int(time.time())}),
                                    encoding="utf-8")
@@ -674,6 +816,99 @@ def sync_managed_config(payload: dict[str, Any], *, force: bool = False) -> bool
     except (OSError, ValueError, ImportError) as exc:
         log_event("managed_config_sync_failed", error=str(exc))
         return False
+
+
+# ---------------------------------------------------------------------------
+# Managed-file protection: a governed agent may never edit its own config,
+# device token or governance status via tools (the platform UI is the only
+# supported path; the organization owns provider/model/credentials).
+# ---------------------------------------------------------------------------
+_MANAGED_CONFIG_WRITE_RE = re.compile(
+    r"(hermes\s+config\s+(set|unset|edit)|config\.ya?ml)"
+    r"|(device-token\.json|governance_status\.json|governance-bundle\.jws)",
+    re.IGNORECASE,
+)
+
+
+def _is_managed_config_path(path: str) -> bool:
+    try:
+        candidate = Path(path).expanduser().resolve()
+        home = enroll.hermes_home().resolve()
+        protected = {
+            (home / "config.yaml").resolve(),
+            (home / "trust-agent" / "device-token.json").resolve(),
+            (home / "trust-agent" / "governance_status.json").resolve(),
+            (home / "trust-agent" / "governance-bundle.jws").resolve(),
+        }
+        return candidate in protected
+    except OSError:
+        return False
+
+
+def _check_managed_config_edits(tool: str, args: dict[str, Any],
+                                payload: dict[str, Any], _session_id: str):
+    allowed = {str(x).strip().lower() for x in
+               policy_contract.policy_value(payload, "allowed_providers") or []}
+    if "*" in allowed:
+        return None
+
+    if tool in WRITE_TOOLS:
+        candidate = str(args.get("path") or args.get("file_path") or "")
+        if candidate and _is_managed_config_path(candidate):
+            return _block(
+                tool,
+                "managed_config_write",
+                f"{_BLOCK_PREFIX} config.yaml / device-token.json / "
+                "governance_status.json are organization-managed files and "
+                "cannot be edited by the agent. Providers, models, gateways "
+                "and credentials are configured by your organization.",
+            )
+
+    if tool in COMMAND_TOOLS:
+        command = str(args.get("command") or args.get("code") or "")
+        if command and _MANAGED_CONFIG_WRITE_RE.search(command):
+            return _block(
+                tool,
+                "managed_config_command",
+                f"{_BLOCK_PREFIX} editing config.yaml, trust-agent credentials "
+                "or the governance bundle is forbidden; provider/model/gateway "
+                "configuration belongs to your organization.",
+            )
+    return None
+
+
+# ---------------------------------------------------------------------------
+# REQ-PE-011 (spec 042 GAP-42-A): messaging_permissions — veto de conector
+# ---------------------------------------------------------------------------
+def _check_messaging_permissions(tool: str, _args: dict[str, Any],
+                                 payload: dict[str, Any], _session_id: str):
+    """Defense-in-depth: veto de tools de conector ``connectors__<slug>__*``
+    cuando ``messaging_permissions[<slug>].allowed == false``.
+
+    El pin de ``gateway.platforms.<slug>.enabled=false`` vía
+    :func:`sync_managed_config` es el mecanismo primario (bloquea el despacho
+    del gateway); este veto cubre el camino de tools de conector directas
+    (p. ej. ``connectors__telegram__send_message``) que no pasan por el
+    gateway. ``allowed_connectors`` (en enforcement.py) ya veto por slug
+    ausente de la lista; este check cubre el caso donde el conector ESTÁ
+    allowlisted pero la mensajería por esa plataforma está bloqueada.
+    """
+    if not tool.startswith("connectors__") or tool == "connectors__execute":
+        return None
+    parts = tool.split("__", 2)
+    if len(parts) != 3 or not parts[1]:
+        return None
+    slug = parts[1]
+    blocked = _blocked_messaging_platforms(payload)
+    if slug not in blocked:
+        return None
+    return _block(
+        tool,
+        f"messaging_platform_blocked (platform={slug})",
+        f"{_BLOCK_PREFIX} messaging platform '{slug}' is blocked by "
+        f"organization policy (messaging_permissions). The agent may not "
+        f"dispatch or interact via this platform on any surface.",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -694,11 +929,13 @@ def on_pre_tool_call(tool_name: str = "", args: dict[str, Any] | None = None,
 
     checkers = (
         _check_self_updates,      # P-29 (antes de nada: auto-modificación)
+        _check_managed_config_edits,  # P-26 (config/credenciales org)
         _check_approval_mode,     # P-1
         _check_terminal_backend,  # P-2
         _check_env_passthrough,   # P-18
         _check_write_sandbox,     # P-5
         _check_web_policy,        # P-19 + P-20
+        _check_messaging_permissions,  # REQ-PE-011 (spec 042 GAP-42-A)
     )
     for checker in checkers:
         try:
@@ -727,10 +964,17 @@ def on_pre_llm_call(session_id: str = "", **_: Any) -> dict[str, str] | None:
         return None  # restricted: enforcement inyecta el aviso de modo
     payload = snapshot["payload"]
 
+    # Detect offenders BEFORE the managed sync restores the config, so the
+    # model still receives an explicit policy note about what was blocked.
+    try:
+        offenders = provider_offenders(payload)
+    except Exception:  # noqa: BLE001
+        offenders = []
+
     try:
         sync_managed_config(payload)
-    except Exception:  # noqa: BLE001 - el sync jamás tumba el turno
-        pass
+    except Exception as exc:  # noqa: BLE001 - el sync jamás tumba el turno
+        log_event("managed_config_sync_error", error=repr(exc))
 
     notes: list[str] = []
 
@@ -744,7 +988,6 @@ def on_pre_llm_call(session_id: str = "", **_: Any) -> dict[str, str] | None:
             f"BLOCKED by organization policy until the approval mode is restored."
         )
 
-    offenders = provider_offenders(payload)
     if offenders:
         allowed = policy_contract.policy_value(payload, "allowed_providers") or []
         notes.append(

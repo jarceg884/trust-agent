@@ -65,7 +65,6 @@ class StubKc:
 def _make_tenant(slug: str = SLUG) -> str:
     """Crea un tenant completo vía la MISMA pieza del provisioner (sin KC)."""
     from app.db import get_engine
-    from app.profiles.templates import resolve_template_keys
     from app.tenants.provision import ProvisionRequest, _provision_in_db
 
     tenant_id = str(uuid.uuid4())
@@ -80,7 +79,8 @@ def _make_tenant(slug: str = SLUG) -> str:
         tenant_id=tenant_id,
         issuer=f"http://idp/realms/{slug}",
         kc_user_uuid=str(uuid.uuid4()),
-        template_keys=resolve_template_keys(None),
+        # spec 038 (D-38-01): born with the DECLARED departments or empty.
+        dept_specs=[],
     )
     return tenant_id
 

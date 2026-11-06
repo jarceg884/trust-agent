@@ -1,0 +1,16 @@
+{
+  "name": "trust-agent-setup",
+  "productName": "Trust Agent Setup",
+  "version": "0.0.0",
+  "description": "Organization-bound installer for the governed Hermes desktop agent (spec 040).",
+  "author": "trust-agent",
+  "private": true,
+  "main": "main.js",
+  "engines": {
+    "node": "^22"
+  },
+  "devDependencies": {
+    "electron": "^40.10.2",
+    "electron-builder": "^26.18.0"
+  }
+}

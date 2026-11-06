@@ -24,7 +24,7 @@ import ipaddress
 import json
 
 from fastapi import APIRouter, Depends, Request, Response
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
@@ -39,6 +39,7 @@ from ..errors import ApiError, not_found, permission_denied, tenant_suspended
 from ..org import branding as branding_service
 from . import bundle as bundle_builder
 from . import cli as cli_builder
+from . import installers as installers_service
 from . import page as page_renderer
 
 public_router = APIRouter()  # sin dependencias de auth: es público
@@ -153,6 +154,9 @@ def download_page(slug: str, request: Request):
             logo_data_uri=logo_uri,
             enabled=bool(tenant["download_enabled"]),
             api_base=str(request.base_url).rstrip("/"),
+            installers=installers_service.available_installers(
+                tenant["slug"]
+            ),
         )
     )
 
@@ -259,11 +263,13 @@ def download_cli_installer(slug: str, request: Request):
     # api_base: el origen desde el que el empleado descargó (D-023-01/06) —
     # el instalador apunta el binding y la descarga del bundle a ESTE origen.
     api_base = str(request.base_url).rstrip("/")
+    branding, _ = _tenant_branding(str(tenant["id"]))
     script = cli_builder.build_cli_installer(
         slug=tenant["slug"],
         api_base=api_base,
         litellm_base_url=settings.litellm_base_url or "http://127.0.0.1:4000",
         model=bundle_builder.DEFAULT_MODEL,
+        product_name=branding.get("product_name") or "Trust Agent",
     )
     sha256 = hashlib.sha256(script).hexdigest()
 
@@ -293,6 +299,97 @@ def download_cli_installer(slug: str, request: Request):
         headers={
             "Content-Disposition": f'inline; filename="trust-agent-{slug}-cli.sh"',
             "X-Installer-SHA256": sha256,
+        },
+    )
+
+
+@public_router.get("/download/{slug}/installer/{platform}")
+def download_installer(slug: str, platform: str, request: Request):
+    """Instalador desktop por plataforma (spec 040, REQ-PI-003/004).
+
+    Sirve el artefacto construido EN EL HOST (NSIS ``.exe`` / AppImage /
+    ``.dmg``) para la versión del plugin ACTUAL. Misma seguridad que el
+    bundle: rate limit, anti-enumeración, fail-closed y audit
+    ``download.issued`` con ``artifact: "installer-{platform}"`` (D-040-08).
+    Sin build servido → 404 ``installer_not_built`` (honesto, REQ-PI-009:
+    jamás se finge un artefacto — hoy macOS sin runner).
+    """
+    if platform not in installers_service.PLATFORMS:
+        raise not_found("Unknown installer platform.")
+    # Descargas limitadas a Windows hasta nuevo aviso (decisión de producto):
+    # macOS/Linux se anuncian como coming soon y no sirven artefacto alguno.
+    if platform != "windows":
+        raise not_found("The macOS and Linux installers are coming soon. Downloads are currently Windows-only.")
+
+    settings = get_settings()
+    ip = _client_ip(request)
+    installer_key = f"dl:installer:{slug}:{platform}:{ip}"
+    ip_key = throttle.ip_key(ip)
+    with get_engine().begin() as conn:
+        throttle.check(conn, [installer_key, ip_key])
+        throttle.register_hit(
+            conn, installer_key,
+            window_secs=settings.download_bundle_rate_window_seconds,
+            max_hits=settings.download_bundle_rate_max,
+        )
+
+    tenant = _public_tenant(slug)
+    if tenant is None:
+        with get_engine().begin() as conn:
+            throttle.register_failure(conn, [ip_key])
+        raise not_found("Unknown organization code.")
+    if tenant["status"] != "active":
+        raise tenant_suspended()
+    if not tenant["download_enabled"]:
+        raise _link_disabled()
+
+    artifact = installers_service.installer_path(tenant["slug"], platform)
+    info = installers_service.available_installers(tenant["slug"]).get(platform)
+    if artifact is None or info is None:
+        raise ApiError(
+            status_code=404,
+            code="not_found",
+            reason="installer_not_built",
+            message=(
+                "No installer build is currently available for this "
+                "platform. Use the CLI installer or contact your "
+                "organization admin."
+            ),
+        )
+
+    # Audit download.issued por plataforma (REQ-PI-003, D-040-08).
+    tenant_id = str(tenant["id"])
+    with get_engine().begin() as conn:
+        set_tenant(conn, tenant_id)
+        audit.emit(
+            conn,
+            tenant_id=tenant_id,
+            actor_role="system",
+            action="download.issued",
+            target_type="tenant",
+            target_id=tenant_id,
+            payload={
+                "slug": tenant["slug"],
+                "ip": ip,
+                "user_agent": request.headers.get("user-agent", "")[:200],
+                "artifact": f"installer-{platform}",
+                "platform": platform,
+                "filename": info["filename"],
+                "installer_sha256": info["sha256"],
+                "plugin_version": installers_service.current_installer_dir(
+                    tenant["slug"]
+                ).name,
+            },
+        )
+
+    return FileResponse(
+        artifact,
+        media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="{info["filename"]}"'
+            ),
+            "X-Installer-SHA256": info["sha256"],
         },
     )
 

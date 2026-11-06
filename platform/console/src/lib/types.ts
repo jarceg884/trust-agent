@@ -339,6 +339,7 @@ export interface ModelCatalogEntry {
   max_output_tokens: number | null;
   input_price_cents_per_m: number;
   output_price_cents_per_m: number;
+  cache_read_price_cents_per_m: number | null;
   status: string;
 }
 
@@ -364,6 +365,16 @@ export interface ModelAccessPolicy {
 export interface AccessOverview {
   models: AccessModelRow[];
   policy: ModelAccessPolicy;
+  byok_allowed?: boolean; // spec 043: false ⇒ hide all BYOK UI
+}
+
+/** POST /api/vault/connections/{id}/test-connection — test real (spec 043). */
+export interface TestConnectionResult {
+  ok: boolean;
+  models?: string[];
+  count?: number;
+  latency_ms: number;
+  error?: string;
 }
 
 export interface AccessModelRow {
@@ -374,6 +385,7 @@ export interface AccessModelRow {
   max_output_tokens: number | null;
   input_price_cents_per_m: number;
   output_price_cents_per_m: number;
+  cache_read_price_cents_per_m: number | null;
   catalog_status: string; // available | deprecated | stale | removed (spec 032)
   approvals: ModelApproval[];
   // Spec 032 (D-032-06): every connected API contributes its models —
@@ -609,7 +621,7 @@ export interface CredentialSecretResult extends CredentialMeta {
 export interface CustomConnectionMeta {
   id: string;
   name: string;
-  kind: "database" | "api_key" | "custom";
+  kind: "database" | "api_key" | "custom" | "llm";
   metadata: Record<string, unknown>;
   status: string; // "active" | "revoked"
   created_by: string;

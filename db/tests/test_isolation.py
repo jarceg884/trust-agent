@@ -155,6 +155,27 @@ def _insert_for(table: str, tenant_id: str, n: int):
             "VALUES (%s, %s, '{}')",
             (tenant_id, n),
         ),
+        # spec 041: política nombrada + asignación a nivel org (el INSERT
+        # de named_policy_assignments referencia la política recién creada
+        # vía CTE para no chocar con el unique de scope).
+        "named_policies": (
+            "INSERT INTO named_policies "
+            "  (id, tenant_id, name, description, definition) "
+            "VALUES (%s, %s, %s, %s, '{\"allow_voice_mode\": false}')",
+            (u, tenant_id, f"Política {n}-{u.hex[:8]}", "seed isolation"),
+        ),
+        "named_policy_assignments": (
+            "WITH np AS ("
+            "  INSERT INTO named_policies "
+            "    (id, tenant_id, name, definition) "
+            "  VALUES (%s, %s, %s, '{\"allow_voice_mode\": false}') "
+            "  RETURNING id"
+            ") "
+            "INSERT INTO named_policy_assignments "
+            "  (tenant_id, named_policy_id, level, applied_keys) "
+            "SELECT %s, np.id, 'org', '{\"allow_voice_mode\": false}' FROM np",
+            (u, tenant_id, f"Política asg {n}-{u.hex[:8]}", tenant_id),
+        ),
     }
     return rows[table]
 

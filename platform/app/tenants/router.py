@@ -31,7 +31,9 @@ class ProvisionBody(BaseModel):
     initial_budget_usd: float
     model_plan: str | list[str] = "standard"
     branding: dict | None = None
-    departments: list[str] | None = None
+    # Spec 038 (D-38-05): template keys (strings, backward compatible) or
+    # custom objects {name, profile_template?}. Omitted/[] -> born empty.
+    departments: list[str | dict] | None = None
     slug: str | None = None
     admin_display_name: str | None = None
 

@@ -29,38 +29,41 @@ export function MfaSetupClient({
 }) {
   const [phase, setPhase] = useState<Phase>(hasDance ? "loading" : "password");
   const [password, setPassword] = useState("");
-  const [totp, setTotp] = useState("");
   const [code, setCode] = useState("");
   const [qr, setQr] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const loadQr = useCallback(async () => {
-    setError(null);
-    try {
-      const res = await fetch("/auth/panel/totp/qr");
-      const data = (await res.json()) as {
-        status: string;
-        qr_png?: string | null;
-        reason?: string;
-        message?: string;
-      };
-      if (res.ok && data.status === "ok" && data.qr_png) {
-        setQr(data.qr_png);
-        setPhase("qr");
-        return;
-      }
-      setError(
-        panelErrorMessage(
-          data.reason ?? "error",
-          data.message ?? "The QR code is not available. Please start again.",
-        ),
-      );
-      setPhase("password");
-    } catch {
-      setError("The console is unreachable. Check your connection and try again.");
-      setPhase("password");
-    }
+  // Spec 015. Fix lint react-hooks/set-state-in-effect (skill
+  // nextjs-console-patterns §1): setState SOLO dentro de callbacks
+  // .then()/.catch() — nunca síncronamente en el cuerpo de la función
+  // que el useEffect invoca.
+  const loadQr = useCallback((): Promise<void> => {
+    return fetch("/auth/panel/totp/qr")
+      .then(async (res) => {
+        const data = (await res.json()) as {
+          status: string;
+          qr_png?: string | null;
+          reason?: string;
+          message?: string;
+        };
+        if (res.ok && data.status === "ok" && data.qr_png) {
+          setQr(data.qr_png);
+          setPhase("qr");
+          return;
+        }
+        setError(
+          panelErrorMessage(
+            data.reason ?? "error",
+            data.message ?? "The QR code is not available. Please start again.",
+          ),
+        );
+        setPhase("password");
+      })
+      .catch(() => {
+        setError("The console is unreachable. Check your connection and try again.");
+        setPhase("password");
+      });
   }, []);
 
   useEffect(() => {
@@ -75,7 +78,7 @@ export function MfaSetupClient({
       const res = await fetch("/auth/panel/totp/setup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ org, email, password, totp: totp.trim() || null }),
+        body: JSON.stringify({ org, email, password, totp: null }),
       });
       const data = (await res.json()) as {
         status: string;

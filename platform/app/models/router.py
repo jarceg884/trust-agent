@@ -24,7 +24,8 @@ def list_models(conn: Connection = Depends(get_tx)):
         text(
             "SELECT model_name, display_name, provider, context_tokens, "
             "max_output_tokens, input_price_cents_per_m, "
-            "output_price_cents_per_m, status, source FROM catalog.model_catalog "
+            "output_price_cents_per_m, cache_read_price_cents_per_m, "
+            "status, source FROM catalog.model_catalog "
             "ORDER BY source DESC, model_name"
         )
     ).mappings()
@@ -131,7 +132,7 @@ def get_access(
     """Catalog with per-level approval status (REQ-MDL-006)."""
     if not ({"org_admin", "dept_admin"} & set(principal.role_keys)):
         raise permission_denied("Only admins view the Model Access matrix.")
-    return access.access_overview(conn)
+    return access.access_overview(conn, tenant_id=principal.tenant_id)
 
 
 @router.put("/access", status_code=201)
@@ -247,4 +248,33 @@ def revoke_key(
             raise permission_denied("Missing permission: budget.user.manage")
         _check_scope(conn, principal, "user", None, str(row["user_id"]))
     keys.revoke_key(conn, principal, key_id=key_id)
-    return None
+
+
+# --- Cost map público (spec 005, REQ-MDL-004 — job pricing_sync) ------------
+# Sin auth a propósito: LITELLM_MODEL_COST_MAP_URL lo pide LiteLLM con un GET
+# plano (no sabe de sesiones/MFA de la plataforma) — no es sensible, es
+# pricing publicado por Huawei (huawei_pricing.py documenta la fuente).
+public_router = APIRouter()
+
+
+@public_router.get("/api/models/cost-map")
+def model_cost_map():
+    """Cost map real que LiteLLM recarga solo (schedule 6h + POST
+    /reload/model_cost_map inmediato desde sync_now()) — única fuente de
+    pricing del catálogo central, nunca una tabla paralela."""
+    from . import huawei_pricing
+
+    return huawei_pricing.build_cost_map()
+
+
+@router.post("/pricing/sync")
+def sync_pricing(
+    principal: Principal = Depends(get_principal),
+):
+    """Fuerza el reload inmediato del cost map en el proxy real (en vez de
+    esperar el schedule) — botón "Actualizar precios" del admin."""
+    if "models.approve" not in principal.permissions:
+        raise permission_denied("Missing permission: models.approve")
+    from . import huawei_pricing
+
+    return huawei_pricing.sync_now()

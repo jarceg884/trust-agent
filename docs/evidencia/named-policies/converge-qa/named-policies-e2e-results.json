@@ -1,0 +1,122 @@
+[
+  {
+    "name": "AC-041-012: lista muestra las plantillas sembradas con badge Template",
+    "pass": true,
+    "detail": "api_templates=3 badges=3"
+  },
+  {
+    "name": "AC-041-003: bloque builder del backend (6 grupos, 47 ítems, 3 plantillas)",
+    "pass": true,
+    "detail": "groups=6 items=47 templates=3"
+  },
+  {
+    "name": "AC-041-012: editor con los 6 grupos del contrato (nada hardcodeado)",
+    "pass": true,
+    "detail": "dom=[\"Navigation & web\",\"System & terminal\",\"Communications\",\"Models\",\"Security\",\"Agent & automation\"] api=[\"Navigation & web\",\"System & terminal\",\"Communications\",\"Models\",\"Security\",\"Agent & automation\"]"
+  },
+  {
+    "name": "AC-041-012: las 47 capacidades del contrato en el sidebar",
+    "pass": true,
+    "detail": "rows=47 api=47"
+  },
+  {
+    "name": "AC-041-012: resumen '0 capabilities active' al empezar",
+    "pass": true,
+    "detail": "\"0 capabilities active0 keys\""
+  },
+  {
+    "name": "AC-041-012: activar 'Web search' compone allowed_tools (4 ítems ON visibles)",
+    "pass": true,
+    "detail": "\"4 capabilities active1 key\""
+  },
+  {
+    "name": "AC-041-012: el resumen muestra la key compuesta con sus ítems legibles",
+    "pass": true,
+    "detail": "[\"Available tools: Web search, Read files, Write files, View governance status\"]"
+  },
+  {
+    "name": "AC-041-012: capacidad escalar ON muestra su control 036 (docker/local/ssh)",
+    "pass": true,
+    "detail": "toggles=4"
+  },
+  {
+    "name": "AC-041-012: guardar sin elegir modelo → error inline, NO se crea",
+    "pass": true,
+    "detail": "\"The policy cannot be saved yet\\n\\nChoose a value for: Available AI models.\""
+  },
+  {
+    "name": "D-36-05/041: la elección de modelos es dinámica (GET /api/models)",
+    "pass": true,
+    "detail": "model toggles=7"
+  },
+  {
+    "name": "AC-041-012: policy creada con la definition compuesta",
+    "pass": true,
+    "detail": "[\"require_mfa\",\"allowed_tools\",\"allowed_models\",\"allowed_terminal_backends\"]"
+  },
+  {
+    "name": "AC-041-013: preview del diff (keys a escribir + reemplazos legibles)",
+    "pass": true,
+    "detail": "\"Assign “E2e Builder Policy”\\n\\nPreview exactly what will change before it changes — nothing is written until you confirm.\\n\\nAssign to\\nOrganization\\nDepartment\\nUser\\nUser\\nSelect a user…\\nadmin@policies-ux.test\\nDept Admin — deptadmin@policies-ux.test\\nPolicies Worker — worker@policies-ux.test\\n\\nWill be written (3)\\n\\nAgent tools\\n→ Available tools: Web search, Read files, Write files, View governance status\\nRe\""
+  },
+  {
+    "name": "AC-041-013: preview avisa las org_only omitidas a nivel usuario",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "name": "AC-041-013: resultado legible (aplicadas + omitidas)",
+    "pass": true,
+    "detail": "\"Policy assigned\\n\\nApplied to user “Policies Worker — worker@policies-ux.test”.\\n\\n3 policy keys written with the existing audit and deny-overrides guarantees.\\n\\nSkipped — organization-level only (1)\\n\\nMulti-factor authentication (MFA) can only be set for the organization, so they were not written at this\""
+  },
+  {
+    "name": "AC-041-013/005: effective del worker = lo materializado (web_search ON, MFA sigue org)",
+    "pass": true,
+    "detail": "tools=[\"governance_status\",\"read_file\",\"web_search\",\"write_file\"] src=user mfa_src=org"
+  },
+  {
+    "name": "AC-041-014: chips de la policy nombrada junto a las frases efectivas",
+    "pass": true,
+    "detail": "\"Named policies applied here:\\nE2e Builder Policy\""
+  },
+  {
+    "name": "D-41-06: editar marca la asignación Outdated (badge + Apply changes)",
+    "pass": true,
+    "detail": "stale=true"
+  },
+  {
+    "name": "D-41-06/REQ-041-006: reapply por destinatario con resultado legible",
+    "pass": true,
+    "detail": "\"Re-apply results\\n\\n✓ User “Policies Worker — worker@policies-ux.test” — 4 keys re-applied, 1 skipped (organization-level only)\""
+  },
+  {
+    "name": "D-41-07: 409 con destinatarios + 'Unapply everywhere and delete'",
+    "pass": true,
+    "detail": "\"“E2e Builder Policy” has active assignments\\n\\nDeleting it would leave its policy keys materialized with no way to unassign them from here. Choose explicitly:\\n\\nUser “Policies Worker — worker@policies-ux.test”\\n\\n“Unapply everywhere and delete” removes the keys this policy wrote on each recipient (manual\""
+  },
+  {
+    "name": "D-41-07: cascade desasigna y borra (la policy desaparece)",
+    "pass": true,
+    "detail": "policies=Desarrollador, Restringido total, Solo lectura web"
+  },
+  {
+    "name": "D-41-07/AC-041-005: la unassign desactiva las keys del snapshot (hereda de nuevo)",
+    "pass": true,
+    "detail": "tools=[\"web_search\",\"read_file\",\"write_file\",\"governance_status\"] src=default"
+  },
+  {
+    "name": "AC-041-015: dept_admin VE el builder (policies.dept.manage)",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "name": "D-41-09: dept_admin NO puede asignar a la organización (sin opción org)",
+    "pass": true,
+    "detail": "org_options=0"
+  },
+  {
+    "name": "AC-041-015: flechas navegan las pestañas por teclado",
+    "pass": true,
+    "detail": "active=Individual settings"
+  }
+]

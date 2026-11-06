@@ -28,10 +28,69 @@ from sqlalchemy.engine import Engine
 from ..audit import service as audit_service
 from ..db import set_tenant
 from ..errors import ApiError, validation_failed
-from ..profiles.templates import get_template, resolve_template_keys
+from ..governance import named_policies as named_policies_service
+from ..profiles.templates import get_template
 from .keycloak_admin import KeycloakAdminClient, KeycloakAdminError
 
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{2,48}$")
+
+# Department name rules (spec 012 / D-16-03 — same as the CRUD surface).
+DEPT_NAME_MAX = 80
+
+
+@dataclass(frozen=True)
+class DepartmentSpec:
+    """A department to create at birth (spec 038 D-38-04/05).
+
+    `name` is customer data (free text, unique case-insensitive per tenant);
+    `profile_template` is optional metadata validated against the registry.
+    """
+
+    name: str
+    profile_template: str | None = None
+
+
+def resolve_department_specs(
+    departments: list[str | dict] | None,
+) -> list[DepartmentSpec]:
+    """Normalize a declared department list (REQ-DO-011).
+
+    string  -> template key (backward compatible; name = template.name)
+    dict    -> custom department {name, profile_template?}
+    None/[] -> EMPTY list (D-38-01: the org is born empty + wizard)
+
+    Raises ValueError (mapped to 422 upstream) on unknown template keys,
+    invalid names or case-insensitive duplicates.
+    """
+    specs: list[DepartmentSpec] = []
+    seen: set[str] = set()
+    for entry in departments or []:
+        if isinstance(entry, str):
+            template = get_template(entry)  # ValueError on unknown key
+            name, key = template.name, entry
+        elif isinstance(entry, dict):
+            name = str(entry.get("name") or "").strip()
+            if not 1 <= len(name) <= DEPT_NAME_MAX:
+                raise ValueError(
+                    f"Department name must be 1-{DEPT_NAME_MAX} characters."
+                )
+            key = entry.get("profile_template")
+            if key is not None:
+                if not isinstance(key, str):
+                    raise ValueError("profile_template must be a string key.")
+                get_template(key)  # ValueError on unknown key
+        else:
+            raise ValueError(
+                "Each department must be a template key (string) or an "
+                "object {name, profile_template?}."
+            )
+        if name.lower() in seen:
+            raise ValueError(
+                f"Duplicate department name '{name}' in the declaration."
+            )
+        seen.add(name.lower())
+        specs.append(DepartmentSpec(name=name, profile_template=key))
+    return specs
 
 # Provider default branding (REQ-ONB-007): Trust Agent white-label base.
 DEFAULT_BRANDING = {
@@ -50,7 +109,10 @@ class ProvisionRequest:
     initial_budget_usd: float
     model_plan: str | list[str] = STANDARD_PLAN  # "standard" | [model_name, ...]
     branding: dict | None = None
-    departments: list[str] | None = None  # profile template keys; None = all 4
+    # Spec 038 (D-38-05): template keys (strings, backward compatible) or
+    # custom objects {name, profile_template?}. None/[] = born EMPTY (the
+    # org_admin sets the real structure on first login via the wizard).
+    departments: list[str | dict] | None = None
     slug: str | None = None  # explicit idempotency key (D-ONB-04)
     admin_display_name: str | None = None
 
@@ -60,6 +122,9 @@ class _Provisioned:
     departments: list[dict] = field(default_factory=list)
     models: list[str] = field(default_factory=list)
     policies: list[str] = field(default_factory=list)
+    # Spec 041 (REQ-041-007): slugs de las plantillas de políticas nombradas
+    # sembradas al nacer el tenant (idempotente por slug).
+    templates: list[str] = field(default_factory=list)
     budget_cents: int = 0
 
 
@@ -140,7 +205,8 @@ def provision(
     if not request.admin_email or "@" not in request.admin_email:
         raise validation_failed("admin_email must be a valid email address.")
     try:
-        template_keys = resolve_template_keys(request.departments)
+        # Spec 038 (D-38-01/05): declared departments or NONE — never a seed.
+        dept_specs = resolve_department_specs(request.departments)
     except ValueError as exc:
         raise validation_failed(str(exc)) from None
 
@@ -210,7 +276,7 @@ def provision(
         provisioned = _provision_in_db(
             engine, request=request, slug=slug, tenant_id=tenant_id,
             issuer=issuer, kc_user_uuid=kc_user_uuid,
-            template_keys=template_keys,
+            dept_specs=dept_specs,
         )
     except ApiError as exc:
         compensations = _compensate(kc, slug)
@@ -236,7 +302,10 @@ def provision(
         "admin": {
             "email": request.admin_email,
             "display_name": request.admin_display_name or request.admin_email,
-            "department": template_keys[0],
+            # Spec 038 (D-38-01): the admin is born with NO department when
+            # none is declared (department_id NULL) — or in the first
+            # declared one otherwise.
+            "department": dept_specs[0].name if dept_specs else None,
         },
         "one_time_activation": {
             "issuer_url": issuer,
@@ -259,6 +328,7 @@ def provision(
             "departments": provisioned.departments,
             "models": provisioned.models,
             "policies": provisioned.policies,
+            "templates": provisioned.templates,
             "budget_cents": provisioned.budget_cents,
         },
         "healthcheck": check,
@@ -283,7 +353,7 @@ def _provision_in_db(
     tenant_id: str,
     issuer: str,
     kc_user_uuid: str,
-    template_keys: list[str],
+    dept_specs: list[DepartmentSpec],
     status: str = "active",
     amount_cents: int | None = None,
     summary_action: str = "tenant.provisioned",
@@ -321,10 +391,12 @@ def _provision_in_db(
             },
         )
 
-        # Departments seeded from the profile templates (D-ONB-06).
+        # Departments DECLARED at birth (spec 038 D-38-01/05 — no implicit
+        # seed): template keys or custom names, in the declared order. An
+        # empty declaration leaves the org with ZERO departments (the
+        # structure wizard picks up from there on first login).
         first_dept_id = None
-        for key in template_keys:
-            template = get_template(key)
+        for spec in dept_specs:
             row = conn.execute(
                 text(
                     "INSERT INTO departments (id, tenant_id, name, profile_template) "
@@ -333,17 +405,22 @@ def _provision_in_db(
                 ),
                 {
                     "id": str(uuid.uuid4()), "tid": tenant_id,
-                    "name": template.name, "pt": key,
+                    "name": spec.name, "pt": spec.profile_template,
                 },
             ).mappings().first()
             dept_id = str(row["id"])
             first_dept_id = first_dept_id or dept_id
-            result.departments.append({"id": dept_id, "profile_template": key,
-                                       "name": template.name})
+            result.departments.append(
+                {"id": dept_id, "profile_template": spec.profile_template,
+                 "name": spec.name}
+            )
             audit_service.emit(
                 conn, tenant_id=tenant_id, actor_role=actor_role, actor_id=actor_id,
                 action="department.created", target_type="department",
-                target_id=dept_id, payload={"profile_template": key},
+                target_id=dept_id,
+                payload={"name": spec.name,
+                         **({"profile_template": spec.profile_template}
+                            if spec.profile_template else {})},
             )
 
         # Initial org_admin (Keycloak subject linked, MFA pending enrollment).
@@ -432,6 +509,15 @@ def _provision_in_db(
                          "default": True},
             )
 
+        # Spec 041 (REQ-041-007, D-41-08): las 3 plantillas del contrato del
+        # builder se siembran como named_policies comunes (editable/
+        # asignable/borrable), idempotente por slug. El backfill de los
+        # tenants existentes lo hace la migración 0034 con las MISMAS
+        # definitions (verificado por tests/test_named_policies.py).
+        result.templates = named_policies_service.seed_builtin_templates(
+            conn, tenant_id, actor_role=actor_role, actor_id=actor_id,
+        )
+
         # Initial approved model catalog (model_plan, resolved INSIDE the
         # transaction: an unknown name fails mid-tx -> total rollback,
         # exercising the compensation path for real — D-ONB-08).
@@ -497,7 +583,12 @@ def _provision_in_db(
                 "organization_name": request.organization_name,
                 "admin_email": request.admin_email,
                 "status": status,
-                "departments": template_keys,
+                "departments": [
+                    {"name": s.name,
+                     **({"profile_template": s.profile_template}
+                        if s.profile_template else {})}
+                    for s in dept_specs
+                ],
                 "models": result.models,
                 "policies": result.policies,
                 "budget_cents": result.budget_cents,

@@ -451,6 +451,18 @@ def refresh_central(
         "gateway_models": len(gateway_models),
         "upstream_models": len(upstream_ids) if upstream_ids is not None else None,
     }
+    if added:
+        # Modelo(s) nuevo(s) recién registrados en el gateway: si su nombre
+        # ya está en huawei_pricing, el precio real debe aplicar YA, no
+        # esperar hasta 6h del schedule (mandato Miller: "se agrega
+        # automático"). Best-effort: un reload fallido no rompe el refresh
+        # (el modelo ya quedó disponible; el pricing_sync normal lo alcanza).
+        try:
+            from . import huawei_pricing
+
+            huawei_pricing.sync_now()
+        except Exception:
+            pass
     audit.emit(
         conn, tenant_id=tenant_id, actor_role=actor_role, actor_id=actor_id,
         action="model.catalog_refreshed", target_type="model_catalog",
@@ -467,7 +479,10 @@ def refresh_tenant(
     actor_role: str = "system",
     actor_id: str | None = None,
 ) -> dict:
-    """Global refresh: central + every active llm connection of the tenant."""
+    """Global refresh: central + every active llm connection of the tenant
+    + every model provider the PROVIDER enabled for this tenant (spec 036
+    D-036-05 — the per-tenant leg; shared gateway routes are managed by the
+    provider-side lifecycle, never deleted here)."""
     litellm = litellm or get_litellm()
     result: dict = {
         "central": refresh_central(
@@ -502,6 +517,13 @@ def refresh_tenant(
                 "connection_id": connection_id,
                 "error": f"{type(exc).__name__}: {exc}",
             }
+
+    # Spec 036 (D-036-05): the provider leg — same containment per source.
+    from . import providers as provider_sources
+
+    result["providers"] = provider_sources.tenant_provider_leg(
+        conn, tenant_id, litellm=litellm, actor_role=actor_role,
+    )
     return result
 
 

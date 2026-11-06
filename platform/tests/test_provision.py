@@ -55,7 +55,8 @@ def _realm_cleanup():
     # incluido explicit-plan-corp (el fix anterior dejaba el realm huérfano
     # en el Keycloak local — la DB efímera se dropea, el realm no).
     for slug in (SLUG, CLI_SLUG, "rollback-corp", "cli-rollback-corp",
-                 "explicit-plan-corp"):
+                 "explicit-plan-corp", "declared-corp",
+                 "declared-rollback-corp"):
         try:
             kc.delete_realm(slug)
         except Exception:  # noqa: BLE001 — best effort cleanup
@@ -139,18 +140,21 @@ def test_provision_full_flow(client, admin_conn):
 
     tenant_id = tenant["id"]
     with admin_conn.cursor() as cur:
-        # AC-ONB-001: exact resource counts inside the new tenant
+        # AC-ONB-001 (amended by spec 038 D-38-01): no departments declared
+        # -> the tenant is born EMPTY and the org_admin has department NULL.
         cur.execute(
             "SELECT count(*) FROM departments WHERE tenant_id = %s", (tenant_id,)
         )
-        assert cur.fetchone()[0] == 4
+        assert cur.fetchone()[0] == 0
         cur.execute(
-            "SELECT profile_template FROM departments WHERE tenant_id = %s "
-            "ORDER BY name", (tenant_id,)
+            "SELECT count(*) FROM audit_log WHERE tenant_id = %s "
+            "AND action = 'department.created'", (tenant_id,)
         )
-        assert {r[0] for r in cur.fetchall()} == {
-            "it_operations", "cloud_operations", "finance", "customer_operations"
-        }
+        assert cur.fetchone()[0] == 0
+        cur.execute(
+            "SELECT department_id FROM users WHERE tenant_id = %s", (tenant_id,)
+        )
+        assert cur.fetchone()[0] is None  # org_admin born unassigned (D-38-01)
         cur.execute(
             "SELECT count(*) FROM users WHERE tenant_id = %s", (tenant_id,)
         )
@@ -228,9 +232,11 @@ def test_provision_full_flow(client, admin_conn):
         events = cur.fetchall()
         actions = [a for _, a in events]
         assert ("provider", "tenant.provisioned") in events
-        for expected in ("department.created", "user.created", "role.assigned",
+        # Spec 038 (D-38-01): no departments declared -> NO department.created.
+        for expected in ("user.created", "role.assigned",
                          "budget.updated", "policy.updated", "model.approved"):
             assert expected in actions
+        assert "department.created" not in actions
         cur.execute("SELECT audit_verify_chain(%s)", (tenant_id,))
         assert cur.fetchone()[0][0] == "ok"
 
@@ -277,7 +283,8 @@ def test_provision_full_flow(client, admin_conn):
 
     after = _counts(admin_conn)
     assert after["tenants"] == before["tenants"] + 1
-    assert after["departments"] == before["departments"] + 4
+    # Spec 038 (D-38-01): born with ZERO departments — nothing to add.
+    assert after["departments"] == before["departments"]
     assert after["users"] == before["users"] + 1
     assert after["budgets"] == before["budgets"] + 1
     _state["tenant_id"] = tenant_id
@@ -383,6 +390,91 @@ def test_provision_explicit_model_plan(client, admin_conn):
 
 
 # ---------------------------------------------------------------------------
+# AC-38-002 (spec 038 D-38-05) — declared departments: mixed declaration
+# ---------------------------------------------------------------------------
+
+def test_provision_declared_departments_mixed(client, admin_conn):
+    """A mixed `departments` declaration creates EXACTLY that structure in
+    order: string = template key (backward compatible, name = template.name),
+    object = custom {name, profile_template?}. The admin lands in the FIRST
+    declared department."""
+    resp = client.post(
+        "/api/admin/tenants",
+        headers=PROVIDER,
+        json={
+            "organization_name": "Declared Corp",
+            "admin_email": "admin@declared.test",
+            "initial_budget_usd": 50,
+            "model_plan": "standard",
+            "slug": "declared-corp",
+            "departments": [
+                "finance",
+                {"name": "Finanzas", "profile_template": "finance"},
+                {"name": "Ventas"},
+            ],
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    deptos = body["provisioned"]["departments"]
+    assert [d["name"] for d in deptos] == ["Finance", "Finanzas", "Ventas"]
+    assert [d["profile_template"] for d in deptos] == ["finance", "finance", None]
+    assert body["admin"]["department"] == "Finance"
+
+    tenant_id = body["tenant"]["id"]
+    with admin_conn.cursor() as cur:
+        cur.execute(
+            "SELECT name, profile_template FROM departments "
+            "WHERE tenant_id = %s ORDER BY created_at, name", (tenant_id,)
+        )
+        rows = cur.fetchall()
+        assert [(r[0], r[1]) for r in rows] == [
+            ("Finance", "finance"), ("Finanzas", "finance"), ("Ventas", None),
+        ]
+        cur.execute(
+            "SELECT count(*) FROM audit_log WHERE tenant_id = %s "
+            "AND action = 'department.created'", (tenant_id,)
+        )
+        assert cur.fetchone()[0] == 3
+        # The admin is a member of the FIRST declared department.
+        cur.execute(
+            "SELECT d.name FROM users u JOIN departments d "
+            "ON d.id = u.department_id WHERE u.tenant_id = %s", (tenant_id,)
+        )
+        assert cur.fetchone()[0] == "Finance"
+
+
+def test_provision_declared_departments_invalid(client, admin_conn):
+    """Invalid declarations answer 422 with ZERO rows created and the realm
+    compensated: unknown template key, duplicate names, bad name length."""
+    before = _counts(admin_conn)
+    kc = _kc()
+    for departments in (
+        [{"name": "Valid"}, "no_such_template"],          # unknown key
+        [{"name": "Ventas"}, {"name": "ventas"}],         # case-insensitive dup
+        [{"name": ""}],                                   # empty name
+        [{"name": "x" * 81}],                             # > 80 chars
+    ):
+        resp = client.post(
+            "/api/admin/tenants",
+            headers=PROVIDER,
+            json={
+                "organization_name": "Declared Rollback Corp",
+                "admin_email": "admin@declared-rollback.test",
+                "initial_budget_usd": 10,
+                "model_plan": "standard",
+                "slug": "declared-rollback-corp",
+                "departments": departments,
+            },
+        )
+        assert resp.status_code == 422, (departments, resp.text)
+        # Validation runs BEFORE the realm leg: plain 422, nothing created.
+        assert resp.json()["error"]["reason"] == "validation_failed"
+    assert _counts(admin_conn) == before  # zero orphan rows
+    assert not kc.realm_exists("declared-rollback-corp")
+
+
+# ---------------------------------------------------------------------------
 # AC-ONB-030 — provider auth (token + data-driven permission)
 # ---------------------------------------------------------------------------
 
@@ -457,7 +549,7 @@ def test_provider_state_and_healthcheck_endpoints(client):
     assert resp.status_code == 200
     state = resp.json()["tenant"]
     assert state["id"] == _state["tenant_id"]
-    assert state["counts"]["departments"] == 4
+    assert state["counts"]["departments"] == 0  # spec 038: born empty
     assert state["counts"]["users"] == 1
     assert state["counts"]["org_budgets"] == 1
     assert state["counts"]["approved_models"] >= 2

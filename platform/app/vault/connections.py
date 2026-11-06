@@ -227,6 +227,14 @@ def create_connection(
     _require_manage(principal)
     if kind not in KINDS:
         raise validation_failed(f"Kind must be one of: {list(KINDS)}.")
+    # Spec 043 (D-043-03): BYOK disabled ⇒ cannot create LLM connections
+    if kind == "llm":
+        from ..models.providers import tenant_byok_allowed
+        if not tenant_byok_allowed(conn, principal.tenant_id):
+            raise permission_denied(
+                "BYOK is not enabled for your organization. "
+                "Contact your platform provider."
+            )
     metadata = _validate_metadata(kind, metadata)
     settings = get_settings()
     kek = crypto.load_kek(settings.vault_kek_b64)
@@ -288,9 +296,21 @@ def list_connections(conn: Connection, principal: Principal) -> list[dict]:
             "SELECT * FROM vault_connections ORDER BY created_at DESC, id"
         )
     ).mappings()
+    # spec 037 (REQ-037-010): estado de policy por conexión para la UI —
+    # el mismo set de tokens deny-overrides que el runtime aplica al usarla.
+    tokens = allowed_connection_tokens(conn, principal)
+    # Spec 043 (D-043-03): if BYOK is disabled for this tenant, hide all
+    # LLM connections — total hiding, not grayed.
+    from ..models.providers import tenant_byok_allowed
+    byok_ok = tenant_byok_allowed(conn, principal.tenant_id)
     return [
-        _meta(dict(r)) for r in rows
+        {
+            **_meta(dict(r)),
+            "allowed_for_caller": str(r["id"]) in tokens,
+        }
+        for r in rows
         if _visible(conn, principal, dict(r))
+        and (byok_ok or dict(r)["kind"] != "llm")
     ]
 
 
@@ -588,3 +608,84 @@ def post_use(
 ):
     """Runtime injection (REQ-024-007): policy-gated, audited, in memory."""
     return use_connection(conn, principal, connection_id)
+
+
+# --- Test connection for BYOK LLM connections (spec 043, D-043-01) ---------
+
+@router.post("/{connection_id}/test-connection")
+def post_test_connection(
+    connection_id: str,
+    principal: Principal = Depends(get_principal),
+    conn: Connection = Depends(get_tx),
+):
+    """REAL GET {base_url}/models for a BYOK LLM connection — returns
+    models, latency or a clear error (never 5xx for upstream failures).
+    The key is decrypted in memory and NEVER appears in the response."""
+    _require_manage(principal)
+    connection_id = require_uuid(connection_id, "connection_id")
+    row = _load(conn, connection_id)
+    if not _visible(conn, principal, row):
+        raise not_found("Connection not found.")
+    if row["kind"] != "llm":
+        raise validation_failed(
+            "Test connection is only available for LLM (BYOK) connections."
+        )
+    if row["status"] != "active":
+        raise gone("This connection is revoked.")
+
+    # Spec 043: BYOK must be allowed for this tenant
+    from ..models.providers import tenant_byok_allowed
+    if not tenant_byok_allowed(conn, principal.tenant_id):
+        raise permission_denied("BYOK is not enabled for your organization.")
+
+    # Decrypt the key in memory (same contract as use_connection)
+    settings = get_settings()
+    kek = crypto.load_kek(settings.vault_kek_b64)
+    api_key = crypto.decrypt_secret(
+        row["ciphertext_secret"], row["ciphertext_dek"], row["nonce"], kek
+    ).decode("utf-8")
+
+    # Resolve base_url from metadata
+    base_url = (row["metadata"] or {}).get("base_url") or (row["metadata"] or {}).get("endpoint", "")
+    if not base_url:
+        raise validation_failed(
+            "Connection metadata must include 'base_url' or 'endpoint' "
+            "to test the connection."
+        )
+
+    import time
+    import httpx
+    from ..models.discovery import models_url
+
+    url = models_url(base_url)
+    t0 = time.monotonic()
+    try:
+        resp = httpx.get(
+            url,
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=20.0,
+        )
+    except httpx.HTTPError as exc:
+        latency = int((time.monotonic() - t0) * 1000)
+        return {"ok": False, "error": f"Connection failed: {exc}", "latency_ms": latency}
+    latency = int((time.monotonic() - t0) * 1000)
+    if resp.status_code != 200:
+        return {
+            "ok": False,
+            "error": f"HTTP {resp.status_code}: {resp.text[:300]}",
+            "latency_ms": latency,
+        }
+    try:
+        data = resp.json()
+        model_ids = sorted(
+            m.get("id", "") for m in data.get("data", [])
+            if m.get("id")
+        )
+    except Exception:
+        model_ids = []
+    return {
+        "ok": True,
+        "models": model_ids,
+        "count": len(model_ids),
+        "latency_ms": latency,
+    }

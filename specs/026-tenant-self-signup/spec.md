@@ -22,8 +22,12 @@ flujo existente de provisioning (spec 004/014) para crear cuentas por su cuenta.
 
 ### REQ-SS-001 — Signup público de organización
 El sistema DEBE exponer `POST /api/auth/signup-org` público: crea la
-organización completa (realm KC real, schema de datos, departamentos seed,
-admin user) en estado `pending_activation`, con budget org 0¢.
+organización completa (realm KC real, schema de datos, admin user) en estado
+`pending_activation`, con budget org 0¢. **ENMIENDA (spec 038 §6, D-38-01)**:
+la org nace con **CERO departamentos** (fin del seed de 4 — causa raíz del
+feedback Miller, t_b76456e5); la estructura real se declara post-activación
+con el wizard "Organization structure" de spec 038. El resto del flujo queda
+intacto.
 
 - Body: `organization_name`, `slug` (opcional, default = slugify del nombre),
   `admin_email`, `admin_password` (≥ 12 caracteres, permanente, sin required
@@ -119,7 +123,7 @@ spend descuenta del budget asignado.
 
 | AC | Criterio |
 |----|----------|
-| AC-26-001 | `POST /api/auth/signup-org` válido → 201; tenant `pending_activation`, realm KC creado, 4 deptos seed, org_admin creado, budget org 0¢, policies invariables, modelos approved; audit `tenant.self_registered` presente. |
+| AC-26-001 | `POST /api/auth/signup-org` válido → 201; tenant `pending_activation`, realm KC creado, **0 deptos (ENMIENDA spec 038 §6: fin del seed de 4 — la estructura se declara post-activación)**, org_admin creado, budget org 0¢, policies invariables, modelos approved; audit `tenant.self_registered` presente. |
 | AC-26-002 | Slug duplicado → 409; payload inválido (email/password/slug/nombre) → 422; flag off → 403 `self_signup_disabled`; abusos → 429 (contador IP). |
 | AC-26-003 | Con tenant pending: mint de sesión 201; `GET /api/me` → 423 `tenant_pending_activation`; endpoints de negocio (agents/models/devices/budgets/org/…) → 423; `POST /api/auth/logout` → 204; tenant suspended sigue → 403 `tenant_suspended`. |
 | AC-26-004 | `POST /api/admin/tenants/{slug}/activate` con budget → 200; status `active`; budget org = monto; audit `tenant.activated` + `budget.assigned`; notificación `tenant_activated` a cada org_admin. |

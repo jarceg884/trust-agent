@@ -44,6 +44,7 @@ API_BASE="__API_BASE__"
 BUNDLE_URL="${API_BASE}/download/${SLUG}/bundle"
 LITELLM_BASE="__LITELLM_BASE__"
 MODEL="__MODEL__"
+PRODUCT_NAME="__PRODUCT_NAME__"
 SKIN="trust-__SLUG__"
 
 HOME_DIR="${HERMES_HOME:-$HOME/.hermes}"
@@ -68,16 +69,26 @@ echo "==> Installing ${ORG_CODE} governed CLI into ${HOME_DIR}"
 
 # 1. Hermes CLI — official installer when missing (D-023-04).
 if ! command -v hermes >/dev/null 2>&1; then
-  echo "==> Hermes CLI not found — installing the official Hermes Agent"
+  echo "==> ${PRODUCT_NAME} not found — installing…"
   curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
   command -v hermes >/dev/null 2>&1 || {
-    echo "ERROR: Hermes installed but 'hermes' is not on PATH." >&2
+    echo "ERROR: ${PRODUCT_NAME} installed but not on PATH." >&2
     echo "Open a new terminal (PATH refresh) and re-run this installer." >&2
     exit 1
   }
 else
-  echo "==> Hermes CLI found: $(hermes --version 2>/dev/null | head -1)"
+  echo "==> ${PRODUCT_NAME} found: $(hermes --version 2>/dev/null | head -1)"
 fi
+
+# 1b. trust-agent command alias (white-label, REQ-PE-003): the employee types
+#     trust-agent, not hermes. Wrapper in ~/.local/bin — cero parches al core.
+ALIAS_DIR="${HOME}/.local/bin"
+mkdir -p "$ALIAS_DIR"
+cat > "$ALIAS_DIR/trust-agent" <<'ALIAS_EOF'
+#!/usr/bin/env bash
+exec hermes "$@"
+ALIAS_EOF
+chmod +x "$ALIAS_DIR/trust-agent"
 
 # 2. Canonical bundle = single source of the plugin, trust-login and the
 #    white-label skin (D-034-02). One GET; the served sha256 travels in the
@@ -157,7 +168,7 @@ Next steps:
      the resulting trust-agent/id-token.txt over (0600), or use SSH port
      forwarding. This helper also provisions your model key.
   2. Start the agent:
-       hermes
+       trust-agent
      Your device is enrolled automatically on first run (no enrollment
      screens). An organization admin approves it, and from then on the
      agent runs under your organization's governance policies.
@@ -172,6 +183,7 @@ def build_cli_installer(
     api_base: str,
     litellm_base_url: str,
     model: str,
+    product_name: str = "Trust Agent",
 ) -> bytes:
     """-> bytes del script bash (ejecutable, con org_code embebido).
 
@@ -184,5 +196,6 @@ def build_cli_installer(
         .replace("__API_BASE__", api_base)
         .replace("__LITELLM_BASE__", litellm_base_url)
         .replace("__MODEL__", model)
+        .replace("__PRODUCT_NAME__", product_name)
     )
     return script.encode()

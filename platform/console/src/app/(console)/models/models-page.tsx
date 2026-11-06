@@ -22,6 +22,7 @@ import type {
   BudgetOverview,
   CatalogRefreshSummary,
   ModelAccessPolicy,
+  TestConnectionResult,
 } from "@/lib/types";
 import { usdPerMillion } from "@/lib/format";
 import {
@@ -159,6 +160,7 @@ function ModelGroupTable({
             <Th>Context</Th>
             <Th>Input price</Th>
             <Th>Output price</Th>
+            <Th>Cache hit</Th>
             <Th>Approvals</Th>
             <Th className="w-44" />
           </tr>
@@ -183,6 +185,7 @@ function ModelGroupTable({
               </Td>
               <Td className="text-xs">{usdPerMillion(m.input_price_cents_per_m)}</Td>
               <Td className="text-xs">{usdPerMillion(m.output_price_cents_per_m)}</Td>
+              <Td className="text-xs">{usdPerMillion(m.cache_read_price_cents_per_m)}</Td>
               <Td>
                 <ApprovalBadges row={m} />
               </Td>
@@ -227,13 +230,36 @@ export function ModelsPage() {
   const [submitting, setSubmitting] = useState(false);
   // Refresh target: "global" | connection_id (spec 032 D-032-03).
   const [refreshing, setRefreshing] = useState<string | null>(null);
+  // Spec 043: test connection for BYOK connections.
+  const [byokTestBusy, setByokTestBusy] = useState<string | null>(null);
+  const [byokTestResults, setByokTestResults] = useState<Record<string, TestConnectionResult>>({});
 
   const departments = budgets.data?.departments ?? [];
 
   // Spec 032 (D-032-06): group the catalog by source — central MaaS plus
   // one section per BYOK connection (name + status + last refresh).
+  // Spec 036 (D-036-06): provider-operated sources get their own sections
+  // (platform-included options, marked by provider — NOT client BYOK).
   const models = overview.data?.models ?? [];
   const centralModels = models.filter((m) => m.source === "central");
+  const providerGroups = new Map<
+    string,
+    { name: string; baseUrl: string | null; status: string | null; rows: AccessModelRow[] }
+  >();
+  for (const m of models) {
+    if (m.source !== "provider" || !m.provider_id) continue;
+    let group = providerGroups.get(m.provider_id);
+    if (!group) {
+      group = {
+        name: m.provider_display_name ?? m.provider_source_name ?? m.provider_id,
+        baseUrl: m.provider_base_url,
+        status: m.provider_status,
+        rows: [],
+      };
+      providerGroups.set(m.provider_id, group);
+    }
+    group.rows.push(m);
+  }
   const byokGroups = new Map<
     string,
     { name: string; status: string | null; rows: AccessModelRow[] }
@@ -251,9 +277,10 @@ export function ModelsPage() {
   function openApprove(m: AccessModelRow) {
     setApproveFor(m);
     setLevel("org");
-    // The access mode follows the model's source (spec 032): BYOK models
-    // are approved as byok; central ones as central.
-    setMode(m.source === "byok" ? "byok" : "central");
+    // The access mode follows the model's source (spec 032/036): BYOK models
+    // are approved as byok; provider-operated ones as provider; central as
+    // central.
+    setMode(m.source === "byok" ? "byok" : m.source === "provider" ? "provider" : "central");
   }
 
   async function refreshCatalog(target: string) {
@@ -273,11 +300,18 @@ export function ModelsPage() {
         const unreachable = conns.length - ok.length;
         const discovered = ok.reduce((acc, c) => acc + (c.discovered ?? 0), 0);
         const stale = ok.reduce((acc, c) => acc + (c.stale ?? 0), 0);
+        const provs = Object.values(summary.providers ?? {});
+        const provOk = provs.filter((p) => p.error === undefined);
+        const provDiscovered = provOk.reduce((acc, p) => acc + (p.discovered ?? 0), 0);
+        const provStale = provOk.reduce((acc, p) => acc + (p.stale ?? 0), 0);
         msg =
           `Catalog refreshed — central: ${summary.central?.stale ?? 0} stale, ` +
           `${summary.central?.restored ?? 0} restored; ${discovered} discovered, ` +
           `${stale} stale across ${ok.length} connection(s)` +
           (unreachable > 0 ? `; ${unreachable} unreachable (skipped)` : "") +
+          (provOk.length > 0
+            ? `; providers: ${provDiscovered} discovered, ${provStale} stale across ${provOk.length} provider(s)`
+            : "") +
           ".";
       } else {
         msg = `Connection refreshed — ${summary.discovered ?? 0} discovered, ${summary.stale ?? 0} stale.`;
@@ -288,6 +322,27 @@ export function ModelsPage() {
       push("error", cause instanceof ApiError ? cause.message : "Refresh failed.");
     } finally {
       setRefreshing(null);
+    }
+  }
+
+  // Spec 043: test connection for a BYOK LLM connection.
+  async function testByokConnection(connectionId: string) {
+    setByokTestBusy(connectionId);
+    try {
+      const result = await api<TestConnectionResult>(
+        `/api/vault/connections/${connectionId}/test-connection`,
+        { method: "POST", body: {} },
+      );
+      setByokTestResults((prev) => ({ ...prev, [connectionId]: result }));
+      if (result.ok) {
+        push("success", `Connection OK — ${result.count} models found (${result.latency_ms}ms).`);
+      } else {
+        push("error", `Connection failed: ${result.error}`);
+      }
+    } catch (cause) {
+      push("error", cause instanceof ApiError ? cause.message : "Test failed.");
+    } finally {
+      setByokTestBusy(null);
     }
   }
 
@@ -342,7 +397,11 @@ export function ModelsPage() {
     <Card>
       <CardHeader
         title="Model catalog & approvals"
-        description="Every connected API contributes its models (central MaaS + your BYOK connections). Only approved models can be used. Pricing in USD per million tokens. Approvals cascade: org → department → user."
+        description={
+          (overview.data?.byok_allowed ?? true)
+            ? "Every connected API contributes its models (central MaaS + your BYOK connections). Only approved models can be used. Pricing in USD per million tokens. Approvals cascade: org → department → user."
+            : "Models from the platform providers enabled for your organization. Only approved models can be used. Pricing in USD per million tokens. Approvals cascade: org → department → user."
+        }
         actions={
           <div className="flex items-center gap-2">
             <Button
@@ -402,6 +461,27 @@ export function ModelsPage() {
               onRevoke={setRevokeFor}
             />
           ) : null}
+          {[...providerGroups.entries()].map(([pid, group]) => (
+            <ModelGroupTable
+              key={pid}
+              title={group.name}
+              subtitle={
+                (group.baseUrl ? `${group.baseUrl} — ` : "") +
+                "model provider registered by the platform provider and enabled for your organization (platform-included)."
+              }
+              badge={
+                <div className="flex items-center gap-1.5">
+                  <Badge tone="accent">provider</Badge>
+                  <Badge tone={group.status === "active" ? "success" : "danger"}>
+                    {group.status ?? "unknown"}
+                  </Badge>
+                </div>
+              }
+              rows={group.rows}
+              onApprove={openApprove}
+              onRevoke={setRevokeFor}
+            />
+          ))}
           {[...byokGroups.entries()].map(([cid, group]) => (
             <ModelGroupTable
               key={cid}
@@ -417,6 +497,15 @@ export function ModelsPage() {
                   <Badge tone={group.status === "active" ? "success" : "danger"}>
                     {group.status ?? "unknown"}
                   </Badge>
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    loading={byokTestBusy === cid}
+                    disabled={byokTestBusy !== null}
+                    onClick={() => testByokConnection(cid)}
+                  >
+                    Test connection
+                  </Button>
                   <Button
                     variant="secondary"
                     size="sm"
@@ -494,12 +583,16 @@ export function ModelsPage() {
             hint={
               approveFor?.source === "byok"
                 ? "BYOK: this model is served by the connection's own API key — it stays invocable only while the connection is allowed and active."
-                : "Central: Huawei Cloud MaaS via the platform gateway. BYOK: the user's own key."
+                : (overview.data?.byok_allowed ?? true)
+                  ? "Central: Huawei Cloud MaaS via the platform gateway. BYOK: the user's own key."
+                  : "Central: Huawei Cloud MaaS via the platform gateway. Provider: platform-included model sources."
             }
           >
             <Select id="approve-mode" value={mode} onChange={(e) => setMode(e.target.value)}>
               <option value="central">Central (platform gateway)</option>
-              <option value="byok">BYOK (user&apos;s own key)</option>
+              {(overview.data?.byok_allowed ?? true) && (
+                <option value="byok">BYOK (user&apos;s own key)</option>
+              )}
             </Select>
           </Field>
         </div>

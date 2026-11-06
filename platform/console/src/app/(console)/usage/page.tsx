@@ -11,7 +11,7 @@ export default function Page() {
     <>
       <PageHeader
         title="Usage"
-        description="Requests and spend per user over the real ledger — with live presence, drill-down and CSV export."
+        description="Requests and spend per user over the real ledger — live-updating every 15 s, with presence, drill-down and CSV export."
       />
       <UsagePage />
     </>

@@ -184,6 +184,7 @@ def test_register_encrypts_and_delivers_once(client, idp, tenant_c, admin_conn):
     meta = detail.json()
     assert set(meta) == {"id", "user_id", "name", "credential_type",
                          "connector_slug", "scope", "status",
+                         "folder_id",
                          "last_rotated_at", "last_used_at", "created_at"}
     assert meta["connector_slug"] == "vmware" and meta["status"] == "active"
     assert CANARY not in detail.text

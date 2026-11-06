@@ -20,6 +20,7 @@ import type { WhoAmI } from "@/lib/types";
 import { Shell } from "@/components/shell/shell";
 import { MfaGate } from "@/components/shell/mfa-gate";
 import { PendingActivationGate } from "@/components/shell/pending-activation-gate";
+import { StructureWizardGate } from "@/components/structure-wizard";
 import { ToastProvider } from "@/components/ui";
 
 /**
@@ -96,6 +97,10 @@ export default async function ConsoleLayout({
     <ToastProvider>
       {/* hex validado en accentThemeCss — solo #rrggbb llega aquí */}
       {accentCss ? <style dangerouslySetInnerHTML={{ __html: accentCss }} /> : null}
+      {/* Spec 038 (D-38-02): wizard "Organization structure" una única vez
+          por tenant mientras el flag de onboarding esté pendiente (solo
+          org_admin / departments.manage — el gate se autodestruye). */}
+      <StructureWizardGate me={me} />
       <Shell me={me}>{children}</Shell>
     </ToastProvider>
   );

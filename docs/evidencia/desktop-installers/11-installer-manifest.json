@@ -1,0 +1,18 @@
+{
+  "slug": "pi-e2e",
+  "plugin_version": "0.6.0",
+  "built_at": "2026-10-29T12:58:32-0600",
+  "git_rev": "2ee433a",
+  "platforms": {
+    "windows": {
+      "filename": "trust-agent-setup-pi-e2e-v0.6.0-win-x64.exe",
+      "sha256": "1cd9726c6da65d07c368943e489e8d8b6fcca773da57a667c2f0b6aefbe4199d",
+      "size": 102878332
+    },
+    "linux": {
+      "filename": "trust-agent-setup-pi-e2e-v0.6.0-linux-x86_64.AppImage",
+      "sha256": "976d63e49c42f914a470263f1ec0ee570690c651fd009c1e9413c0f5c0130c52",
+      "size": 116980003
+    }
+  }
+}

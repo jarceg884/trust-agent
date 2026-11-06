@@ -331,19 +331,19 @@ function DomainsControl({
   const spec = (value ?? {}) as { mode?: string; domains?: string[] };
   const [mode, setMode] = useState(spec.mode ?? "open");
   const [text, setText] = useState((spec.domains ?? []).join("\n"));
-  const [error, setError] = useState<string | null>(null);
+
+  // Dominios parseados en vivo (mismo parsing que Apply) para la advertencia.
+  const parsedDomains = text
+    .split(/[\n,]/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  // Allowlist vacía es un valor VÁLIDO de primera clase (spec 041 REQ-041-017,
+  // plantilla restringido-total, RESTRICTIVE_DEFAULTS del plugin): bloquea TODA
+  // navegación. Se aplica sin guard, con advertencia visual — no con error.
+  const emptyAllowlist = mode === "allowlist" && parsedDomains.length === 0;
 
   function apply() {
-    const domains = text
-      .split(/[\n,]/)
-      .map((s) => s.trim())
-      .filter(Boolean);
-    if (mode !== "open" && !domains.length) {
-      setError("Add at least one domain, or switch the mode back to open.");
-      return;
-    }
-    setError(null);
-    onChange({ mode, domains });
+    onChange({ mode, domains: parsedDomains });
   }
 
   return (
@@ -371,15 +371,18 @@ function DomainsControl({
           placeholder={t(control.domains_hint)}
         />
       ) : null}
+      {emptyAllowlist ? (
+        <p
+          role="status"
+          className="rounded-lg border border-warning/25 bg-warning-soft px-3 py-2 text-xs font-medium text-warning"
+        >
+          No domains listed — this allowlist blocks ALL web browsing.
+        </p>
+      ) : null}
       <div className="flex items-center gap-2">
         <Button variant="secondary" size="sm" disabled={disabled} onClick={apply}>
           Apply
         </Button>
-        {error ? (
-          <p role="alert" className="text-xs text-danger">
-            {error}
-          </p>
-        ) : null}
       </div>
     </div>
   );

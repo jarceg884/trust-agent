@@ -23,13 +23,17 @@ from .download.router import public_router as download_public_router  # spec 023
 from .errors import ApiError, new_request_id, request_id_var
 from .governance.bundle import bundle_router, public_router as governance_public_router
 from .governance.router import router as governance_router
+from .policy_bundles.router import router as policy_bundles_router
 from .jobs.router import router as jobs_router
+from .models.provider_router import router as model_providers_router  # spec 036
 from .models.router import router as models_router
+from .models.router import public_router as models_public_router  # spec 005 cost map
 from .org.router import router as org_router
 from .provider.operator import bootstrap_provider_operator
 from .provider.router import router as provider_router
 from .tenants.router import router as tenants_router
 from .vault.connections import router as vault_connections_router
+from .vault.router import folders_router as vault_folders_router
 from .vault.router import router as vault_router
 
 
@@ -103,15 +107,19 @@ def create_app() -> FastAPI:
     app.include_router(audit_router)
     app.include_router(audit_admin_router)
     app.include_router(models_router)
+    app.include_router(models_public_router)
+    app.include_router(model_providers_router)
     app.include_router(connectors_router)
     app.include_router(devices_router)
     app.include_router(device_heartbeat_router)  # spec 027 (heartbeat/presencia)
     app.include_router(device_attestation_router)  # spec 019 Inc. 3 (attestation)
     app.include_router(vault_router)
+    app.include_router(vault_folders_router)  # carpetas del vault (Infisical-style)
     app.include_router(vault_connections_router)  # spec 024 (custom connections)
     app.include_router(tenants_router)
     app.include_router(provider_router)  # spec 025 (super-user del proveedor)
     app.include_router(governance_router)
+    app.include_router(policy_bundles_router)
     app.include_router(bundle_router)
     app.include_router(governance_public_router)
     app.include_router(org_router)

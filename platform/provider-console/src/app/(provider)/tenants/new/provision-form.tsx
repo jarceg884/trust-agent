@@ -30,10 +30,18 @@ import {
 import { IconCheck } from "@/components/icons";
 
 const DEPARTMENT_TEMPLATES = [
-  { key: "it_operations", label: "IT Operations" },
-  { key: "cloud_operations", label: "Cloud Operations" },
-  { key: "finance", label: "Finance" },
-  { key: "customer_operations", label: "Customer Operations" },
+  { key: "cloud_operations", label: "Cloud Operations", labelEs: "Operaciones de Nube" },
+  { key: "customer_operations", label: "Customer Operations", labelEs: "Operaciones de Clientes" },
+  { key: "data_analytics", label: "Data & Analytics", labelEs: "Datos y Analítica" },
+  { key: "engineering", label: "Engineering", labelEs: "Ingeniería" },
+  { key: "finance", label: "Finance", labelEs: "Finanzas" },
+  { key: "human_resources", label: "Human Resources", labelEs: "Recursos Humanos" },
+  { key: "it_operations", label: "IT Operations", labelEs: "Operaciones de TI" },
+  { key: "legal", label: "Legal", labelEs: "Legal" },
+  { key: "marketing", label: "Marketing", labelEs: "Marketing" },
+  { key: "product", label: "Product", labelEs: "Producto" },
+  { key: "sales", label: "Sales", labelEs: "Ventas" },
+  { key: "security_compliance", label: "Security & Compliance", labelEs: "Seguridad y Cumplimiento" },
 ] as const;
 
 export function ProvisionForm() {
@@ -43,9 +51,11 @@ export function ProvisionForm() {
   const [budgetUsd, setBudgetUsd] = useState("500");
   const [modelPlan, setModelPlan] = useState<"standard" | "custom">("standard");
   const [customModels, setCustomModels] = useState("");
-  const [departments, setDepartments] = useState<string[]>(
-    DEPARTMENT_TEMPLATES.map((d) => d.key),
-  );
+  // Spec 038 (D-38-05): declared structure — catalog templates (keys) plus
+  // custom names. Default: NO selection (the org starts empty and its admin
+  // sets up the structure on first login via the wizard).
+  const [selectedTemplates, setSelectedTemplates] = useState<string[]>([]);
+  const [customDepartments, setCustomDepartments] = useState("");
   const [slug, setSlug] = useState("");
   const [productName, setProductName] = useState("");
   const [loading, setLoading] = useState(false);
@@ -63,17 +73,20 @@ export function ProvisionForm() {
   const modelsValid =
     modelPlan === "standard" ||
     customModels.trim().split(/[\s,]+/).filter(Boolean).length > 0;
+  const customDeptNames = customDepartments
+    .split(/[\n,]+/)
+    .map((n) => n.trim())
+    .filter(Boolean);
   const canSubmit =
     orgName.trim().length >= 2 &&
     emailValid &&
     budgetValid &&
     slugValid &&
     modelsValid &&
-    departments.length > 0 &&
     !loading;
 
   function toggleDepartment(key: string) {
-    setDepartments((prev) =>
+    setSelectedTemplates((prev) =>
       prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key],
     );
   }
@@ -92,7 +105,16 @@ export function ProvisionForm() {
           modelPlan === "standard"
             ? "standard"
             : customModels.trim().split(/[\s,]+/).filter(Boolean),
-        departments,
+        // Spec 038 (D-38-05): mixed declaration — template keys (strings)
+        // + custom departments ({name}). Omitted entirely when empty.
+        ...(selectedTemplates.length > 0 || customDeptNames.length > 0
+          ? {
+              departments: [
+                ...selectedTemplates,
+                ...customDeptNames.map((name) => ({ name })),
+              ],
+            }
+          : {}),
       };
       if (slug.trim()) body.slug = slug.trim();
       if (productName.trim()) {
@@ -301,7 +323,8 @@ export function ProvisionForm() {
               setBudgetUsd("500");
               setSlug("");
               setProductName("");
-              setDepartments(DEPARTMENT_TEMPLATES.map((d) => d.key));
+              setSelectedTemplates([]);
+              setCustomDepartments("");
             }}
           >
             Provision another client
@@ -443,17 +466,18 @@ export function ProvisionForm() {
 
           <fieldset>
             <legend className="mb-2 text-xs font-medium uppercase tracking-wider text-muted">
-              Seed departments
+              Departments (optional)
             </legend>
             <div className="flex flex-wrap gap-2">
               {DEPARTMENT_TEMPLATES.map((d) => {
-                const active = departments.includes(d.key);
+                const active = selectedTemplates.includes(d.key);
                 return (
                   <button
                     key={d.key}
                     type="button"
                     onClick={() => toggleDepartment(d.key)}
                     aria-pressed={active}
+                    title={d.label}
                     className={`rounded-full border px-3 py-1.5 text-xs font-medium transition-colors ${
                       active
                         ? "border-accent-border bg-accent-soft text-accent"
@@ -461,15 +485,43 @@ export function ProvisionForm() {
                     }`}
                   >
                     {active ? "✓ " : ""}
-                    {d.label}
+                    {d.labelEs}
                   </button>
                 );
               })}
             </div>
-            <p className="mt-1.5 text-xs text-muted">
-              Each department is seeded with its pre-designed Hermes profile
-              template.
-            </p>
+            <div className="mt-3">
+              <Input
+                aria-label="Custom department names"
+                value={customDepartments}
+                onChange={(e) => setCustomDepartments(e.target.value)}
+                placeholder="Dirección General, Soporte Técnico"
+              />
+              <p className="mt-1 text-xs text-muted">
+                Custom department names, comma or newline separated — the
+                customer&apos;s real names, in their own language.
+              </p>
+            </div>
+            {selectedTemplates.length > 0 || customDeptNames.length > 0 ? (
+              <p className="mt-2 rounded-lg border border-border-subtle bg-surface-alt px-3 py-2 text-xs text-muted">
+                <span className="font-semibold text-foreground">
+                  Structure preview:
+                </span>{" "}
+                {[
+                  ...selectedTemplates.map(
+                    (k) =>
+                      DEPARTMENT_TEMPLATES.find((d) => d.key === k)?.label ?? k,
+                  ),
+                  ...customDeptNames,
+                ].join(", ")}
+              </p>
+            ) : (
+              <p className="mt-2 rounded-lg border border-warning/25 bg-warning-soft px-3 py-2 text-xs text-warning">
+                No departments declared — the organization starts empty and its
+                admin sets up the real structure on first login (structure
+                wizard).
+              </p>
+            )}
           </fieldset>
 
           <div className="flex items-center justify-end gap-3 border-t border-border-subtle pt-4">

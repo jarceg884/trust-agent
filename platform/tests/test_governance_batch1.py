@@ -575,3 +575,52 @@ def test_internal_tool_never_vetoed(plugin, home, signing_key):
     _normal(plugin, home, signing_key)
     _write_config(home, {"approvals": {"mode": "off"}})
     assert _call(plugin, "governance_status", {}) is None
+
+
+# ---------------------------------------------------------------------------
+# P-26 — provider/model/credentials are organization-owned and pinned
+# ---------------------------------------------------------------------------
+def test_sync_pins_org_model_provider_and_credentials(plugin, home):
+    """A hand-edited config cannot keep another provider, model or key:
+    every managed sync restores the signed policy + device-issued credential."""
+    import yaml
+
+    trust = home / "trust-agent"
+    trust.mkdir(parents=True, exist_ok=True)
+    (trust / "device-token.json").write_text(json.dumps({
+        "device_id": DEVICE_ID,
+        "token": "devtok.test",
+        "model_base_url": "https://litellm.org.example/v1",
+        "model_key": "sk-org-issued",
+    }), encoding="utf-8")
+    _write_config(home, {
+        "model": {
+            "default": "my-own-model",
+            "provider": "openai",
+            "base_url": "https://api.openai.com/v1",
+            "api_key": "sk-user-own",
+        },
+        "fallback_providers": ["anthropic"],
+        "provider_routing": {"only": ["openai"]},
+        "auxiliary": {"compression": {"provider": "openai"}},
+        "moa": {"provider": "openai"},
+        "providers": {"openai": {"api_key": "sk-user"}},
+    })
+    payload = {
+        "jti": "pin-test",
+        "allowed_providers": ["litellm_gateway"],
+        "policy_models": ["deepseek-v4.1-flash-1017"],
+        "policy_default_model": "deepseek-v4.1-flash-1017",
+    }
+    assert plugin.config_enforcement.sync_managed_config(payload, force=True) is True
+
+    cfg = yaml.safe_load((home / "config.yaml").read_text(encoding="utf-8"))
+    assert cfg["model"]["default"] == "deepseek-v4.1-flash-1017"
+    assert cfg["model"]["provider"] == "custom"
+    assert cfg["model"]["base_url"] == "https://litellm.org.example/v1"
+    assert cfg["model"]["api_key"] == "sk-org-issued"
+    assert cfg["fallback_providers"] == []
+    assert cfg["provider_routing"] == {}
+    assert cfg["auxiliary"] == {}
+    assert cfg["moa"] == {}
+    assert cfg["providers"] == {}

@@ -31,7 +31,17 @@ _ICONS: dict[str, list[tuple[str, dict[str, str]]]] = {
                       ("path", {"d": "M8 21h8"}),
                       ("rect", {"x": "2", "y": "3", "width": "20", "height": "14", "rx": "2"})],
     "terminal": [("path", {"d": "m4 17 6-6-6-6"}),
-                 ("path", {"d": "M12 19h8"})],
+                ("path", {"d": "M12 19h8"})],
+    # Platform icons (spec 040) — official lucide nodes, same source.
+    "app-window": [("rect", {"x": "2", "y": "4", "width": "20", "height": "16", "rx": "2"}),
+                   ("path", {"d": "M10 4v4"}),
+                   ("path", {"d": "M2 8h20"}),
+                   ("path", {"d": "M6 4v4"})],
+    "apple": [("path", {"d": "M12 6.528V3a1 1 0 0 1 1-1h0"}),
+              ("path", {"d": "M18.237 21A15 15 0 0 0 22 11a6 6 0 0 0-10-4.472A6 6 0 0 0 2 11a15.1 15.1 0 0 0 3.763 10 3 3 0 0 0 3.648.648 5.5 5.5 0 0 1 5.178 0A3 3 0 0 0 18.237 21"})],
+    "monitor": [("rect", {"x": "2", "y": "3", "width": "20", "height": "14", "rx": "2"}),
+                ("line", {"x1": "8", "y1": "21", "x2": "16", "y2": "21"}),
+                ("line", {"x1": "12", "y1": "17", "x2": "12", "y2": "21"})],
     "copy": [("rect", {"x": "9", "y": "9", "width": "13", "height": "13", "rx": "2", "ry": "2"}),
              ("path", {"d": "M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"})],
     "check": [("path", {"d": "M20 6 9 17l-5-5"})],
@@ -118,6 +128,28 @@ font-size:13.5px;cursor:pointer;transition:all .15s ease-out;font-family:inherit
 .copy.ok{background:var(--ok)}
 .req{margin-top:14px;color:var(--muted);font-size:12.5px}
 .req strong{color:var(--text);font-weight:600}
+/* Platform cards (spec 040, REQ-PI-001) */
+.platforms{margin-top:44px}
+.platforms h2{font-size:19px;font-weight:700;letter-spacing:-.015em}
+.plat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));
+gap:16px;margin-top:18px}
+.plat{position:relative;background:var(--surface);border:1px solid var(--border);
+border-radius:14px;padding:22px;display:flex;flex-direction:column;gap:10px;
+transition:border-color .15s ease-out}
+.plat:hover{border-color:color-mix(in srgb,var(--accent) 45%,var(--border))}
+.plat .icon{width:40px;height:40px;border-radius:10px;background:color-mix(in srgb,
+var(--accent) 9%,white)}
+.plat h3{font-size:16px;font-weight:650;letter-spacing:-.01em}
+.plat .tag{color:var(--muted);font-size:12px;font-weight:600}
+.plat p{color:var(--muted);font-size:13px;flex:1}
+.plat .btn{margin-top:4px;justify-content:center;font-size:14px;padding:11px 18px}
+.plat .btn.ghost{color:var(--text)}
+.plat .badge{display:none;position:absolute;top:-11px;right:14px;background:var(--accent);
+color:#fff;font-size:11px;font-weight:650;padding:3px 10px;border-radius:999px}
+.plat.suggested{border-color:var(--accent);
+box-shadow:0 0 0 1px var(--accent) inset}
+.plat.suggested .badge{display:inline-flex}
+.plat.pending .icon{opacity:.55}
 footer{border-top:1px solid var(--border)}
 footer .wrap{display:flex;align-items:center;justify-content:space-between;
 gap:12px;padding-top:20px;padding-bottom:28px;color:var(--muted);font-size:12.5px;
@@ -181,7 +213,7 @@ def _cli_section(slug: str, curl_cmd: str) -> str:
   </div>
   <p class="req"><strong>Requirements:</strong> Linux, macOS or WSL2 with
   <code>bash</code>, <code>curl</code> and <code>tar</code>. The installer
-  adds the Hermes CLI (official installer) if it is not present, plus the
+  adds the agent CLI if it is not present, plus the
   governance plugin and your organization's branding. On a headless server,
   run <code>trust-login</code> once from a machine with a browser and copy
   the resulting <code>id-token.txt</code> over.</p>
@@ -212,6 +244,75 @@ def _cli_section(slug: str, curl_cmd: str) -> str:
 </script>"""
 
 
+def _platform_section(slug: str, installers: dict) -> str:
+    """Sección de instaladores por plataforma (spec 040, REQ-PI-001/002).
+
+    Tres botones grandes — Windows (.exe), macOS (.dmg), Linux (AppImage) —
+    al estilo de la página oficial de Hermes. La disponibilidad se lee del
+    directorio de artefactos del build actual (D-040-07): un botón solo
+    enlaza a un artefacto REAL; sin build, el estado es honesto (REQ-PI-002,
+    nunca un enlace muerto ni un archivo fingido). Detección de OS
+    client-side para resaltar la plataforma del visitante. El bundle tarball
+    (spec 023) queda como opción avanzada — es la fuente canónica del
+    plugin/skin que consumen el CLI y los propios instaladores.
+    """
+    bundle_url = f"/download/{_esc(slug)}/bundle"
+    cards = []
+    # Descargas habilitadas: SOLO Windows hasta nuevo aviso. macOS y Linux
+    # aparecen como "coming soon" — sin botón ni enlace descargable.
+    specs = [
+        ("windows", "app-window", "Windows", ".exe installer",
+         "Windows 10 / 11 — the governed agent, bound to your organization."),
+    ]
+    for platform, icon, name, tagline, blurb in specs:
+        url = f"/download/{_esc(slug)}/installer/{platform}"
+        info = (installers or {}).get(platform)
+        if info:
+            card = (
+                f'<div class="plat" data-os="{platform}">'
+                f'<span class="badge">Detected for your system</span>'
+                f'{_icon(icon, "lg")}<div><h3>{name}</h3>'
+                f'<span class="tag">{_esc(tagline)}</span></div>'
+                f"<p>{blurb}</p>"
+                f'<a class="btn" href="{url}" download>Download for {name}</a>'
+                f"</div>"
+            )
+        else:
+            card = (
+                f'<div class="plat pending" data-os="{platform}">'
+                f'{_icon(icon, "lg")}<div><h3>{name}</h3>'
+                f'<span class="tag">{_esc(tagline)}</span></div>'
+                f"<p>The Windows installer is being published — check back shortly.</p>"
+                f"</div>"
+            )
+        cards.append(card)
+    cards.append(
+        '<div class="plat pending" data-os="macos-linux">'
+        '<div><h3>macOS &amp; Linux</h3><span class="tag">.dmg · AppImage</span></div>'
+        '<p><strong>Coming soon.</strong> Downloads are currently limited to Windows.</p>'
+        '</div>'
+    )
+
+    return f"""<section class="platforms ta-rise" id="platforms">
+  <h2>Download for your platform</h2>
+  <div class="plat-grid">{''.join(cards)}</div>
+  <p class="note">{_icon("download")} Prefer the raw tarball bundle (Linux/macOS
+  terminal)? <a href="{bundle_url}" download>Download it here</a> — same agent,
+  same organization binding, installed with <code>./install.sh</code>.</p>
+</section>
+<script>
+(function() {{
+  var ua = navigator.userAgent;
+  var os = /Windows/i.test(ua) ? 'windows'
+    : (/Mac OS X|Macintosh/i.test(ua) ? 'macos'
+    : ((/Linux|X11/i.test(ua) && !/Android/i.test(ua)) ? 'linux' : null));
+  if (!os) return;
+  var card = document.querySelector('.plat[data-os="' + os + '"]');
+  if (card) card.classList.add('suggested');
+}})();
+</script>"""
+
+
 def render_page(
     *,
     slug: str,
@@ -220,12 +321,14 @@ def render_page(
     logo_data_uri: str | None,
     enabled: bool,
     api_base: str = "",
+    installers: dict | None = None,
 ) -> str:
     """Página pública 200 (estado sano o disabled — D-023-12).
 
-    Dos opciones (spec 034, REQ-034-003): Desktop app (bundle existente,
-    spec 023) y CLI (comando curl copiable — instalador por tenant).
-    Branding del tenant en ambas.
+    Tres opciones (spec 040, REQ-PI-001): instaladores desktop por
+    plataforma (Windows .exe / macOS / Linux AppImage, según el build
+    servido), bundle tarball (spec 023) y CLI (comando curl copiable,
+    spec 034). Branding del tenant en todas.
     """
     product = _esc(branding.get("product_name") or "Trust Agent")
     tagline = _esc(branding.get("tagline") or "")
@@ -236,10 +339,11 @@ def render_page(
     curl_cmd = f"curl -fsSL {cli_url} | bash"
 
     if enabled:
+        platform_section = _platform_section(slug, installers or {})
         cta = (
             f'<div class="actions ta-rise">'
-            f'<a class="btn" href="{bundle_url}" download>'
-            f'{_icon("download")} Download for desktop</a>'
+            f'<a class="btn ghost" href="#platforms">'
+            f'{_icon("download")} Download for desktop — pick your platform below</a>'
             f'<a class="btn ghost" href="#cli">'
             f'{_icon("terminal")} Install on a server (CLI)</a>'
             f'<span class="note">{_icon("lock")} No account needed to '
@@ -248,6 +352,7 @@ def render_page(
         banner = ""
         cli_section = _cli_section(slug, curl_cmd)
     else:
+        platform_section = ""
         cta = (
             f'<div class="actions ta-rise">'
             f'<span class="btn" aria-disabled="true">{_icon("download")} '
@@ -286,11 +391,12 @@ def render_page(
     running under your organization's security policies.</p>
     {banner}{cta}
   </section>
+  {platform_section}
   {cli_section}
   <section class="steps">
     <div class="card">{_icon("download", "lg")}<h2>1 · Download &amp; install</h2>
-      <p>Unpack and run <code>./install.sh</code>. It installs the full agent
-      with your organization's branding preconfigured.</p></div>
+      <p>Run the installer for your platform (or the CLI command). It installs
+      the full agent with your organization's branding preconfigured.</p></div>
     <div class="card">{_icon("user-check", "lg")}<h2>2 · Sign in once</h2>
       <p>Run <code>trust-login</code> and authenticate with your organization
       account (SSO + MFA) in the browser.</p></div>

@@ -66,7 +66,13 @@ def test_catalog_and_ops_are_provider_plane_by_design(admin_conn):
         # Spec 015 v1.3.0 (ADR-019): estado de los auth dances del panel
         # (TOTP enrollment + proof handle) — pre-autenticación, sin RLS.
         "auth_dances",
-    }
+        # Spec 036 (D-036-01): proveedores de modelos operados por el
+        # provider + habilitación por cliente — plano provider (patrón
+        # ops.provider_operators), sin RLS; el aislamiento por tenant
+        # vive en catalog.model_catalog (AC-036-07).
+        "model_providers",
+        "model_provider_tenants",
+        }
     # ops.spend_rejections (QA H2, D-DB-15) SÍ lleva una columna tenant_id:
     # es una referencia forense a un tenant que NO existe (sin FK), no dato
     # de negocio de un tenant — se verifica solo "sin RLS" más abajo.
@@ -76,12 +82,17 @@ def test_catalog_and_ops_are_provider_plane_by_design(admin_conn):
     targets = [(("catalog"), t) for t in provider_tables
                if t not in ("spend_cursor", "login_throttle", "spend_rejections",
                             "provider_operators", "provider_sessions",
-                            "provider_audit", "model_catalog", "auth_dances")]
+                            "provider_audit", "model_catalog", "auth_dances",
+                            "model_providers", "model_provider_tenants")]
     targets.append(("ops", "spend_cursor"))
     targets.append(("ops", "login_throttle"))
     targets.append(("ops", "provider_operators"))
     targets.append(("ops", "provider_sessions"))
     targets.append(("ops", "provider_audit"))
+    # Spec 036 (D-036-01): ops.model_providers — plano provider puro: sin
+    # tenant_id y sin RLS (la key vive en envelope; el acceso es solo vía
+    # API del provider con permiso providers.manage).
+    targets.append(("ops", "model_providers"))
     for schema, table in targets:
         cur.execute(
             "SELECT EXISTS (SELECT 1 FROM information_schema.columns "
@@ -119,6 +130,18 @@ def test_catalog_and_ops_are_provider_plane_by_design(admin_conn):
         "WHERE n.nspname = 'ops' AND c.relname = 'auth_dances'"
     )
     assert not cur.fetchone()[0], "ops.auth_dances: no debería tener RLS"
+    # ops.model_provider_tenants (spec 036, D-036-01): SÍ lleva tenant_id —
+    # es la política de accesos DEL PROVIDER (habilitación por cliente), no
+    # dato de negocio del tenant; sin RLS por diseño. El aislamiento real
+    # vive en catalog.model_catalog (filas source='provider' bajo RLS,
+    # AC-036-07): sin fila de habilitación el cliente no ve nada.
+    cur.execute(
+        "SELECT c.relrowsecurity FROM pg_class c "
+        "JOIN pg_namespace n ON n.oid = c.relnamespace "
+        "WHERE n.nspname = 'ops' AND c.relname = 'model_provider_tenants'"
+    )
+    assert not cur.fetchone()[0], \
+        "ops.model_provider_tenants: no debería tener RLS"
 
 
 def test_app_role_is_neither_superuser_nor_owner_nor_bypassrls(admin_conn):
@@ -246,7 +269,14 @@ def test_rbac_matrix_matches_spec(admin_conn):
         "GROUP BY r.key ORDER BY r.key"
     )
     matrix = dict(cur.fetchall())
-    assert set(matrix["platform_admin"]) == {"tenants.provision", "catalog.manage"}
+    # platform_admin: la base de spec 001 §2.1 + extensiones data-driven —
+    # tenants.delete (migración 0031, tenant deprovision) y providers.manage
+    # (migración 0032, spec 036: registro de model providers + habilitación
+    # por cliente, D-036-04).
+    assert set(matrix["platform_admin"]) == {
+        "tenants.provision", "catalog.manage",
+        "tenants.delete", "providers.manage",
+    }
     assert "budget.org.manage" in matrix["org_admin"]
     assert "policies.org.manage" in matrix["org_admin"]
     assert "policies.org.manage" not in matrix["dept_admin"]

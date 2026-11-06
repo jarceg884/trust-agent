@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Vela Agent — Download</title>
+<style>
+:root{--accent:#7c3aed;--bg:#f7f8fa;--surface:#ffffff;--text:#171b23;
+--muted:#5b6472;--border:#e3e6ec;--ok:#12805c;--warn:#8a5a00}
+*{box-sizing:border-box;margin:0;padding:0}
+html{-webkit-text-size-adjust:100%}
+body{font-family:ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,
+'Helvetica Neue',Arial,sans-serif;background:var(--bg);color:var(--text);
+line-height:1.6;-webkit-font-smoothing:antialiased}
+.wrap{max-width:880px;margin:0 auto;padding:0 24px}
+a{color:inherit}
+.icon{display:inline-flex;align-items:center;justify-content:center;
+flex-shrink:0;color:var(--accent)}
+.icon svg{width:20px;height:20px;stroke-width:1.75;fill:none;stroke:currentColor;
+stroke-linecap:round;stroke-linejoin:round}
+.icon.lg svg{width:26px;height:26px}
+header{border-bottom:1px solid var(--border);background:var(--surface)}
+header .wrap{display:flex;align-items:center;gap:12px;padding-top:18px;
+padding-bottom:18px}
+.logo{display:flex;align-items:center;gap:10px;font-weight:650;font-size:15px;
+letter-spacing:-.01em}
+.logo img{height:30px;width:auto;display:block}
+.logo .mark{display:flex;align-items:center;justify-content:center;width:32px;
+height:32px;border-radius:8px;background:var(--accent);color:#fff;
+font-size:15px;font-weight:700}
+.tagline{color:var(--muted);font-size:13px}
+main .wrap{padding-top:56px;padding-bottom:72px}
+.hero{max-width:640px}
+.kicker{display:inline-flex;align-items:center;gap:8px;font-size:12.5px;
+font-weight:600;color:var(--accent);background:color-mix(in srgb,
+var(--accent) 9%,white);border:1px solid color-mix(in srgb,var(--accent) 22%,white);
+padding:5px 12px;border-radius:999px}
+h1{font-size:clamp(30px,5vw,42px);line-height:1.12;letter-spacing:-.025em;
+font-weight:700;margin-top:18px}
+h1 em{font-style:normal;color:var(--accent)}
+.lede{margin-top:14px;color:var(--muted);font-size:16.5px;max-width:56ch}
+.actions{display:flex;align-items:center;gap:16px;margin-top:28px;flex-wrap:wrap}
+.btn{display:inline-flex;align-items:center;gap:10px;background:var(--accent);
+color:#fff;font-weight:600;font-size:15px;padding:12px 22px;border-radius:10px;
+text-decoration:none;border:1px solid transparent;transition:all .15s ease-out}
+.btn:hover{filter:brightness(1.06)}
+.btn:active{transform:scale(.98)}
+.btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.btn[aria-disabled=true]{pointer-events:none;opacity:.55}
+.btn.ghost{background:var(--surface);color:var(--text);border-color:var(--border)}
+.btn.ghost:hover{border-color:var(--accent);filter:none}
+.note{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:13px}
+.steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));
+gap:16px;margin-top:56px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:14px;
+padding:22px}
+.card .icon{width:40px;height:40px;border-radius:10px;background:color-mix(in srgb,
+var(--accent) 9%,white);margin-bottom:14px}
+.card h2{font-size:15.5px;font-weight:650;letter-spacing:-.01em}
+.card p{margin-top:6px;color:var(--muted);font-size:13.5px}
+.banner{display:flex;gap:12px;align-items:flex-start;border:1px solid;
+border-radius:12px;padding:16px 18px;margin-top:28px;font-size:14px}
+.banner.warn{background:#fff8eb;border-color:#f1dfae;color:#6b4a00}
+.banner.bad{background:#fdf0f0;border-color:#f0c6c6;color:#8f2424}
+.banner .icon{margin-top:1px}
+.banner strong{display:block;font-size:14.5px;margin-bottom:2px}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.92em;
+background:var(--surface);border:1px solid var(--border);border-radius:6px;
+padding:2px 7px}
+.cli{margin-top:40px;background:var(--surface);border:1px solid var(--border);
+border-radius:16px;padding:26px}
+.cli h2{font-size:19px;font-weight:700;letter-spacing:-.015em;display:flex;
+align-items:center;gap:10px}
+.cli .sub{margin-top:6px;color:var(--muted);font-size:14px;max-width:64ch}
+.cmd{display:flex;align-items:center;gap:10px;margin-top:16px}
+.cmd code{flex:1;min-width:0;overflow-x:auto;white-space:nowrap;font-size:13px;
+padding:12px 14px;background:#0f1218;color:#e7eaf0;border:1px solid #262c37;
+border-radius:10px}
+.copy{display:inline-flex;align-items:center;gap:7px;background:var(--accent);
+color:#fff;border:none;border-radius:9px;padding:10px 16px;font-weight:600;
+font-size:13.5px;cursor:pointer;transition:all .15s ease-out;font-family:inherit}
+.copy:hover{filter:brightness(1.06)}
+.copy:active{transform:scale(.98)}
+.copy:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.copy.ok{background:var(--ok)}
+.req{margin-top:14px;color:var(--muted);font-size:12.5px}
+.req strong{color:var(--text);font-weight:600}
+/* Platform cards (spec 040, REQ-PI-001) */
+.platforms{margin-top:44px}
+.platforms h2{font-size:19px;font-weight:700;letter-spacing:-.015em}
+.plat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));
+gap:16px;margin-top:18px}
+.plat{position:relative;background:var(--surface);border:1px solid var(--border);
+border-radius:14px;padding:22px;display:flex;flex-direction:column;gap:10px;
+transition:border-color .15s ease-out}
+.plat:hover{border-color:color-mix(in srgb,var(--accent) 45%,var(--border))}
+.plat .icon{width:40px;height:40px;border-radius:10px;background:color-mix(in srgb,
+var(--accent) 9%,white)}
+.plat h3{font-size:16px;font-weight:650;letter-spacing:-.01em}
+.plat .tag{color:var(--muted);font-size:12px;font-weight:600}
+.plat p{color:var(--muted);font-size:13px;flex:1}
+.plat .btn{margin-top:4px;justify-content:center;font-size:14px;padding:11px 18px}
+.plat .btn.ghost{color:var(--text)}
+.plat .badge{display:none;position:absolute;top:-11px;right:14px;background:var(--accent);
+color:#fff;font-size:11px;font-weight:650;padding:3px 10px;border-radius:999px}
+.plat.suggested{border-color:var(--accent);
+box-shadow:0 0 0 1px var(--accent) inset}
+.plat.suggested .badge{display:inline-flex}
+.plat.pending .icon{opacity:.55}
+footer{border-top:1px solid var(--border)}
+footer .wrap{display:flex;align-items:center;justify-content:space-between;
+gap:12px;padding-top:20px;padding-bottom:28px;color:var(--muted);font-size:12.5px;
+flex-wrap:wrap}
+.chip{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--border);
+background:var(--surface);border-radius:999px;padding:4px 12px;font-size:12px;
+font-weight:600}
+@media (prefers-reduced-motion: no-preference){
+.ta-rise{animation:rise .4s ease-out both}
+@keyframes rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;
+transform:none}}
+header .wrap{animation:rise .4s ease-out both}
+.steps .card:nth-child(1){animation:rise .4s ease-out 70ms both}
+.steps .card:nth-child(2){animation:rise .4s ease-out 140ms both}
+.steps .card:nth-child(3){animation:rise .4s ease-out 210ms both}
+}
+</style>
+</head>
+<body>
+<header><div class="wrap">
+  <div class="logo"><span class="mark">V</span><div>
+    <div>Vela Agent</div>
+    <div class="tagline">Vela governed AI</div>
+  </div></div>
+</div></header>
+<main><div class="wrap">
+  <section class="hero">
+    <span class="kicker ta-rise"><span class="icon " aria-hidden="true"><svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></svg></span> Vela Corp · organization edition</span>
+    <h1 class="ta-rise">Your organization's AI agent,<br><em>governed from day one.</em></h1>
+    <p class="lede ta-rise">Download the complete Vela Agent desktop agent, sign in
+    with your organization account, and your device is enrolled automatically —
+    running under your organization's security policies.</p>
+    <div class="actions ta-rise"><a class="btn ghost" href="#platforms"><span class="icon " aria-hidden="true"><svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/></svg></span> Pick your platform below</a><a class="btn ghost" href="#cli"><span class="icon " aria-hidden="true"><svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="m4 17 6-6-6-6"/><path d="M12 19h8"/></svg></span> Install on a server (CLI)</a><span class="note"><span class="icon " aria-hidden="true"><svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M7 11V7a5 5 0 0 1 10 0v4"/><rect x="3" y="11" width="18" height="11" rx="2"/></svg></span> No account needed to download — sign-in happens inside the app.</span></div>
+  </section>
+  <section class="platforms ta-rise" id="platforms">
+  <h2>Download for your platform</h2>
+  <div class="plat-grid"><div class="plat" data-os="windows"><span class="badge">Detected for your system</span><span class="icon lg" aria-hidden="true"><svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M10 4v4"/><path d="M2 8h20"/><path d="M6 4v4"/></svg></span><div><h3>Windows</h3><span class="tag">.exe installer</span></div><p>Windows 10 / 11 — the governed agent, bound to your organization.</p><a class="btn" href="/download/pi-e2e/installer/windows" download>Download for Windows</a></div><div class="plat pending" data-os="macos"><span class="icon lg" aria-hidden="true"><svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 6.528V3a1 1 0 0 1 1-1h0"/><path d="M18.237 21A15 15 0 0 0 22 11a6 6 0 0 0-10-4.472A6 6 0 0 0 2 11a15.1 15.1 0 0 0 3.763 10 3 3 0 0 0 3.648.648 5.5 5.5 0 0 1 5.178 0A3 3 0 0 0 18.237 21"/></svg></span><div><h3>macOS</h3><span class="tag">.dmg</span></div><p>The macOS installer requires a macOS build runner — coming soon. The CLI install works on macOS today.</p><a class="btn ghost" href="#cli">Use the CLI on macOS</a></div><div class="plat" data-os="linux"><span class="badge">Detected for your system</span><span class="icon lg" aria-hidden="true"><svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg></span><div><h3>Linux</h3><span class="tag">AppImage</span></div><p>Any modern x64 distro — run it from anywhere.</p><a class="btn" href="/download/pi-e2e/installer/linux" download>Download for Linux</a></div></div>
+</section>
+<script>
+(function() {
+  var ua = navigator.userAgent;
+  var os = /Windows/i.test(ua) ? 'windows'
+    : (/Mac OS X|Macintosh/i.test(ua) ? 'macos'
+    : ((/Linux|X11/i.test(ua) && !/Android/i.test(ua)) ? 'linux' : null));
+  if (!os) return;
+  var card = document.querySelector('.plat[data-os="' + os + '"]');
+  if (card) card.classList.add('suggested');
+})();
+</script>
+  <section class="cli ta-rise" id="cli">
+  <h2><span class="icon lg" aria-hidden="true"><svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="m4 17 6-6-6-6"/><path d="M12 19h8"/></svg></span> Work on a server or VPS? Use the CLI</h2>
+  <p class="sub">The same governed agent, installed from your terminal in one
+  command. It comes pre-bound to <strong>pi-e2e</strong> — your device
+  enrolls automatically on first run and an admin approves it, exactly like
+  the desktop app.</p>
+  <div class="cmd">
+    <code id="curl-cmd">curl -fsSL http://127.0.0.1:8000/download/pi-e2e/cli | bash</code>
+    <button class="copy" type="button" data-copy="curl -fsSL http://127.0.0.1:8000/download/pi-e2e/cli | bash"
+      aria-label="Copy the install command">
+      <span class="icon " aria-hidden="true"><svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></span> <span>Copy</span></button>
+  </div>
+  <p class="req"><strong>Requirements:</strong> Linux, macOS or WSL2 with
+  <code>bash</code>, <code>curl</code> and <code>tar</code>. The installer
+  adds the Hermes CLI (official installer) if it is not present, plus the
+  governance plugin and your organization's branding. On a headless server,
+  run <code>trust-login</code> once from a machine with a browser and copy
+  the resulting <code>id-token.txt</code> over.</p>
+</section>
+<script>
+(function() {
+  var btn = document.querySelector('.copy');
+  if (!btn) return;
+  btn.addEventListener('click', function() {
+    var text = btn.getAttribute('data-copy');
+    var done = function() {
+      btn.classList.add('ok');
+      btn.querySelector('span').textContent = 'Copied';
+      setTimeout(function() {
+        btn.classList.remove('ok');
+        btn.querySelector('span').textContent = 'Copy';
+      }, 2000);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done);
+    } else {
+      var ta = document.createElement('textarea');
+      ta.value = text; document.body.appendChild(ta); ta.select();
+      document.execCommand('copy'); ta.remove(); done();
+    }
+  });
+})();
+</script>
+  <section class="steps">
+    <div class="card"><span class="icon lg" aria-hidden="true"><svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/></svg></span><h2>1 · Download &amp; install</h2>
+      <p>Run the installer for your platform (or the CLI command). It installs
+      the full agent with your organization's branding preconfigured.</p></div>
+    <div class="card"><span class="icon lg" aria-hidden="true"><svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="m16 11 2 2 4-4"/><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg></span><h2>2 · Sign in once</h2>
+      <p>Run <code>trust-login</code> and authenticate with your organization
+      account (SSO + MFA) in the browser.</p></div>
+    <div class="card"><span class="icon lg" aria-hidden="true"><svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="m9 10 2 2 4-4"/><path d="M12 17v4"/><path d="M8 21h8"/><rect x="2" y="3" width="20" height="14" rx="2"/></svg></span><h2>3 · Governed automatically</h2>
+      <p>Your device enrolls itself on first run. Once your admin approves it,
+      organization policies apply to every session.</p></div>
+  </section>
+</div></main>
+<footer><div class="wrap">
+  <span>Organization code: <span class="chip"><span class="icon " aria-hidden="true"><svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M7 11V7a5 5 0 0 1 10 0v4"/><rect x="3" y="11" width="18" height="11" rx="2"/></svg></span> pi-e2e</span></span>
+  <span>Powered by Trust Agent</span>
+</div></footer>
+</body>
+</html>

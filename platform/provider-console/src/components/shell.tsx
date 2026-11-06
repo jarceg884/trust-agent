@@ -12,6 +12,7 @@ import { IconMenu, IconLogout } from "@/components/icons";
 const NAV_ITEMS = [
   { href: "/tenants", label: "Tenants" },
   { href: "/tenants/new", label: "Provision New Client" },
+  { href: "/providers", label: "Model Providers" },
   { href: "/security", label: "Security" },
 ] as const;
 

@@ -12,7 +12,7 @@ from ..errors import (
     validation_failed,
 )
 from . import agent_profiles, agents, budgets, policies, policies_matrix
-from . import usage
+from . import named_policies, usage
 
 router = APIRouter(prefix="/api", dependencies=[Depends(require_mfa)])
 
@@ -267,35 +267,15 @@ def _policy_scope(
 ) -> None:
     """org: policies.org.manage (org_admin). dept: policies.dept.manage,
     dept_admin limited to own departments. user: org_admin anywhere,
-    dept_admin within their departments."""
-    if level == "org":
-        if "policies.org.manage" not in principal.permissions:
-            raise permission_denied("Missing permission: policies.org.manage")
-        return
-    if level == "dept":
-        if not ({"policies.dept.manage", "policies.org.manage"}
-                & principal.permissions):
-            raise permission_denied("Missing permission: policies.dept.manage")
-        if "org_admin" not in principal.role_keys:
-            if department_id not in (dept_scope(principal) or []):
-                raise not_found("Department not found.")
-        return
-    if level == "user":
-        if not ({"policies.dept.manage", "policies.org.manage"}
-                & principal.permissions):
-            raise permission_denied("Missing permission: policies.dept.manage")
-        if "org_admin" not in principal.role_keys:
-            row = conn.execute(
-                text("SELECT department_id FROM users WHERE id = CAST(:u AS uuid)"),
-                {"u": user_id},
-            ).mappings().first()
-            if row is None:
-                raise not_found("User not found.")
-            dept = str(row["department_id"]) if row["department_id"] else None
-            if dept not in (dept_scope(principal) or []):
-                raise permission_denied("Outside your department scope.")
-        return
-    raise permission_denied("Invalid level.")
+    dept_admin within their departments.
+
+    Spec 041 (D-41-09): única implementación de la regla — delega en
+    named_policies.require_recipient_scope para que el panel por key
+    (spec 036) y las políticas nombradas compartan EXACTAMENTE el mismo
+    gate (cero superficie de bypass, cero drift)."""
+    named_policies.require_recipient_scope(
+        conn, principal, level, department_id, user_id,
+    )
 
 
 @router.get("/policies")
@@ -441,6 +421,157 @@ def delete_policy(
         department_id=department_id, user_id=user_id,
     )
     return None
+
+
+# --- Named policies (spec 041, REQ-041-001…011) -----------------------------------
+# Una política nombrada = preset de policy keys; la asignación MATERIALIZA
+# vía policies.upsert existente (D-41-01, engine intacto). El orden de
+# registro importa: /recipients y /assignments/... van ANTES de las rutas
+# con {id} para no ser capturados por el path param.
+
+class NamedPolicyBody(BaseModel):
+    name: str
+    description: str | None = None
+    definition: dict | None = None
+    template_slug: str | None = None
+
+
+class NamedPolicyUpdateBody(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    definition: dict | None = None
+
+
+class AssignBody(BaseModel):
+    level: str
+    department_id: str | None = None
+    user_id: str | None = None
+
+
+@router.get("/named-policies")
+def list_named_policies(
+    principal: Principal = Depends(get_principal),
+    conn: Connection = Depends(get_tx),
+):
+    """Lista de políticas nombradas + bloque ``builder`` (contrato canónico
+    del sidebar, D-41-02) — la UI JAMÁS hardcodea grupos/capacidades."""
+    return named_policies.list_policies(conn, principal)
+
+
+@router.get("/named-policies/recipients")
+def named_policy_recipients(
+    principal: Principal = Depends(get_principal),
+    conn: Connection = Depends(get_tx),
+):
+    """Qué políticas nombradas aplican a cada destinatario del alcance
+    (D-41-12) — leído de named_policy_assignments, sin re-derivar la
+    efectiva (eso sigue viniendo de matrix/effective)."""
+    return named_policies.recipients(conn, principal)
+
+
+@router.post("/named-policies", status_code=201)
+def create_named_policy(
+    body: NamedPolicyBody,
+    principal: Principal = Depends(get_principal),
+    conn: Connection = Depends(get_tx),
+):
+    return named_policies.create(
+        conn, principal, name=body.name, description=body.description,
+        definition=body.definition, template_slug=body.template_slug,
+    )
+
+
+@router.put("/named-policies/{policy_id}")
+def update_named_policy(
+    policy_id: str,
+    body: NamedPolicyUpdateBody,
+    principal: Principal = Depends(get_principal),
+    conn: Connection = Depends(get_tx),
+):
+    policy_id = require_uuid(policy_id, "policy_id")  # 422, no 500
+    return named_policies.update(
+        conn, principal, policy_id, name=body.name,
+        description=body.description, definition=body.definition,
+    )
+
+
+@router.delete("/named-policies/{policy_id}", status_code=204)
+def delete_named_policy(
+    policy_id: str,
+    cascade: str | None = None,
+    principal: Principal = Depends(get_principal),
+    conn: Connection = Depends(get_tx),
+):
+    """409 con la lista de asignaciones activas mientras tenga (D-41-07);
+    ``?cascade=unassign`` desasigna todas y luego borra."""
+    policy_id = require_uuid(policy_id, "policy_id")  # 422, no 500
+    if cascade is not None and cascade != "unassign":
+        raise validation_failed("cascade must be 'unassign'.")
+    named_policies.delete(
+        conn, principal, policy_id, cascade=(cascade == "unassign"),
+    )
+    return None
+
+
+@router.get("/named-policies/{policy_id}/preview")
+def preview_named_policy(
+    policy_id: str,
+    level: str,
+    department_id: str | None = None,
+    user_id: str | None = None,
+    principal: Principal = Depends(get_principal),
+    conn: Connection = Depends(get_tx),
+):
+    """Dry-run SIN escribir (REQ-041-004): keys a escribir (con valor
+    actual → overwrites), skipped_org_only, would_relax."""
+    policy_id = require_uuid(policy_id, "policy_id")  # 422, no 500
+    department_id = optional_uuid(department_id, "department_id")
+    user_id = optional_uuid(user_id, "user_id")
+    return named_policies.preview(
+        conn, principal, policy_id, level=level,
+        department_id=department_id, user_id=user_id,
+    )
+
+
+@router.post("/named-policies/{policy_id}/assign", status_code=201)
+def assign_named_policy(
+    policy_id: str,
+    body: AssignBody,
+    principal: Principal = Depends(get_principal),
+    conn: Connection = Depends(get_tx),
+):
+    """Materialización atómica (REQ-041-005): todos los upserts en la
+    transacción del request; un fallo → 422 por key y CERO filas nuevas."""
+    policy_id = require_uuid(policy_id, "policy_id")  # 422, no 500
+    department_id = optional_uuid(body.department_id, "department_id")
+    user_id = optional_uuid(body.user_id, "user_id")
+    return named_policies.assign(
+        conn, principal, policy_id, level=body.level,
+        department_id=department_id, user_id=user_id,
+    )
+
+
+@router.delete("/named-policies/assignments/{assignment_id}")
+def unassign_named_policy(
+    assignment_id: str,
+    principal: Principal = Depends(get_principal),
+    conn: Connection = Depends(get_tx),
+):
+    """Unassign segura (D-41-05): solo keys del snapshot; las editadas a
+    mano se conservan y se reportan en kept_modified."""
+    assignment_id = require_uuid(assignment_id, "assignment_id")
+    return named_policies.unassign(conn, principal, assignment_id)
+
+
+@router.post("/named-policies/{policy_id}/reapply")
+def reapply_named_policy(
+    policy_id: str,
+    principal: Principal = Depends(get_principal),
+    conn: Connection = Depends(get_tx),
+):
+    """Re-materialización best-effort por destinatario (REQ-041-006)."""
+    policy_id = require_uuid(policy_id, "policy_id")  # 422, no 500
+    return named_policies.reapply(conn, principal, policy_id)
 
 
 # --- Shared agents (REQ-GOV-040…044) ----------------------------------------------

@@ -63,13 +63,16 @@ def validate_invite(
             from ..errors import not_found
 
             raise not_found("Department not found.")
-    if department_id is not None:
-        dept = conn.execute(
-            text("SELECT id FROM departments WHERE id = CAST(:d AS uuid)"),
-            {"d": department_id},
-        ).mappings().first()
-        if dept is None:
-            raise validation_failed("Unknown department.")
+    if department_id is None:
+        raise validation_failed(
+            "A department is required for every user."
+        )
+    dept = conn.execute(
+        text("SELECT id FROM departments WHERE id = CAST(:d AS uuid)"),
+        {"d": department_id},
+    ).mappings().first()
+    if dept is None:
+        raise validation_failed("Unknown department.")
     if role_key == "dept_admin" and department_id is None:
         raise validation_failed(
             "dept_admin requires a department scope."

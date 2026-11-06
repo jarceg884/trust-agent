@@ -101,8 +101,8 @@ def approve(
     """Approve a model for a level (subset rule enforced)."""
     if level not in ("org", "dept", "user"):
         raise validation_failed("level must be org, dept or user.")
-    if mode not in ("central", "byok"):
-        raise validation_failed("mode must be 'central' or 'byok'.")
+    if mode not in ("central", "byok", "provider"):
+        raise validation_failed("mode must be 'central', 'byok' or 'provider'.")
     # D-018-06: the DB scope is resolved/validated server-side — the
     # body never reaches the INSERT unvalidated (GAP M-1: level=user
     # with a NULL department used to die as CheckViolation → 500).
@@ -342,6 +342,31 @@ def effective_models_for_user(
                 or r["status"] != "available"
             ):
                 effective.discard(r["model_name"])
+
+    # Spec 036 (D-036-03): composite gate for provider models — effective
+    # ONLY while the row is available, the provider is active AND the
+    # provider enabled this tenant (the provider's access policy). A
+    # denial on any history wins (deny-overrides, mirror of D-032-04).
+    if effective:
+        provider_rows = conn.execute(
+            text(
+                "SELECT mc.model_name, mc.status, mp.status AS provider_status, "
+                "mpt.enabled AS tenant_enabled "
+                "FROM catalog.model_catalog mc "
+                "JOIN ops.model_providers mp ON mp.id = mc.provider_id "
+                "LEFT JOIN ops.model_provider_tenants mpt "
+                "  ON mpt.provider_id = mp.id AND mpt.tenant_id = mc.tenant_id "
+                "WHERE mc.source = 'provider' AND mc.model_name = ANY(:names)"
+            ),
+            {"names": sorted(effective)},
+        ).mappings()
+        for r in provider_rows:
+            if (
+                r["status"] != "available"
+                or r["provider_status"] != "active"
+                or r["tenant_enabled"] is not True
+            ):
+                effective.discard(r["model_name"])
     return sorted(effective)
 
 
@@ -399,7 +424,8 @@ def resolve_mode(
 
 
 def access_overview(
-    conn: Connection, *, department_id: str | None = None
+    conn: Connection, *, department_id: str | None = None,
+    tenant_id: str | None = None,
 ) -> dict:
     """Catalog with per-level approval status for the tenant (REQ-MDL-006).
 
@@ -407,18 +433,34 @@ def access_overview(
     response carries a `policy` section with the live org-level
     `allowed_models` (null = no additional restriction) and the
     invariable floor `approved_models_only` from catalog.policy_keys.
+
+    Spec 043 (D-043-03): if BYOK is disabled for this tenant, ALL
+    source='byok' rows are filtered out — total hiding, not grayed.
+    The `byok_allowed` flag is exposed so the frontend can hide the
+    BYOK UI entirely.
     """
+    # Spec 043: check BYOK policy for this tenant
+    from .providers import tenant_byok_allowed
+    byok_allowed = True
+    if tenant_id is not None:
+        byok_allowed = tenant_byok_allowed(conn, tenant_id)
     rows = conn.execute(
         text(
             "SELECT mc.model_name, mc.display_name, mc.provider, "
             "mc.context_tokens, mc.max_output_tokens, "
             "mc.input_price_cents_per_m, mc.output_price_cents_per_m, "
+            "mc.cache_read_price_cents_per_m, "
             "mc.status AS catalog_status, mc.source, mc.connection_id, "
+            "mc.provider_id, mp.name AS provider_source_name, "
+            "mp.display_name AS provider_display_name, "
+            "mp.base_url AS provider_base_url, "
+            "mp.status AS provider_status, "
             "mc.last_seen_at, vc.name AS connection_name, "
             "vc.status AS connection_status "
             "FROM catalog.model_catalog mc "
             "LEFT JOIN vault_connections vc ON vc.id = mc.connection_id "
-            "ORDER BY mc.source DESC, vc.name, mc.model_name"
+            "LEFT JOIN ops.model_providers mp ON mp.id = mc.provider_id "
+            "ORDER BY mc.source DESC, vc.name, mp.name, mc.model_name"
         )
     ).mappings()
     approvals = conn.execute(
@@ -444,6 +486,9 @@ def access_overview(
         })
     models = []
     for r in rows:
+        # Spec 043 (D-043-03): total hiding — BYOK disabled ⇒ no byok rows
+        if not byok_allowed and r["source"] == "byok":
+            continue
         models.append({
             "model_name": r["model_name"],
             "display_name": r["display_name"],
@@ -452,6 +497,7 @@ def access_overview(
             "max_output_tokens": r["max_output_tokens"],
             "input_price_cents_per_m": r["input_price_cents_per_m"],
             "output_price_cents_per_m": r["output_price_cents_per_m"],
+            "cache_read_price_cents_per_m": r["cache_read_price_cents_per_m"],
             "catalog_status": r["catalog_status"],
             "source": r["source"],
             "connection_id": (
@@ -459,6 +505,11 @@ def access_overview(
             ),
             "connection_name": r["connection_name"],
             "connection_status": r["connection_status"],
+            "provider_id": str(r["provider_id"]) if r["provider_id"] else None,
+            "provider_source_name": r["provider_source_name"],
+            "provider_display_name": r["provider_display_name"],
+            "provider_base_url": r["provider_base_url"],
+            "provider_status": r["provider_status"],
             "last_seen_at": (
                 r["last_seen_at"].isoformat() if r["last_seen_at"] else None
             ),
@@ -489,7 +540,7 @@ def access_overview(
             bool(floor["default_value"]) if floor is not None else True
         ),
     }
-    return {"models": models, "policy": policy}
+    return {"models": models, "policy": policy, "byok_allowed": byok_allowed}
 
 
 def _actor_role(principal: Principal) -> str:

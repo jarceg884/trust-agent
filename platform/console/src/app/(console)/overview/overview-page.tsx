@@ -27,6 +27,7 @@ import {
   useToast,
 } from "@/components/ui";
 import { IconBudgets, IconPlus, IconRefresh } from "@/components/icons";
+import { StructureWizard } from "@/components/structure-wizard";
 import { useState } from "react";
 
 export function OverviewPage() {
@@ -35,6 +36,8 @@ export function OverviewPage() {
   const { push } = useToast();
   const [savingOrg, setSavingOrg] = useState(false);
   const [orgInput, setOrgInput] = useState<string | null>(null);
+  // Spec 038 (REQ-DO-023): empty-state con CTA al wizard de estructura.
+  const [wizardOpen, setWizardOpen] = useState(false);
 
   const org = overview.data?.organization;
   const hasOrgBudget = org?.budget_cents != null;
@@ -230,6 +233,11 @@ export function OverviewPage() {
           <EmptyState
             title="No departments yet"
             description="Departments appear here once created, with their monthly budget once allocated."
+            action={
+              <Button variant="primary" size="sm" onClick={() => setWizardOpen(true)}>
+                Set up structure
+              </Button>
+            }
           />
         ) : (
           <Table>
@@ -315,6 +323,12 @@ export function OverviewPage() {
         )}
       </Card>
 
+      {/* Wizard de estructura (spec 038): CTA del empty-state */}
+      <StructureWizard
+        open={wizardOpen}
+        onClose={() => setWizardOpen(false)}
+        onCompleted={() => overview.refetch()}
+      />
     </div>
   );
 }

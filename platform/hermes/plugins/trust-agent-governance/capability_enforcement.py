@@ -368,6 +368,151 @@ def _block(detail: str) -> dict[str, str]:
     return {"action": "block", "message": f"BLOCKED by organization policy: {detail}"}
 
 
+# ---------------------------------------------------------------------------
+# Self-harm veto (CONSTITUCIONAL — mandato Miller, TODAS las organizaciones):
+# "ningún agente es capaz de poder automodificarse o eliminarse". A
+# diferencia de TODO lo demás en este módulo, esto NO lee ninguna policy
+# key — es un piso fijo que aplica SIEMPRE, incluso si el bundle
+# otorgara 'terminal'/'write_file'/'patch' sin restricciones. Protege el
+# runtime del propio agente (su intérprete, el plugin de gobernanza y el
+# directorio de control $HERMES_HOME/trust-agent) contra la propia
+# herramienta del agente — nunca contra un operador humano con shell
+# propio en su SO (riesgo residual E-3, igual que allow_gateway_hooks:
+# trusted-by-placement, fuera del alcance de un plugin in-process).
+# ---------------------------------------------------------------------------
+
+_SELF_UPDATE_RE = re.compile(
+    r"\bhermes\s+(update|upgrade)\b"
+    r"|\bpip\s+(install\s+(-{1,2}u(pgrade)?|--upgrade)|uninstall)\b[^\n]{0,80}\bhermes\b",
+    re.IGNORECASE,
+)
+_DESTRUCTIVE_VERB_RE = re.compile(
+    r"\brm\s+-[a-z]*r[a-z]*f|\brm\s+-[a-z]*f[a-z]*r|\brmdir\s+/s|\bdel\s+/[fs]|"
+    r"\bremove-item\b|\berase\b|\bformat\b|\bmkfs\b|\btruncate\b|>\s*/dev/null",
+    re.IGNORECASE,
+)
+# Nombres únicos del control plane del propio plugin — heurística adicional
+# por nombre de archivo (defensa en profundidad, no la única capa: la capa
+# dura es _PROTECTED_ROOTS sobre args.path en write_file/patch).
+_SELF_FILE_NAMES = (
+    "device-token.json", "device_key.pem", "device_key.pub.pem",
+    "governance-bundle.jws", "enrollment-token.json", "jti-cache.json",
+    "trust_agent_policy_pubkey.pem", "enforcement.py",
+    "capability_enforcement.py", "policy_contract.py", "bundle_client.py",
+    "enroll.py", "config_enforcement.py", "attestation.py",
+)
+
+_SELF_PROTECTED_ROOTS_CACHE: list[Path] | None = None
+
+
+def _self_protected_roots() -> list[Path]:
+    """Raíces que el agente NUNCA puede escribir/borrar por su cuenta.
+
+    Resuelto una vez por proceso (no cambia en caliente): el intérprete
+    corriendo (``sys.prefix``/``sys.base_prefix`` — "el propio agente"),
+    el directorio de control de gobernanza (``trust_dir()``, incluye las
+    claves/tokens del dispositivo) y el directorio fuente del plugin
+    (``enforcement.py``/este módulo — si el agente pudiera editarlos se
+    neutralizaría su propia gobernanza).
+    """
+    global _SELF_PROTECTED_ROOTS_CACHE
+    if _SELF_PROTECTED_ROOTS_CACHE is not None:
+        return _SELF_PROTECTED_ROOTS_CACHE
+    import sys as _sys
+
+    roots: set[Path] = set()
+    for raw in (_sys.prefix, getattr(_sys, "base_prefix", _sys.prefix)):
+        try:
+            roots.add(Path(raw).resolve())
+        except OSError:
+            pass
+    try:
+        roots.add(_trust_dir().resolve())
+    except OSError:
+        pass
+    try:
+        roots.add(Path(__file__).resolve().parent)  # trust-agent-governance/
+    except OSError:
+        pass
+    env_root = os.environ.get("TRUST_AGENT_RUNTIME_ROOT", "").strip()
+    if env_root:
+        try:
+            roots.add(Path(env_root).expanduser().resolve())
+        except OSError:
+            pass
+    _SELF_PROTECTED_ROOTS_CACHE = sorted(roots)
+    return _SELF_PROTECTED_ROOTS_CACHE
+
+
+def _resolve_best_effort(raw: str) -> Path | None:
+    try:
+        return Path(raw).expanduser().resolve(strict=False)
+    except (OSError, ValueError, RuntimeError):
+        return None
+
+
+def _path_is_self_protected(raw: str) -> bool:
+    if not raw:
+        return False
+    target = _resolve_best_effort(raw)
+    if target is None:
+        return False
+    for root in _self_protected_roots():
+        try:
+            target.relative_to(root)
+            return True
+        except ValueError:
+            continue
+    return False
+
+
+def _self_harm_veto(tool: str, args: dict[str, Any]) -> dict | None:
+    """Piso constitucional (sin policy key): bloquea automodificación o
+    autoeliminación del propio agente, en CUALQUIER organización.
+
+    ``write_file``/``patch`` (y variantes equivalentes de edición de
+    archivo del core): ruta dentro de una raíz protegida → bloqueo duro.
+    ``terminal``: comando de autoactualización (``hermes update`` y
+    similares) O verbo destructivo combinado con una raíz/archivo
+    protegido → bloqueo duro. El resto de tools no tocan el filesystem
+    del runtime por su cuenta y no se evalúan aquí.
+    """
+    if tool in ("write_file", "patch", "edit_file", "write", "delete_file"):
+        path_arg = str(args.get("path") or args.get("file_path") or "")
+        if path_arg and _path_is_self_protected(path_arg):
+            return _block(
+                "the agent cannot modify or delete its own runtime, "
+                "governance control files, or governance plugin source "
+                "(self-modification/self-deletion is never allowed, in any "
+                "organization)."
+            )
+        return None
+    if tool == "terminal":
+        command = str(args.get("command") or "")
+        if not command:
+            return None
+        if _SELF_UPDATE_RE.search(command):
+            return _block(
+                "the agent cannot update itself (hermes update/upgrade or "
+                "an equivalent package command). Updates are managed "
+                "exclusively by your organization's governance; ask an "
+                "admin if a new version should be published."
+            )
+        if _DESTRUCTIVE_VERB_RE.search(command):
+            lowered = command.lower()
+            hits_named_file = any(name in lowered for name in _SELF_FILE_NAMES)
+            hits_root = any(
+                str(root).lower() in lowered for root in _self_protected_roots()
+            )
+            if hits_named_file or hits_root:
+                return _block(
+                    "the agent cannot delete or overwrite its own runtime "
+                    "or governance control files (self-deletion is never "
+                    "allowed, in any organization)."
+                )
+    return None
+
+
 def _policy(payload: dict[str, Any], key: str) -> Any:
     """Key de policy con deny-by-default (REQ-GOH-023) — NUNCA payload.get."""
     return policy_contract.policy_value(payload, key)
@@ -750,6 +895,15 @@ def on_pre_tool_call(tool_name: str = "", args: dict | None = None, **_: Any):
     tool = (tool_name or "").strip()
     if not tool or tool in INTERNAL_TOOLS:
         return None
+    args = args if isinstance(args, dict) else {}
+    # Self-harm veto FIRST (constitutional, no policy key, runs even with
+    # payload=None / restricted mode / allowed_tools="*" — see docstring
+    # above _self_harm_veto): no org can ever grant this back.
+    veto = _self_harm_veto(tool, args)
+    if veto:
+        _count_veto(tool, veto["message"])
+        _log_event("self_harm_veto", tool=tool, message=veto["message"])
+        return veto
     mode, payload = _current_payload()
     if payload is None:
         if _BATCH1_ACTIVE:
@@ -774,6 +928,14 @@ def on_pre_tool_call(tool_name: str = "", args: dict | None = None, **_: Any):
         for inner_name, inner_args in _bridge_entries(tool, args):
             if not inner_name or inner_name in INTERNAL_TOOLS:
                 continue
+            # Self-harm veto applies to deferred/bridged calls too — no
+            # bypass via tool_call/tool_describe (constitutional, see
+            # _self_harm_veto docstring).
+            inner_self_veto = _self_harm_veto(inner_name, inner_args)
+            if inner_self_veto:
+                _count_veto(inner_name, inner_self_veto["message"])
+                _log_event("self_harm_veto", tool=inner_name, message=inner_self_veto["message"])
+                return inner_self_veto
             # Clamp de scope (spec 022) con la misma semántica de "*" que
             # el veto de allowed_tools de la lane batch 1.
             allowed = {str(x) for x in (payload.get("allowed_tools") or [])}
@@ -997,6 +1159,23 @@ def evaluate_findings() -> dict[str, Any]:
             pass
         return snapshot
     config = _cached_config(max_age=0.0)  # lectura fresca para la evaluación
+
+    # P-26: provider efectivo fuera de allowed_providers (modelo, fallbacks,
+    # auxiliary, local_runtime, MoA). El sync administrado pina el gateway,
+    # pero cualquier desvío residual queda visible en attestation.
+    try:
+        from .config_enforcement import provider_offenders
+
+        offenders = provider_offenders(payload)
+        if offenders:
+            _add_finding(
+                "warnings",
+                "provider_config_deviation",
+                f"effective providers {offenders} are not in allowed_providers; "
+                "the organization gateway is the only allowed provider",
+            )
+    except Exception:
+        pass
 
     # P-13: provider de memoria externo no allowlisted.
     provider = _active_memory_provider()

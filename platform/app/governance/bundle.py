@@ -286,6 +286,53 @@ def compile_bundle_payload(
             effective.get("attestation_overdue_hours", 24)
         ),
     }
+    # Spec 044 (Policy Studio): el bundle firmado transporta la política
+    # global del departamento del usuario — prompt de organización, mapa de
+    # opciones de UI y credenciales/perfiles autorizados. El plugin los aplica
+    # al armar cada sesión; el prompt NO se lee de SOUL.md ni del perfil local.
+    from ..policy_bundles.router import effective_bundle_for_user
+
+    studio_bundle = effective_bundle_for_user(conn, principal.user_id)
+    payload["global_prompt"] = (studio_bundle or {}).get("global_prompt") or ""
+    payload["ui_features"] = (studio_bundle or {}).get("desktop") or {}
+    # White-label identity carried in the signed bundle. The desktop must never
+    # present itself as the upstream Hermes Agent / Nous Research product.
+    from ..org import branding as branding_service
+    _branding = branding_service.get_branding(conn)
+    payload["product_name"] = str(_branding.get("product_name") or "Trust Agent")
+    payload["tenant_name"] = principal.tenant_name or principal.tenant_slug
+    payload["policy_credentials"] = (studio_bundle or {}).get("credentials") or {}
+    payload["policy_profiles"] = (studio_bundle or {}).get("profiles") or []
+    payload["policy_models"] = (studio_bundle or {}).get("models") or []
+    payload["policy_default_model"] = (studio_bundle or {}).get("default_model")
+    payload["policy_agents"] = (studio_bundle or {}).get("agents") or []
+    payload["policy_contracts"] = (studio_bundle or {}).get("contracts") or []
+    if payload["policy_models"]:
+        allowed = set(payload.get("approved_models") or [])
+        payload["approved_models"] = [m for m in payload["policy_models"] if not allowed or m in allowed]
+
+    # CLI/agent capabilities (Policy Studio → Desktop restrictions → CLI &
+    # Agente). The desktop switches must also clamp the tool surface the
+    # governance plugin enforces for CLI and background runs.
+    ui = payload.get("ui_features") or {}
+    tool_features = {
+        "cli_terminal": {"terminal", "shell", "bash"},
+        "cli_files_read": {"read_file"},
+        "cli_files_write": {"write_file", "patch", "edit_file"},
+        "cli_web": {"web_search", "web_fetch", "browser", "browser_navigate"},
+        "cli_code": {"execute_code", "python"},
+    }
+    if ui.get("cli") is False:
+        payload["allowed_tools"] = []
+    else:
+        blocked: set[str] = set()
+        for feature, tools in tool_features.items():
+            if ui.get(feature) is False:
+                blocked.update(tools)
+        payload["allowed_tools"] = [
+            tool for tool in (payload.get("allowed_tools") or []) if tool not in blocked
+        ]
+
     # REQ-GOH-024: TODAS las keys del catálogo vigente, aplanadas. Los claims
     # estructurales (ya presentes, con su compilación propia: piso de gracia,
     # allowed_connections del vault, ...) NO se sobrescriben por keys del
@@ -326,6 +373,80 @@ def governance_bundle(request: Request):
         "policy_version": payload["policy_version"],
         "offline_grace_minutes": payload["offline_grace_minutes"],
         "synced_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+# --- Update gate (mandato Miller): el agente SOLO se actualiza por lo que
+# el PROVEEDOR publicó para este tenant — nunca upstream de Hermes --------
+
+@bundle_router.get("/update-check")
+def update_check(
+    request: Request, current_git_rev: str = "", platform: str = "windows"
+):
+    """GET /api/me/update-check: compara lo instalado contra lo PUBLICADO.
+
+    El desktop/CLI gobernado jamás consulta el updater nativo de Hermes
+    (upstream) — esta es la ÚNICA fuente de verdad de versión para un
+    agente bajo gobernanza. Sin build publicado para la plataforma pedida
+    → ``update_available=false`` (honestidad, constitution I: nunca se
+    inventa una versión nueva). Misma auth que el bundle (device token).
+    """
+    import json as _json
+
+    auth = require_bundle_auth(request)
+    engine = get_engine()
+    with engine.begin() as conn:
+        set_tenant(conn, auth.principal.tenant_id)
+        check_device_access(conn, auth.device_id, auth.principal)
+
+    from ..download import installers as installers_service
+
+    slug = auth.principal.tenant_slug
+    if platform not in installers_service.PLATFORMS:
+        platform = "windows"
+    manifest_file = installers_service.current_installer_dir(slug) / "installer-manifest.json"
+    base: dict = {
+        "current_git_rev": current_git_rev or None,
+        "platform": platform,
+    }
+    if not manifest_file.is_file():
+        return {
+            **base, "update_available": False,
+            "published_git_rev": None, "published_version": None,
+            "download_url": None, "sha256": None, "size": None,
+            "message": "Your provider has not published an installer build yet.",
+        }
+    try:
+        manifest = _json.loads(manifest_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {
+            **base, "update_available": False,
+            "published_git_rev": None, "published_version": None,
+            "download_url": None, "sha256": None, "size": None,
+            "message": "Installer manifest unreadable; treat as no update.",
+        }
+    published_git_rev = str(manifest.get("git_rev") or "") or None
+    info = installers_service.available_installers(slug).get(platform)
+    update_available = bool(
+        published_git_rev and info
+        and published_git_rev != (current_git_rev or None)
+    )
+    url_base = str(request.base_url).rstrip("/")
+    return {
+        **base,
+        "update_available": update_available,
+        "published_git_rev": published_git_rev,
+        "published_version": manifest.get("plugin_version"),
+        "download_url": (
+            f"{url_base}/download/{slug}/installer/{platform}"
+            if update_available else None
+        ),
+        "sha256": info["sha256"] if (update_available and info) else None,
+        "size": info["size"] if (update_available and info) else None,
+        "message": (
+            "Your provider published a new build." if update_available
+            else "You are on the version published by your provider."
+        ),
     }
 
 

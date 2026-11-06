@@ -50,6 +50,11 @@ VAULT_B1 = "60000000-0000-0000-0000-000000000002"  # credencial vault tenant B
 # spec 024: conexiones personalizadas del tenant (seed para RLS/isolation)
 CONN_A1 = "60000000-0000-0000-0000-000000000003"
 CONN_B1 = "60000000-0000-0000-0000-000000000004"
+# spec 041: política nombrada + asignación por tenant (seed de aislamiento)
+NAMED_POLICY_A1 = "80000000-0000-0000-0000-000000000001"
+NAMED_ASSIGNMENT_A1 = "80000000-0000-0000-0000-000000000002"
+NAMED_POLICY_B1 = "80000000-0000-0000-0000-000000000003"
+NAMED_ASSIGNMENT_B1 = "80000000-0000-0000-0000-000000000004"
 
 # Las 16 tablas de negocio (todas con tenant_id + RLS).
 BUSINESS_TABLES = [
@@ -79,6 +84,9 @@ BUSINESS_TABLES = [
     # spec 028 (branding REQ-BRD-004): migración 0018_branding_versioning
     "branding_assets",
     "branding_versions",
+    # spec 041 (políticas nombradas): migración 0034_named_policies
+    "named_policies",
+    "named_policy_assignments",
 ]
 
 _FAKE_CT = bytes(range(32))  # ciphertext opaco de prueba (nunca plaintext)
@@ -259,6 +267,30 @@ def _seed() -> None:
                     "INSERT INTO branding_versions (tenant_id, version, data) "
                     "VALUES (%s, 1, %s)",
                     (tenant, '{"product_name": "Trust Agent"}'),
+                )
+            # spec 041 (políticas nombradas): una política nombrada por
+            # tenant + una asignación (depto A1 para el tenant A, org para
+            # el tenant B) — aislamiento verificable en test_isolation.
+            for tenant, np_id, asg_id, level, dept in (
+                (TENANT_A, NAMED_POLICY_A1, NAMED_ASSIGNMENT_A1, "dept",
+                 DEPT_A1),
+                (TENANT_B, NAMED_POLICY_B1, NAMED_ASSIGNMENT_B1, "org", None),
+            ):
+                cur.execute(
+                    "INSERT INTO named_policies "
+                    "  (id, tenant_id, name, description, definition) "
+                    "VALUES (%s, %s, %s, %s, %s)",
+                    (np_id, tenant, f"Política {tenant[:8]}",
+                     "seed de aislamiento",
+                     '{"allow_voice_mode": false}'),
+                )
+                cur.execute(
+                    "INSERT INTO named_policy_assignments "
+                    "  (id, tenant_id, named_policy_id, level, "
+                    "   department_id, applied_keys) "
+                    "VALUES (%s, %s, %s, %s, %s, %s)",
+                    (asg_id, tenant, np_id, level, dept,
+                     '{"allow_voice_mode": false}'),
                 )
 
 

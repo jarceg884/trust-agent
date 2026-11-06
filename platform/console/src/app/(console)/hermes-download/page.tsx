@@ -23,7 +23,7 @@ import { PageHeader } from "@/components/ui";
 import { HermesDownloadPage } from "./hermes-download-page";
 
 export const metadata: Metadata = {
-  title: "Hermes Download",
+  title: "Desktop Download",
 };
 
 export default async function Page() {
@@ -45,8 +45,8 @@ export default async function Page() {
   return (
     <>
       <PageHeader
-        title="Hermes Download"
-        description="Your organization's stable download link for the Trust Agent desktop app — share it with employees to enroll their devices under your governance."
+        title="Desktop Download"
+        description="Your organization's stable download link for the governed desktop app — share it with employees to enroll their devices under your governance."
       />
       <HermesDownloadPage
         isAdmin={isAdmin}

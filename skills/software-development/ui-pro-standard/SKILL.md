@@ -67,7 +67,18 @@ vivo (t_7cd4f40e, 2026-10-26).
    `Network.setCookie` (httpOnly) y captura. Las sesiones minteadas pueden
    caducar entre llamadas — verifica con `fetch('/api/proxy/me')` antes de
    capturar y re-minta si da 401.
-5. **Smoke del console**: requiere el tenant `demo-org` provisionado real con
+5. **Las suites E2E de /policies comparten el mismo worker y se contaminan
+   entre sí** (verificado t_edd8acaf): `e2e_041_practicantes_ui.mjs` asigna
+   `max_daily_sessions: 2` al worker → la suite 036
+   (`e2e_policies_ux_shots.mjs`) falla su check "el control vuelve al valor
+   vigente (5)" porque el vigente YA es 2; y el cascade-delete final del
+   builder (`e2e_named_policies_shots.mjs`) remueve el override de usuario
+   `allowed_tools` que la 036 espera ("✗ Web search" + "Set for this user").
+   Orden seguro: builder → practicantes → borrar Practicantes (cascade) →
+   re-poner el override (`PUT /api/policies/user/<id>` allowed_tools
+   `[read_file, write_file, governance_status]`) → 036. Si un check de
+   "valor vigente" falla, sospecha estado residual antes que del código.
+6. **Smoke del console**: requiere el tenant `demo-org` provisionado real con
    `oidc_issuer_url` NULL y el `TENANT_ID` correcto hardcodeado en el script.
    Si la DB se resetea, re-provisiona con `POST /api/admin/tenants` (provider
    token) y actualiza la constante.

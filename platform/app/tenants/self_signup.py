@@ -131,7 +131,10 @@ def self_signup(
         admin_email=admin_email,
         initial_budget_usd=0.0,  # placeholder — amount_cents is explicit below
         model_plan=STANDARD_PLAN,
-        departments=None,  # all 4 profile templates
+        # Spec 038 (D-38-01, enmienda AC-26-001): the self-signup org is born
+        # with ZERO departments — its real structure is declared post-
+        # activation through the "Organization structure" wizard.
+        departments=[],
         slug=slug,
         admin_display_name=request.admin_display_name.strip(),
     )
@@ -143,7 +146,7 @@ def self_signup(
             tenant_id=tenant_id,
             issuer=issuer,
             kc_user_uuid=kc_sub,
-            template_keys=_template_keys(),
+            dept_specs=[],
             status="pending_activation",
             amount_cents=0,
             summary_action="tenant.self_registered",
@@ -172,11 +175,3 @@ def self_signup(
             "is functional until it is activated."
         ),
     }
-
-
-def _template_keys() -> list[str]:
-    """Resolve the default department templates OUTSIDE the transaction
-    (validation before any write — same criterion as provision())."""
-    from ..profiles.templates import resolve_template_keys
-
-    return resolve_template_keys(None)

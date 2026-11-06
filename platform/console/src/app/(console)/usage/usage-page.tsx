@@ -12,10 +12,15 @@
  * - Presencia en vivo junto al consumo (GET /api/devices/presence, spec
  *   027): punto verde si el usuario tiene dispositivo con heartbeat
  *   reciente, con el tipo (desktop/cli).
+ * - Auto-refresco en vivo (spec 042 REQ-PE-007/AC-007-2, momento A1):
+ *   summary, drill-down y presencia se re-fetchean cada 15 s EN SILENCIO
+ *   (patrón de la franja de presencia de Devices, spec 027) — el admin ve
+ *   los tokens subir sin F5 ni clic, con badge "· live". Pausado con la
+ *   pestaña oculta (document.hidden); al volver, refresco inmediato.
  * - Export CSV por usuario y por request (GET /api/usage/export —
  *   auditado server-side como usage.exported).
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useApi } from "@/hooks/use-api";
 import { downloadBlob } from "@/lib/api-client";
 import { usd } from "@/lib/format";
@@ -61,6 +66,9 @@ const MODES: { value: string; label: string }[] = [
 ];
 
 const DRILLDOWN_PAGE_SIZE = 25;
+
+/** Ciclo de auto-refresco en vivo (mismo ritmo que la franja Devices). */
+const USAGE_POLL_MS = 15_000;
 
 function todayIso(daysAgo = 0): string {
   const d = new Date();
@@ -118,8 +126,10 @@ export function UsagePage() {
     return `/api/usage?${params.toString()}`;
   }, [period, from, to, model, mode]);
 
-  const summary = useApi<UsageSummary>(query);
-  const presence = useApi<PresenceResponse>("/api/devices/presence");
+  const summary = useApi<UsageSummary>(query, { silentRefetch: true });
+  const presence = useApi<PresenceResponse>("/api/devices/presence", {
+    silentRefetch: true,
+  });
 
   const drillQuery = drillFor
     ? `/api/usage/requests?${(() => {
@@ -134,7 +144,33 @@ export function UsagePage() {
         return params.toString();
       })()}`
     : null;
-  const drill = useApi<UsageRequestsPage>(drillQuery);
+  const drill = useApi<UsageRequestsPage>(drillQuery, { silentRefetch: true });
+
+  // Auto-refresco en vivo (REQ-PE-007/AC-007-2, patrón REQ-027-06 de la
+  // franja de Devices): cada 15 s se re-fetchean summary, drill-down y
+  // presencia. `silentRefetch` hace que sea un re-fetch EN SILENCIO — la
+  // tabla previa queda a la vista (cero skeleton/flicker) y los filtros y
+  // la paginación del drill-down viven en estado de la página, así que el
+  // ciclo no los toca. Pausado con la pestaña oculta (document.hidden);
+  // al volver a ser visible se refresca al momento.
+  useEffect(() => {
+    const tick = () => {
+      if (document.hidden) return;
+      summary.refetch();
+      drill.refetch();
+      presence.refetch();
+    };
+    const timer = window.setInterval(tick, USAGE_POLL_MS);
+    const onVisibility = () => {
+      if (!document.hidden) tick();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Presencia por usuario: online si CUALQUIER dispositivo activo tiene
   // heartbeat reciente; se listan los tipos conectados (desktop/cli).
@@ -191,6 +227,9 @@ export function UsagePage() {
   }
 
   const totals = summary.data?.totals;
+  // Refresco silencioso fallido: el dato previo sigue servido (useApi lo
+  // conserva) junto al error — la tabla no se tira, el badge lo dice.
+  const liveStale = Boolean(summary.data && summary.error);
 
   return (
     <div className="space-y-6">
@@ -200,10 +239,38 @@ export function UsagePage() {
           description="Every request billed through the gateway, aggregated per user from the spend ledger."
           actions={
             <div className="flex flex-wrap items-center gap-2">
+              {/* Badge live — mismo lenguaje visual que la franja de Devices */}
+              <div
+                className="flex items-center gap-2 rounded-lg border border-border bg-surface-alt/60 px-3 py-1.5"
+                title={
+                  liveStale
+                    ? "Last refresh failed — showing the last good figures while retrying every 15 s."
+                    : "Auto-refreshes every 15 s while this tab is visible (pauses when hidden). Figures come from the spend ledger."
+                }
+              >
+                <span className="relative flex h-2 w-2">
+                  {liveStale ? null : (
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-500 opacity-60 motion-reduce:animate-none" />
+                  )}
+                  <span
+                    className={`relative inline-flex h-2 w-2 rounded-full ${
+                      liveStale ? "bg-amber-500" : "bg-emerald-500"
+                    }`}
+                  />
+                </span>
+                <span className="text-xs font-medium">
+                  {totals
+                    ? `${totals.requests.toLocaleString()} request${totals.requests === 1 ? "" : "s"}`
+                    : "Usage"}
+                </span>
+                <span className="text-[11px] text-faint">
+                  · {liveStale ? "stale" : "live"}
+                </span>
+              </div>
               <Button
                 variant="secondary"
                 size="sm"
-                loading={summary.loading}
+                loading={summary.loading || summary.refreshing}
                 onClick={summary.refetch}
               >
                 <IconRefresh size={14} /> Refresh
@@ -340,7 +407,7 @@ export function UsagePage() {
 
           {summary.loading ? (
             <TableSkeleton rows={6} cols={6} />
-          ) : summary.error ? (
+          ) : summary.error && !summary.data ? (
             <ErrorState
               error={summary.error}
               onRetry={summary.refetch}
@@ -437,7 +504,7 @@ export function UsagePage() {
       >
         {drill.loading ? (
           <TableSkeleton rows={5} cols={5} />
-        ) : drill.error ? (
+        ) : drill.error && !drill.data ? (
           <ErrorState
             error={drill.error}
             onRetry={drill.refetch}

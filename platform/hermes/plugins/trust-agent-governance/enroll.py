@@ -249,23 +249,87 @@ def load_or_create_keypair() -> tuple[str, str, str]:
 # Device token store (D-HRB-03)
 # ---------------------------------------------------------------------------
 def save_device_token(
-    *, device_id: str, token: str, org_code: str, tenant_slug: str
+    *, device_id: str, token: str, org_code: str, tenant_slug: str,
+    model_key: str | None = None,
 ) -> Path:
     path = trust_dir() / "device-token.json"
+    model_base_url = current_model_base_url()
     payload = {
         "device_id": device_id,
         "token": token,
         "enrolled_at": int(time.time()),
         "org_code": org_code,
         "tenant_slug": tenant_slug,
+        "model_base_url": model_base_url,
     }
+    if model_key:
+        # Kept in the same secret file as the device token so the managed
+        # sync can restore the organization-issued credential if config.yaml
+        # is edited by hand.
+        payload["model_key"] = model_key
     _write_secret(path, json.dumps(payload, indent=2))
+    # The activation exchange also issues the LiteLLM model key for this
+    # device. Persist it into the agent config immediately — otherwise the
+    # seeded model gateway answers 401 and the app looks "not responding"
+    # even though governance/enrollment succeeded (found live on Windows).
+    if model_key:
+        apply_model_key(model_key, model_base_url)
     # El enrollment token ya fue canjeado: ya no sirve (one-time).
     try:
         (trust_dir() / "enrollment-token.json").unlink(missing_ok=True)
     except OSError:
         pass
     return path
+
+
+def current_model_base_url() -> str:
+    """Read the seeded (baked) LiteLLM base URL from config.yaml before any
+    user edit. Stored in device-token.json as the trusted provider endpoint."""
+    try:
+        import yaml
+
+        path = hermes_home() / "config.yaml"
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) if path.exists() else {}
+        model = data.get("model") if isinstance(data, dict) else None
+        base = model.get("base_url") if isinstance(model, dict) else None
+        return str(base).strip() if base else ""
+    except (OSError, ValueError, ImportError):
+        return ""
+
+
+def apply_model_key(model_key: str, model_base_url: str | None = None) -> None:
+    """Write the server-issued model key into ``$HERMES_HOME/config.yaml``.
+
+    Only touches ``model.api_key`` / ``model.base_url`` (and preserves every
+    other key). Best effort: a read-only profile must never fail the
+    enrollment itself.
+    """
+    try:
+        import yaml
+
+        path = hermes_home() / "config.yaml"
+        data: dict[str, Any] = {}
+        if path.exists():
+            loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                data = loaded
+        model = data.get("model")
+        model = dict(model) if isinstance(model, dict) else {}
+        changed = False
+        if model.get("api_key") != model_key:
+            model["api_key"] = model_key
+            changed = True
+        if model_base_url and model.get("base_url") != model_base_url:
+            model["base_url"] = model_base_url
+            changed = True
+        if not changed:
+            return
+        data["model"] = model
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+        tmp.replace(path)
+    except (OSError, ValueError, ImportError):
+        pass
 
 
 def _save_enrollment_token(enrollment_token: str, device_id: str, org_code: str) -> None:
@@ -306,7 +370,37 @@ def load_device_token() -> dict[str, str] | None:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             if data.get("token") and data.get("device_id"):
-                return {"device_id": str(data["device_id"]), "token": str(data["token"])}
+                result = {
+                    "device_id": str(data["device_id"]),
+                    "token": str(data["token"]),
+                    "org_code": str(data.get("org_code") or ""),
+                    "tenant_slug": str(data.get("tenant_slug") or ""),
+                    "model_base_url": str(data.get("model_base_url") or ""),
+                    "model_key": str(data.get("model_key") or ""),
+                }
+                # Migration from pre-P-26 token files: enrollment.json carries
+                # the org-issued model key, so the managed sync can still pin
+                # credentials on installs enrolled by an older build.
+                if not result["model_key"] or not result["model_base_url"]:
+                    try:
+                        enrollment = json.loads(
+                            (trust_dir() / "enrollment.json").read_text(encoding="utf-8")
+                        )
+                        if not result["model_key"]:
+                            result["model_key"] = str(enrollment.get("model_key") or "")
+                        if not result["model_base_url"]:
+                            base = str(enrollment.get("model_base_url") or "").strip()
+                            if not base:
+                                portal = str(enrollment.get("portal_url") or "").strip()
+                                if portal:
+                                    from urllib.parse import urlsplit
+                                    parsed = urlsplit(portal)
+                                    if parsed.hostname:
+                                        base = f"{parsed.scheme or 'http'}://{parsed.hostname}:4000"
+                            result["model_base_url"] = base
+                    except (OSError, ValueError):
+                        pass
+                return result
         except (ValueError, OSError):
             pass
     env = os.environ.get("TRUST_DEVICE_TOKEN", "").strip()
@@ -402,6 +496,7 @@ def _exchange_saved_raw(
             path = save_device_token(
                 device_id=device_id, token=token,
                 org_code=org_code, tenant_slug=org_code,
+                model_key=ex.get("model_key") if isinstance(ex.get("model_key"), str) else None,
             )
             return "active", {"device_id": device_id, "token_path": str(path)}
         return "exchange", {"message": f"exchange response incomplete: {ex}"}
@@ -499,6 +594,7 @@ def _enroll_flow(
         path = save_device_token(
             device_id=device_id, token=token,
             org_code=org_code, tenant_slug=org_code,
+            model_key=payload.get("model_key") if isinstance(payload.get("model_key"), str) else None,
         )
         return "active", {"device_id": device_id, "token_path": str(path), "reissued": True}
     if status == 409:
@@ -542,6 +638,7 @@ def _enroll_flow(
         path = save_device_token(
             device_id=device_id, token=token,
             org_code=org_code, tenant_slug=org_code,
+            model_key=ex.get("model_key") if isinstance(ex.get("model_key"), str) else None,
         )
         return "active", {"device_id": device_id, "token_path": str(path)}
     if outcome == "pending":
@@ -636,12 +733,197 @@ def _log(event: str, **fields: Any) -> None:
         pass
 
 
+# ---------------------------------------------------------------------------
+# Login OIDC por navegador, zero-UI (mandato Miller: nada de pantallas ni
+# comandos para el usuario invitado). Mismo flujo que el trust-login
+# standalone del bundle de descarga (spec 023) — portado aquí para que
+# corra DENTRO del proceso del gateway (mismo intérprete ya resuelto, sin
+# que Electron tenga que localizar un Python por su cuenta: el gap real que
+# dejaba al usuario sin ningún camino para iniciar sesión, t_8f2c1a04).
+# ---------------------------------------------------------------------------
+_BROWSER_LOGIN_TIMEOUT_S = 300.0  # 5 min — más corto que el CLI (10 min):
+# esto corre en el watcher de fondo, no bloquea nada visible al usuario, y
+# el próximo ciclo reintenta solo si hace falta.
+_BROWSER_LOGIN_COOLDOWN_S = 120.0  # no reabrir el navegador en cada tick de
+# 15s si el usuario dejó la pestaña sin terminar.
+
+
+def oidc_issuer() -> str | None:
+    env = os.environ.get("TRUST_OIDC_ISSUER", "").strip()
+    if env:
+        return env
+    try:
+        for line in (hermes_home() / ".env").read_text(encoding="utf-8").splitlines():
+            if line.startswith("TRUST_OIDC_ISSUER="):
+                return line.split("=", 1)[1].strip() or None
+    except OSError:
+        pass
+    return None
+
+
+def oidc_client_id() -> str:
+    env = os.environ.get("TRUST_OIDC_CLIENT_ID", "").strip()
+    if env:
+        return env
+    try:
+        for line in (hermes_home() / ".env").read_text(encoding="utf-8").splitlines():
+            if line.startswith("TRUST_OIDC_CLIENT_ID="):
+                return line.split("=", 1)[1].strip() or "trust-agent-web"
+    except OSError:
+        pass
+    return "trust-agent-web"
+
+
+def _browser_login_cooldown_path() -> Path:
+    return trust_dir() / ".browser-login-last-attempt"
+
+
+def _browser_login_on_cooldown() -> bool:
+    try:
+        last = float(_browser_login_cooldown_path().read_text().strip())
+    except (OSError, ValueError):
+        return False
+    return (time.time() - last) < _BROWSER_LOGIN_COOLDOWN_S
+
+
+def attempt_browser_login(timeout_s: float = _BROWSER_LOGIN_TIMEOUT_S) -> bool:
+    """Abre el navegador real al login OIDC+MFA de la organización y espera
+    el callback local — igual que ``trust-login.py`` standalone, pero sin
+    ``sys.exit`` (esto corre dentro del proceso del gateway, nunca lo puede
+    tumbar). -> True si quedó un id_token nuevo en disco.
+
+    Nunca lanza: cualquier fallo se loguea (plugin.log) y se retorna False
+    — el watcher reintenta en el siguiente ciclo tras el cooldown.
+    """
+    import base64
+    import hashlib as _hashlib
+    import http.server
+    import secrets as _secrets
+    import threading as _threading
+    import urllib.parse
+    import urllib.request
+    import webbrowser
+
+    issuer = oidc_issuer()
+    if not issuer:
+        _log("browser_login_skipped", reason="no TRUST_OIDC_ISSUER configured")
+        return False
+    try:
+        _browser_login_cooldown_path().write_text(str(time.time()))
+    except OSError:
+        pass
+
+    client_id = oidc_client_id()
+    redirect_uri = "http://127.0.0.1:8765/callback"
+
+    def _b64url(raw: bytes) -> str:
+        return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+
+    verifier = _b64url(_secrets.token_bytes(48))
+    challenge = _b64url(_hashlib.sha256(verifier.encode()).digest())
+    state = _secrets.token_urlsafe(24)
+    nonce = _secrets.token_urlsafe(16)
+    result: dict = {}
+    done = _threading.Event()
+
+    class CB(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            parsed = urllib.parse.urlparse(self.path)
+            qs = urllib.parse.parse_qs(parsed.query)
+            if parsed.path != "/callback":
+                self.send_error(404)
+                return
+            result.update(
+                code=(qs.get("code") or [None])[0],
+                state=(qs.get("state") or [None])[0],
+                error=(qs.get("error") or [None])[0],
+            )
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(
+                b"<html><body><h3>Sign-in complete.</h3>"
+                b"<p>You can close this tab and return to Trust Agent.</p>"
+                b"<script>window.close()</script></body></html>"
+            )
+            done.set()
+
+    try:
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 8765), CB)
+    except OSError as exc:
+        # Puerto ocupado (otro intento concurrente de este mismo home): no
+        # es un fallo real, el próximo ciclo o el otro intento lo resuelve.
+        _log("browser_login_attempt", outcome="port_busy", detail=str(exc))
+        return False
+    _threading.Thread(target=server.serve_forever, daemon=True).start()
+
+    auth_url = (
+        f"{issuer}/protocol/openid-connect/auth?"
+        + urllib.parse.urlencode({
+            "response_type": "code", "client_id": client_id,
+            "redirect_uri": redirect_uri, "scope": "openid",
+            "state": state, "nonce": nonce,
+            "code_challenge": challenge, "code_challenge_method": "S256",
+            "acr_values": "2",
+        })
+    )
+    _log("browser_login_opened", issuer=issuer, auth_url=auth_url)
+    try:
+        webbrowser.open(auth_url)
+    except Exception as exc:  # noqa: BLE001 - abrir navegador nunca tumba nada
+        _log("browser_login_open_failed", detail=str(exc))
+
+    ok = done.wait(timeout=timeout_s)
+    server.shutdown()
+    if not ok:
+        _log("browser_login_attempt", outcome="timeout")
+        return False
+    if result.get("error") or not result.get("code"):
+        _log("browser_login_attempt", outcome="idp_error", detail=str(result.get("error")))
+        return False
+    if result.get("state") != state:
+        _log("browser_login_attempt", outcome="state_mismatch")
+        return False
+
+    try:
+        body = urllib.parse.urlencode({
+            "grant_type": "authorization_code", "client_id": client_id,
+            "code": result["code"], "redirect_uri": redirect_uri,
+            "code_verifier": verifier,
+        }).encode()
+        req = urllib.request.Request(
+            f"{issuer}/protocol/openid-connect/token", data=body, method="POST",
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            tokens = json.loads(resp.read())
+        id_token = tokens.get("id_token")
+        if not id_token:
+            _log("browser_login_attempt", outcome="no_id_token_in_response")
+            return False
+        _write_secret(trust_dir() / "id-token.txt", id_token)
+        _log("browser_login_attempt", outcome="success")
+        return True
+    except Exception as exc:  # noqa: BLE001 - reportar, nunca tumbar el watcher
+        _log("browser_login_attempt", outcome="exchange_error", detail=str(exc))
+        return False
+
+
 def auto_enroll_once(poll_timeout_s: float = AUTO_ENROLL_POLL_S) -> str:
     """Un intento de auto-enrolamiento. -> outcome del flujo (para tests).
 
     Precondiciones (zero-UI): binding de org presente + id_token del login
-    OIDC de primera ejecución (archivo default). Sin cualquiera de ellos no
-    hace NADA (el enrolamiento manual /trust-enroll sigue disponible).
+    OIDC de primera ejecución (archivo default) — si falta el id_token pero
+    SÍ hay binding de org, este mismo método abre el navegador al login real
+    de la organización (``attempt_browser_login``, con cooldown para no
+    reabrir pestañas en cada tick) en vez de quedarse pasivo esperando un
+    archivo que, en el desktop real, nadie más iba a producir nunca
+    (t_8f2c1a04: "no he podido enrolar nunca" — no había NINGÚN camino desde
+    instalar hasta tener credenciales). El enrolamiento manual /trust-enroll
+    sigue disponible para cuando el usuario quiera re-disparar a mano.
 
     D-HRB-03 amend (spec 022 v1.1.0): la presencia del archivo device-token
     json YA NO basta para cortar en "already_enrolled" — si el token caducó
@@ -661,6 +943,12 @@ def auto_enroll_once(poll_timeout_s: float = AUTO_ENROLL_POLL_S) -> str:
     try:
         id_token = _read_id_token(None)
     except FileNotFoundError:
+        # Vinculado a una organización pero sin credenciales todavía: abre
+        # el navegador real al login de la organización (una vez por
+        # cooldown, nunca en cada tick de 15s) en vez de esperar pasivo un
+        # archivo que nadie más iba a producir en el desktop real.
+        if not _browser_login_on_cooldown():
+            attempt_browser_login()
         return "no_id_token"
 
     with _HomeLock(timeout_s=AUTOENROLL_LOCK_WAIT_S) as lock:

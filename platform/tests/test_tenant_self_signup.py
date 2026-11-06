@@ -174,7 +174,7 @@ def test_signup_creates_pending_tenant(client, fake_kc, admin_conn, idp):
     assert tenant["slug"] == SLUG
     assert tenant["status"] == "pending_activation"
     assert tenant["oidc_issuer_url"] == idp.issuer(SLUG)
-    assert tenant["counts"]["departments"] == 4  # plantillas seed
+    assert tenant["counts"]["departments"] == 0  # spec 038: nace VACÍA (AC-26-001 enmendado)
     assert tenant["counts"]["users"] == 1
     assert tenant["counts"]["org_budgets"] == 1
     assert tenant["counts"]["approved_models"] > 0
@@ -218,11 +218,13 @@ def test_signup_creates_pending_tenant(client, fake_kc, admin_conn, idp):
                 "SELECT action FROM audit_log WHERE tenant_id = %s "
                 "AND action = 'tenant.self_registered'", (tid,))
     assert audits, "falta el audit tenant.self_registered"
-    # Los eventos de seed del provisioning también auditan el alta.
+    # Los eventos del alta auditan el signup (spec 038: SIN department.created
+    # — la org nace vacía y la estructura se declara post-activación).
     seed_actions = {r[0] for r in _q(
         admin_conn, "SELECT action FROM audit_log WHERE tenant_id = %s", (tid,))}
-    assert {"department.created", "user.created", "role.assigned",
+    assert {"user.created", "role.assigned",
             "budget.updated", "policy.updated", "model.approved"} <= seed_actions
+    assert "department.created" not in seed_actions
 
 
 # ---------------------------------------------------------------------------
