@@ -22,9 +22,10 @@ import base64
 import hashlib
 import ipaddress
 import json
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, Request, Response
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
@@ -111,6 +112,48 @@ def _tenant_branding(tenant_id: str) -> tuple[dict, str | None]:
     return branding, data_uri
 
 
+def _tenant_default_model(tenant_id: str) -> str:
+    """Default model of the tenant's current policy bundle.
+
+    The generic installer has no tenant baked in, so the activation flow asks
+    the control plane for this value after redeeming the one-time token. A
+    tenant without a policy falls back to the product default (an operator
+    can override it with TRUST_DEFAULT_MODEL).
+    """
+    with get_engine().begin() as conn:
+        set_tenant(conn, tenant_id)
+        row = conn.execute(
+            text(
+                "SELECT default_model FROM policy_bundles "
+                "WHERE tenant_id = :tid ORDER BY updated_at DESC LIMIT 1"
+            ),
+            {"tid": tenant_id},
+        ).mappings().first()
+    if row and row["default_model"]:
+        return str(row["default_model"])
+    return bundle_builder.DEFAULT_MODEL
+
+
+def _public_litellm_base(request: Request) -> str:
+    """Gateway URL employees can actually reach from their own machine.
+
+    ``TRUST_LITELLM_BASE_URL`` is the API-internal URL (usually loopback for
+    host networking); the public value can be pinned with
+    ``TRUST_LITELLM_PUBLIC_BASE_URL``. When only a loopback URL is configured,
+    derive the public host from the download request and keep LiteLLM's
+    canonical port 4000.
+    """
+    settings = get_settings()
+    configured = (settings.litellm_public_base_url or settings.litellm_base_url or "").strip()
+    parsed = urlparse(configured)
+    if configured and parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
+        return configured.rstrip("/")
+    origin = request.url
+    hostname = origin.hostname or "127.0.0.1"
+    scheme = origin.scheme or "http"
+    return f"{scheme}://{hostname}:4000"
+
+
 def _page_throttle(request: Request, slug: str) -> None:
     settings = get_settings()
     ip = _client_ip(request)
@@ -161,6 +204,52 @@ def download_page(slug: str, request: Request):
     )
 
 
+@public_router.get("/download/{slug}/desktop-config")
+def desktop_config(slug: str, request: Request):
+    """Public tenant metadata consumed by the generic desktop activation flow.
+
+    One MSIX can serve every organization: the installer ships with an empty
+    org binding and asks the employee only for portal URL + org + one-time
+    enrollment token. After exchange, the desktop fetches this endpoint to
+    materialize the tenant's name, accent, OIDC realm and model gateway in
+    ``~/.trust-agent`` before the first gateway start.
+
+    Returns only public data (the same values already exposed on the public
+    download page and in the signed governance bundle): no secrets, keys or
+    user data.
+    """
+    _page_throttle(request, slug)
+    tenant = _public_tenant(slug)
+    if tenant is None:
+        with get_engine().begin() as conn:
+            throttle.register_failure(
+                conn, [throttle.ip_key(_client_ip(request))]
+            )
+        raise not_found("Unknown organization code.")
+    if tenant["status"] != "active":
+        raise tenant_suspended()
+    if not tenant["download_enabled"]:
+        raise _link_disabled()
+
+    settings = get_settings()
+    branding, _ = _tenant_branding(str(tenant["id"]))
+    return JSONResponse(
+        {
+            "org_code": tenant["slug"],
+            "org_name": tenant["name"],
+            "product_name": branding.get("product_name") or "Trust Agent",
+            "tagline": branding.get("tagline") or "",
+            "accent_color": branding.get("accent_color") or "#4F46E5",
+            "api_base": str(request.base_url).rstrip("/"),
+            "litellm_base": _public_litellm_base(request),
+            "model": _tenant_default_model(str(tenant["id"])),
+            "skin": f"trust-{tenant['slug']}",
+            "oidc_issuer_url": tenant["oidc_issuer_url"] or "",
+            "oidc_client_id": tenant["oidc_client_id"] or "trust-agent-web",
+        }
+    )
+
+
 @public_router.get("/download/{slug}/bundle")
 def download_bundle(slug: str, request: Request):
     """Tarball white-label con el binding de la org (REQ-HDL-002/003/004)."""
@@ -194,7 +283,8 @@ def download_bundle(slug: str, request: Request):
         slug=tenant["slug"],
         api_base=api_base,
         branding=branding,
-        litellm_base_url=settings.litellm_base_url or "http://127.0.0.1:4000",
+        litellm_base_url=_public_litellm_base(request),
+        model=_tenant_default_model(str(tenant["id"])),
         oidc_issuer_url=tenant["oidc_issuer_url"] or "",
         oidc_client_id=tenant["oidc_client_id"] or "trust-agent-web",
     )
@@ -267,8 +357,8 @@ def download_cli_installer(slug: str, request: Request):
     script = cli_builder.build_cli_installer(
         slug=tenant["slug"],
         api_base=api_base,
-        litellm_base_url=settings.litellm_base_url or "http://127.0.0.1:4000",
-        model=bundle_builder.DEFAULT_MODEL,
+        litellm_base_url=_public_litellm_base(request),
+        model=_tenant_default_model(str(tenant["id"])),
         product_name=branding.get("product_name") or "Trust Agent",
     )
     sha256 = hashlib.sha256(script).hexdigest()

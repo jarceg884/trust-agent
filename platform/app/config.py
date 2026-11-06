@@ -101,6 +101,10 @@ class Settings(BaseSettings):
     # spend ingestion and enforcement refuse with 503 (fail-closed, never
     # fail-open — budgets without a gateway cannot be governed).
     litellm_base_url: str = ""
+    # Public origin that employee desktops can reach (e.g. https://models.example.com).
+    # Empty falls back to litellm_base_url; if that is loopback the download
+    # endpoints derive the public host from the request and port 4000.
+    litellm_public_base_url: str = ""
     # LITELLM_MASTER_KEY: required for /key/* and /spend/* admin routes.
     litellm_master_key: str = ""
     # Spec 032: periodic model-catalog refresh window (hours) for tenants

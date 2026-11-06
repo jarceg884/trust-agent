@@ -21,6 +21,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import tarfile
 from pathlib import Path
 from typing import Any
@@ -34,7 +35,9 @@ _EXCLUDE_SUFFIXES = (".pyc", ".pyo")
 # Modelo por defecto del bundle (D-023-06): el modelo servido por el gateway
 # LiteLLM del tenant; la policy firmada (governance bundle) es la autoridad
 # sobre lo que el agente puede USAR, esto es solo el default de arranque.
-DEFAULT_MODEL = "glm-5.2"
+# En despliegues multi-tenant el valor real sale de policy_bundles.default_model;
+# este fallback es configurable y nunca debe apuntar a un tenant específico.
+DEFAULT_MODEL = os.environ.get("TRUST_DEFAULT_MODEL", "glm-5.2")
 
 
 def plugin_version(plugin_dir: Path) -> str:

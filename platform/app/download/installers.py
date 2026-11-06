@@ -32,6 +32,12 @@ from .bundle import plugin_version
 # Plataformas servidas (contrato §5.1 de la spec 040).
 PLATFORMS = ("windows", "linux", "macos")
 
+# Un solo MSIX genérico sirve a todas las organizaciones (ADR-003: el
+# instalador es uno; el binding de org y el branding se resuelven en la
+# activación contra el control plane). Los builds por tenant siguen
+# funcionando y ganan precedencia cuando existen.
+UNIVERSAL_SLUG = "_universal"
+
 
 def _artifacts_root() -> Path:
     return Path(get_settings().installer_artifacts_dir)
@@ -44,13 +50,8 @@ def current_installer_dir(slug: str) -> Path:
     return _artifacts_root() / slug / version
 
 
-def available_installers(slug: str) -> dict[str, dict]:
-    """Metadatos por plataforma del build actual ({} si no hay build).
-
-    -> {platform: {filename, sha256, size}} para cada plataforma con
-    artefacto servido; las plataformas sin build quedan ausentes.
-    """
-    manifest_file = current_installer_dir(slug) / "installer-manifest.json"
+def _available_in_dir(directory: Path) -> dict[str, dict]:
+    manifest_file = directory / "installer-manifest.json"
     if not manifest_file.is_file():
         return {}
     try:
@@ -61,7 +62,7 @@ def available_installers(slug: str) -> dict[str, dict]:
     for platform, info in (manifest.get("platforms") or {}).items():
         if platform not in PLATFORMS or not info:
             continue
-        artifact = current_installer_dir(slug) / info["filename"]
+        artifact = directory / info["filename"]
         # Honestidad (constitution I): el botón solo se habilita si el
         # binario realmente está en disco.
         if artifact.is_file():
@@ -73,9 +74,25 @@ def available_installers(slug: str) -> dict[str, dict]:
     return out
 
 
+def available_installers(slug: str) -> dict[str, dict]:
+    """Metadatos por plataforma del build actual ({} si no hay build).
+
+    Precedencia: build por tenant si existe; si no, el MSIX universal
+    ``_universal``. Así cualquier organización activa puede publicar el
+    botón de descarga sin reconstruir un instalador por tenant.
+    """
+    for candidate in (slug, UNIVERSAL_SLUG):
+        out = _available_in_dir(current_installer_dir(candidate))
+        if out:
+            return out
+    return {}
+
+
 def installer_path(slug: str, platform: str) -> Path | None:
     """Ruta del artefacto servido para (slug, platform) — None si no hay."""
-    info = available_installers(slug).get(platform)
-    if not info:
-        return None
-    return current_installer_dir(slug) / info["filename"]
+    for candidate in (slug, UNIVERSAL_SLUG):
+        directory = current_installer_dir(candidate)
+        info = _available_in_dir(directory).get(platform)
+        if info:
+            return directory / info["filename"]
+    return None
