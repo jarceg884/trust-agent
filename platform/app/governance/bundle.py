@@ -199,6 +199,92 @@ def require_bundle_auth(request: Request) -> BundleAuth:
     return BundleAuth(principal=principal, device_id=str(device_claims["device_id"]))
 
 
+# Policy Studio → CLI & Agente: each switch governs one family of Hermes
+# tools (real names from hermes-agent toolsets.py). ``grant`` is what ON
+# concedes; ``block`` is what OFF removes (adds legacy aliases so an OFF
+# switch also strips names older bundles may carry).
+#
+# Before 2026-11-10 the switches were subtract-only over the provider
+# default (``catalog.policy_keys.allowed_tools`` = conversational tools
+# WITHOUT terminal), so "Terminal / shell" ON could never grant terminal:
+# the console offered a switch that did nothing (live incident, e2e-lab).
+STUDIO_TOOL_FAMILIES: dict[str, dict[str, tuple[str, ...]]] = {
+    "cli_terminal": {
+        "grant": ("terminal", "process_manage"),
+        "block": ("terminal", "process_manage", "process", "shell", "bash"),
+    },
+    "cli_files_read": {
+        "grant": ("read_file", "search_files"),
+        "block": ("read_file", "search_files"),
+    },
+    "cli_files_write": {
+        "grant": ("write_file", "patch"),
+        "block": ("write_file", "patch", "edit_file"),
+    },
+    "cli_web": {
+        "grant": ("web_search", "web_extract"),
+        "block": ("web_search", "web_extract", "web_fetch", "browser",
+                  "browser_navigate"),
+    },
+    "cli_code": {
+        "grant": ("execute_code",),
+        "block": ("execute_code", "python"),
+    },
+}
+
+
+def clamp_tools_to_studio(
+    base: list[str] | tuple[str, ...],
+    ui: dict,
+    *,
+    explicit_ceiling: bool,
+) -> list[str]:
+    """allowed_tools after the Policy Studio CLI & Agente switches.
+
+    * ``cli`` OFF → no tools at all (master switch, unchanged semantics).
+    * family switch OFF → its ``block`` names are removed.
+    * family switch ON → its ``grant`` names are added, UNLESS an explicit
+      ``allowed_tools`` policy exists at org/dept/user level: that list is
+      the admin's ceiling and, by deny-overrides, ON never exceeds it.
+    * switch absent (no Studio bundle / older bundle) → base unchanged.
+
+    Order is preserved and duplicates dropped (deterministic bundles).
+    """
+    if ui.get("cli") is False:
+        return []
+    tools = list(dict.fromkeys(str(t) for t in base))
+    for feature, family in STUDIO_TOOL_FAMILIES.items():
+        value = ui.get(feature)
+        if value is False:
+            blocked = set(family["block"])
+            tools = [t for t in tools if t not in blocked]
+        elif value is True and not explicit_ceiling:
+            tools.extend(t for t in family["grant"] if t not in tools)
+    return tools
+
+
+def _has_explicit_tools_policy(
+    conn, *, department_id: str | None, user_id: str
+) -> bool:
+    """¿Algún nivel (org, depto del usuario, usuario) fijó allowed_tools?
+
+    Same level filter as ``_policy_version``; tenant scoping comes from RLS
+    (forced on ``policies``).
+    """
+    row = conn.execute(
+        text(
+            "SELECT 1 FROM policies "
+            "WHERE key = 'allowed_tools' AND is_active AND ("
+            "  level = 'org'"
+            "  OR (level = 'dept' AND department_id = CAST(:dept AS uuid))"
+            "  OR (level = 'user' AND user_id = CAST(:usr AS uuid))"
+            ") LIMIT 1"
+        ),
+        {"dept": department_id, "usr": user_id},
+    ).first()
+    return row is not None
+
+
 def _policy_version(conn, *, department_id: str | None, user_id: str) -> int:
     """Máx versión activa combinada (org + depto del usuario + usuario)."""
     row = conn.execute(
@@ -317,27 +403,19 @@ def compile_bundle_payload(
         allowed = set(payload.get("approved_models") or [])
         payload["approved_models"] = [m for m in payload["policy_models"] if not allowed or m in allowed]
 
-    # CLI/agent capabilities (Policy Studio → Desktop restrictions → CLI &
-    # Agente). The desktop switches must also clamp the tool surface the
-    # governance plugin enforces for CLI and background runs.
+    # CLI/agent capabilities (Policy Studio → CLI & Agente). The switches
+    # govern the tool surface the governance plugin enforces in EVERY session
+    # (desktop chat, CLI, background runs): ON grants the family, OFF removes
+    # it — bounded by an explicit allowed_tools policy if one exists.
     ui = payload.get("ui_features") or {}
-    tool_features = {
-        "cli_terminal": {"terminal", "shell", "bash"},
-        "cli_files_read": {"read_file"},
-        "cli_files_write": {"write_file", "patch", "edit_file"},
-        "cli_web": {"web_search", "web_fetch", "browser", "browser_navigate"},
-        "cli_code": {"execute_code", "python"},
-    }
-    if ui.get("cli") is False:
-        payload["allowed_tools"] = []
-    else:
-        blocked: set[str] = set()
-        for feature, tools in tool_features.items():
-            if ui.get(feature) is False:
-                blocked.update(tools)
-        payload["allowed_tools"] = [
-            tool for tool in (payload.get("allowed_tools") or []) if tool not in blocked
-        ]
+    payload["allowed_tools"] = clamp_tools_to_studio(
+        payload.get("allowed_tools") or [],
+        ui,
+        explicit_ceiling=_has_explicit_tools_policy(
+            conn, department_id=principal.department_id,
+            user_id=principal.user_id,
+        ),
+    )
 
     # REQ-GOH-024: TODAS las keys del catálogo vigente, aplanadas. Los claims
     # estructurales (ya presentes, con su compilación propia: piso de gracia,
