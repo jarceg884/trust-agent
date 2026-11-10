@@ -9,7 +9,8 @@ server implementing exactly the documented Admin API contract that
 - POST /key/block     -> accepts the sha256 hash as "key" (verified against
                          production LiteLLM behaviour)
 - POST /key/unblock   -> same
-- POST /key/update    -> re-sync of the native max_budget (D-GOV-16)
+- POST /key/update    -> re-sync of max_budget (D-GOV-16) and of the
+                         allowed ``models`` list (spec 044 rescope)
 - GET  /key/info?key= -> key record
 - GET  /spend/logs/v2 -> paginated logs with request_id, spend (USD),
                          startTime, tokens and the spend_logs_metadata
@@ -248,6 +249,12 @@ class LiteLLMFake:
                         outer.update_calls.append(
                             {"key": token,
                              "max_budget": body["max_budget"]})
+                    # Spec 044: re-alcanceo de la lista de modelos de la clave
+                    # (rescope_user_keys). Nunca []: fail-open en el gateway.
+                    if isinstance(body.get("models"), list) and body["models"]:
+                        rec["public"]["models"] = list(body["models"])
+                        outer.update_calls.append(
+                            {"key": token, "models": list(body["models"])})
                     self._json(200, {"key": rec["public"]["key_alias"],
                                      "max_budget": rec["public"]["max_budget"]})
                     return

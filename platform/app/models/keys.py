@@ -178,3 +178,55 @@ def list_keys_for_user(conn: Connection, user_id: str) -> list[dict]:
         }
         for r in rows
     ]
+
+
+def rescope_user_keys(
+    conn: Connection,
+    principal: Principal,
+    *,
+    user_id: str,
+    models: list[str],
+    litellm: LiteLLMClient | None = None,
+) -> int:
+    """Re-alcancea las claves ACTIVAS del usuario a ``models`` (spec 044).
+
+    Una clave se emite con los modelos aprobados DEL MOMENTO (issue_key); si
+    la política luego retira un modelo, la clave vieja lo sigue aceptando en
+    el gateway. Se llama desde el sync del bundle para que cada dispositivo
+    converja su clave a la política que acaba de recibir. ``models`` vacío se
+    rechaza (fail-closed): una lista vacía en LiteLLM permite TODO.
+    """
+    if not models:
+        return 0
+    litellm = litellm or get_litellm()
+    rows = conn.execute(
+        text(
+            "SELECT id, alias, litellm_key_hash, allowed_models FROM api_keys "
+            "WHERE tenant_id = CAST(:t AS uuid) AND user_id = CAST(:u AS uuid) "
+            "AND status = 'active'"
+        ),
+        {"t": principal.tenant_id, "u": user_id},
+    ).mappings().all()
+    rescoped = 0
+    for row in rows:
+        current = list(row["allowed_models"] or [])
+        if sorted(set(current)) == sorted(set(models)):
+            continue
+        litellm.update_key_models(row["litellm_key_hash"], models)
+        conn.execute(
+            text(
+                "UPDATE api_keys SET allowed_models = CAST(:m AS jsonb), "
+                "updated_at = now() WHERE id = :id"
+            ),
+            {"m": json.dumps(models), "id": row["id"]},
+        )
+        audit.emit(
+            conn, tenant_id=principal.tenant_id,
+            actor_role=principal.role_keys[0] if principal.role_keys else "user",
+            action="model.key_rescoped", actor_id=principal.user_id,
+            target_type="user", target_id=user_id,
+            payload={"alias": row["alias"], "allowed_models": models,
+                     "previous": current},
+        )
+        rescoped += 1
+    return rescoped

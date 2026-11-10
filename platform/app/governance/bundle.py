@@ -28,6 +28,8 @@ La attestation auditable llega con el incremento 3 (REQ-GOH-012).
 """
 from __future__ import annotations
 
+import logging
+
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -50,8 +52,12 @@ from ..devices.tokens import verify_device_token
 from ..errors import ApiError, device_not_authorized, invalid_token
 from ..models import access as model_access
 from . import budgets as budgets_service
+from ..models import keys as keys_service
 from . import jws_keys
 from .service import effective_policy
+
+
+logger = logging.getLogger(__name__)
 
 # Piso del proveedor para la gracia offline (D-GOH-08: default 60, piso 15).
 OFFLINE_GRACE_FLOOR_MINUTES = 15
@@ -366,6 +372,19 @@ def governance_bundle(request: Request):
         # DeviceGate en la misma transacción: revocación → 401 inmediato.
         check_device_access(conn, auth.device_id, auth.principal)
         payload = compile_bundle_payload(conn, auth.principal, device_id=auth.device_id)
+        # Spec 044: la política que el dispositivo acaba de recibir es la que
+        # su clave del gateway debe enforcear. Sin esto, un modelo retirado de
+        # la política sigue respondiendo con claves emitidas antes del cambio
+        # (verificado en vivo: HTTP 200 tras quitarlo). Best-effort: si el
+        # gateway está caído el sync no se rompe — el próximo sync reintenta.
+        try:
+            keys_service.rescope_user_keys(
+                conn, auth.principal,
+                user_id=auth.principal.user_id,
+                models=list(payload.get("approved_models") or []),
+            )
+        except Exception:
+            logger.warning("key rescope failed during bundle sync", exc_info=True)
     bundle = sign_bundle(payload)
     return {
         "bundle": bundle,
