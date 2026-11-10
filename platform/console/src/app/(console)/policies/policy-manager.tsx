@@ -9,9 +9,11 @@
  * agentes compartidos y acceso al vault. No existen políticas personales ni
  * "organization policies": la asignación es siempre explícita.
  */
+import Link from "next/link";
 import { useMemo, useState } from "react";
 import { api, ApiError } from "@/lib/api-client";
 import { useApi } from "@/hooks/use-api";
+import type { AccessOverview } from "@/lib/types";
 import {
   Button,
   Card,
@@ -146,6 +148,20 @@ export function PolicyManagerPage() {
   const { push } = useToast();
   const policies = useApi<PolicyList>("/api/policy-bundles");
   const departments = useApi<DepartmentsList>("/api/departments");
+  // Model Access (la OTRA mitad del interruptor): el escritorio recibe la
+  // intersección de esta política con las aprobaciones por nivel. Sin esto,
+  // un modelo marcado aquí pero sin aprobar en Model Access desaparece en
+  // silencio del escritorio (incidente glm-5.3, 2026-11-10).
+  const access = useApi<AccessOverview>("/api/models/access");
+  const orgApproved = useMemo(
+    () =>
+      new Set(
+        (access.data?.models ?? [])
+          .filter(m => m.approvals.some(a => a.level === "org"))
+          .map(m => m.model_name)
+      ),
+    [access.data]
+  );
   const users = useApi<DirectoryList>("/api/users");
   const models = useApi<ModelList>("/api/models");
   const agents = useApi<AgentList>("/api/agents");
@@ -155,6 +171,12 @@ export function PolicyManagerPage() {
   const [editing, setEditing] = useState<Policy | null>(null);
   const [section, setSection] = useState<SectionKey>("general");
   const [form, setForm] = useState(defaults());
+  // Modelos marcados en la política que Model Access no tiene aprobados:
+  // no llegan al escritorio (intersección). Ver aviso en la sección "models".
+  const selectedWithoutAccess = useMemo(
+    () => form.models.filter(m => !orgApproved.has(m)),
+    [form.models, orgApproved]
+  );
   const [saving, setSaving] = useState(false);
   const [query, setQuery] = useState("");
 
@@ -512,6 +534,15 @@ export function PolicyManagerPage() {
                 {section === "models" ? (
                   <div className="space-y-3">
                     <p className="text-xs text-muted">Marca los modelos a los que esta política da acceso.</p>
+                    {selectedWithoutAccess.length > 0 ? (
+                      <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-2.5 text-xs text-amber-300">
+                        <span className="font-semibold">Ojo:</span> {selectedWithoutAccess.length === 1 ? "este modelo seleccionado no" : `${selectedWithoutAccess.length} modelos seleccionados no`}{" "}
+                        está aprobado en Model Access y <span className="font-semibold">no llegará al escritorio</span>:{" "}
+                        <span className="font-mono">{selectedWithoutAccess.join(", ")}</span>. El escritorio recibe la
+                        intersección de esta política con Model Access. Apruébalo en{" "}
+                        <Link className="underline" href="/models">Models → Model Access</Link> (nivel organización).
+                      </div>
+                    ) : null}
                     <div className="max-h-72 space-y-1 overflow-y-auto rounded-lg border border-border-subtle p-2">
                       {(models.data?.models ?? []).map((model) => {
                         const checked = form.models.includes(model.model_name);
@@ -530,6 +561,11 @@ export function PolicyManagerPage() {
                             />
                             <span className="font-medium">{model.display_name || model.model_name}</span>
                             <span className="text-faint">{model.provider}</span>
+                            {!orgApproved.has(model.model_name) ? (
+                              <span className="ml-auto rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] text-amber-300">
+                                sin aprobar en Model Access
+                              </span>
+                            ) : null}
                           </label>
                         );
                       })}
