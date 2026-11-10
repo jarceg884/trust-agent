@@ -220,7 +220,9 @@ def env(idp, litellm_fake):
         del os.environ[key]
     os.environ["TRUST_DATABASE_URL"] = APP_DB_URL
     os.environ["TRUST_DATABASE_MIGRATOR_URL"] = MIGRATOR_DB_URL
-    os.environ["TRUST_IDP_BASE_URLS"] = f"{idp.base_url},http://127.0.0.1:8080"
+    os.environ["TRUST_IDP_BASE_URLS"] = ",".join(
+        [idp.base_url, *_real_keycloak_bases()]
+    )
     os.environ["TRUST_OIDC_AUDIENCE"] = "trust-agent-web"
     os.environ["TRUST_JWT_LEEWAY_SECONDS"] = "60"
     os.environ["TRUST_MFA_MIN_ACR"] = "2"
@@ -269,6 +271,32 @@ def env(idp, litellm_fake):
     yield os.environ
     get_settings.cache_clear()
     reset_engine()
+
+
+def _real_keycloak_bases() -> list[str]:
+    """Issuer bases of the REAL Keycloak the E2E tests talk to.
+
+    The suite reaches Keycloak on loopback, but with ``KC_HOSTNAME`` set (the
+    pilot pins it to the LAN address for remote access) every token carries
+    that hostname in ``iss`` — not 127.0.0.1 — and the session mint rejected
+    it as invalid_token. Ask Keycloak itself (OIDC discovery) instead of
+    assuming; when it is unreachable, loopback only (its tests skip anyway).
+    """
+    bases = ["http://127.0.0.1:8080"]
+    try:
+        import urllib.request
+
+        with urllib.request.urlopen(
+            "http://127.0.0.1:8080/realms/master/.well-known/openid-configuration",
+            timeout=2,
+        ) as resp:
+            issuer = str(json.load(resp).get("issuer") or "")
+        base = issuer.split("/realms/")[0]
+        if base and base not in bases:
+            bases.append(base)
+    except Exception:  # noqa: BLE001 - Keycloak absent: loopback only
+        pass
+    return bases
 
 
 def _admin(db: str = "postgres"):

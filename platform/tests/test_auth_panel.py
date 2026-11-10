@@ -40,7 +40,12 @@ REALM = "trust-agent-panel"
 ORG = REALM
 PASSWORD = "PanelE2ePass2026!"
 NEW_PASSWORD = "PanelE2eNew2026!!"
-TENANT_PANEL = "33333333-3333-3333-3333-333333333333"
+# Own tenant id: it used to be 33333333-..., the same as TENANT_C in
+# test_vault_connectors.py — this module's tenant row (never deleted) made that
+# module's fixture die with tenants_pkey whenever both ran in one session.
+TENANT_PANEL = "55555555-5555-5555-5555-555555555555"
+# Migration 0044: every user belongs to a department.
+DEPT_PANEL = "5a5a5a5a-5555-4555-8555-555555555555"
 EMAIL_MAIN = "panel-main@tenant-panel.test"
 EMAIL_OTP = "panel-otp@tenant-panel.test"
 EMAIL_TMP = "panel-tmp@tenant-panel.test"
@@ -247,6 +252,20 @@ def panel_realm(env):
             assert r.status_code == 201, r.text
             user = kc.find_user(REALM, username)
         assert user is not None
+        # Idempotency across runs: Keycloak persists between sessions, so the
+        # signed tenant_id claim must be re-pinned to THIS module's tenant
+        # (it moved off 33333333-..., which collided with TENANT_C) — users
+        # created by an older run still carried the old id → invalid_token.
+        r = kc._request(
+            "PUT", f"/admin/realms/{REALM}/users/{user['id']}",
+            step="panel_test",
+            json_body={
+                "email": email, "emailVerified": True, "firstName": "Panel",
+                "lastName": username.title(),
+                "attributes": {"tenant_id": [TENANT_PANEL]},
+            },
+        )
+        assert r.status_code in (200, 204), r.text
         r = kc._request(
             "PUT",
             f"/admin/realms/{REALM}/users/{user['id']}/reset-password",
@@ -296,6 +315,11 @@ def panel_tenant_rows(panel_realm):
             "ON CONFLICT (id) DO NOTHING",
             (TENANT_PANEL, ORG, REALM),
         )
+        c.execute(
+            "INSERT INTO departments (id, tenant_id, name) "
+            "VALUES (%s, %s, 'General') ON CONFLICT (id) DO NOTHING",
+            (DEPT_PANEL, TENANT_PANEL),
+        )
         for username, email in (
             ("panel-main", EMAIL_MAIN),
             ("panel-otp", EMAIL_OTP),
@@ -303,11 +327,11 @@ def panel_tenant_rows(panel_realm):
         ):
             sub = kc.find_user(REALM, username)["id"]
             c.execute(
-                "INSERT INTO users (tenant_id, email, display_name, status, "
-                "mfa_enrolled, oidc_subject) VALUES (%s, %s, %s, 'active', "
-                "false, %s) ON CONFLICT (tenant_id, email) DO UPDATE SET "
+                "INSERT INTO users (tenant_id, department_id, email, display_name, "
+                "status, mfa_enrolled, oidc_subject) VALUES (%s, %s, %s, %s, "
+                "'active', false, %s) ON CONFLICT (tenant_id, email) DO UPDATE SET "
                 "oidc_subject = EXCLUDED.oidc_subject, mfa_enrolled = false",
-                (TENANT_PANEL, email, username.title(), sub),
+                (TENANT_PANEL, DEPT_PANEL, email, username.title(), sub),
             )
             c.execute(
                 "INSERT INTO user_roles (tenant_id, user_id, role_key) "
