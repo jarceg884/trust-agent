@@ -49,7 +49,7 @@ interface VaultList { credentials: VaultSecret[] }
 const DESKTOP_GROUPS: { group: string; hint: string; options: { key: string; label: string; hint: string; def: boolean }[] }[] = [
   {
     group: "Model",
-    hint: "El modelo lo define la política; el usuario no lo cambia.",
+    hint: "Por defecto el modelo lo define la política. Activar una opción solo permite elegir entre los modelos aprobados; el proveedor siempre es la organización.",
     options: [
       { key: "model_main", label: "Main model selector", hint: "Página Modelo principal: el usuario elige entre los modelos aprobados para sesiones nuevas; el proveedor siempre es la organización", def: false },
       { key: "model_fallback", label: "Fallback models", hint: "Cadena de modelos de respaldo, solo con modelos aprobados", def: false },
