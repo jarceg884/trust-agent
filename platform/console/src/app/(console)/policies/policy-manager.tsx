@@ -31,7 +31,7 @@ interface Policy {
   desktop: Record<string, boolean>;
   credentials: Record<string, boolean>;
   global_prompt: string;
-  profiles: unknown[];
+  profiles: { name?: string; model?: string }[];
   contracts?: { name?: string; text?: string }[];
   models: string[];
   default_model: string | null;
@@ -89,7 +89,7 @@ const DESKTOP_GROUPS: { group: string; hint: string; options: { key: string; lab
       { key: "artifacts", label: "Artifacts", hint: "Artefactos generados", def: false },
       { key: "cron", label: "Scheduled jobs", hint: "Tareas programadas (/goal, /loop, /heartbeat)", def: false },
       { key: "agents", label: "Agents", hint: "Agentes compartidos y subagentes (/agents, /review, /bg) y sus límites de iteraciones y concurrencia", def: false },
-      { key: "profiles", label: "Profiles", hint: "Perfiles del agente", def: false },
+      { key: "profiles", label: "Profiles", hint: "Rail de perfiles del escritorio. Los perfiles se definen en Modelos → Perfiles del agente; con la lista vacía los usuarios solo ven el default", def: false },
     ],
   },
   {
@@ -139,6 +139,7 @@ function defaults() {
     ] as { name: string; text: string }[],
     models: [] as string[],
     defaultModel: "",
+    profiles: [] as { name: string; model: string }[],
     agents: [] as string[],
     vaultSecretIds: [] as string[],
   };
@@ -207,6 +208,12 @@ export function PolicyManagerPage() {
         : [{ name: "Contrato general", text: policy.global_prompt || "" }],
       models: policy.models ?? [],
       defaultModel: policy.default_model ?? "",
+      // El editor debe cargar los perfiles existentes: antes este campo se
+      // mandaba vacío en cada PUT y el servidor (que escribe lo que recibe)
+      // BORRABA la lista con solo editar la política.
+      profiles: (policy.profiles ?? [])
+        .map((p) => ({ name: p?.name ?? "", model: p?.model ?? "" }))
+        .filter((p) => p.name),
       agents: policy.agents ?? [],
       vaultSecretIds: Array.isArray((policy.credentials as { vault_secret_ids?: string[] })?.vault_secret_ids)
         ? ((policy.credentials as { vault_secret_ids?: string[] }).vault_secret_ids as string[])
@@ -229,6 +236,20 @@ export function PolicyManagerPage() {
       push("error", "Selecciona la persona a la que se asigna.");
       return;
     }
+    for (const p of form.profiles) {
+      if (!p.name.trim() || !p.model) {
+        push("error", "Cada perfil necesita nombre y modelo.");
+        return;
+      }
+      if (form.models.length > 0 && !form.models.includes(p.model)) {
+        push("error", `El perfil "${p.name}" usa un modelo que no está marcado en la política.`);
+        return;
+      }
+    }
+    if (new Set(form.profiles.map((p) => p.name.trim().toLowerCase())).size !== form.profiles.length) {
+      push("error", "Los perfiles deben tener nombres distintos.");
+      return;
+    }
     setSaving(true);
     try {
       const body = {
@@ -238,7 +259,7 @@ export function PolicyManagerPage() {
         credentials: { vault_secret_ids: form.vaultSecretIds, allow_payment_autofill: false },
         contracts: form.contracts,
         global_prompt: form.contracts.map((c) => `[${c.name}]\n${c.text}`).join("\n\n"),
-        profiles: [],
+        profiles: form.profiles,
         models: form.models,
         default_model: form.defaultModel || null,
         agents: form.agents,
@@ -576,6 +597,63 @@ export function PolicyManagerPage() {
                         <option value="">Sin modelo por defecto</option>
                         {form.models.map((m) => <option key={m} value={m}>{m}</option>)}
                       </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-xs font-medium">Perfiles del agente</label>
+                      <p className="text-[11px] text-muted">
+                        Perfiles que esta política ofrece en el escritorio además del default. El
+                        escritorio gobernado muestra SOLO estos (con el switch Profiles activado en
+                        Características); el modelo debe estar marcado arriba.
+                      </p>
+                      {form.desktop.profiles && form.profiles.length === 0 ? (
+                        <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-2.5 text-xs text-amber-300">
+                          <span className="font-semibold">Ojo:</span> el switch Profiles está activado pero la
+                          lista está vacía — los usuarios solo verán el perfil <span className="font-mono">default</span>.
+                        </div>
+                      ) : null}
+                      {form.profiles.map((profile, index) => (
+                        <div key={index} className="flex items-center gap-2">
+                          <Input
+                            value={profile.name}
+                            onChange={(e) => {
+                              const next = [...form.profiles];
+                              next[index] = { ...next[index], name: e.target.value };
+                              setForm({ ...form, profiles: next });
+                            }}
+                            placeholder="Nombre (p.ej. Operaciones)"
+                          />
+                          <Select
+                            value={profile.model}
+                            onChange={(e) => {
+                              const next = [...form.profiles];
+                              next[index] = { ...next[index], model: e.target.value };
+                              setForm({ ...form, profiles: next });
+                            }}
+                            className="w-44"
+                          >
+                            <option value="">Modelo…</option>
+                            {form.models.map((m) => <option key={m} value={m}>{m}</option>)}
+                          </Select>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => setForm({ ...form, profiles: form.profiles.filter((_, i) => i !== index) })}
+                          >
+                            Eliminar
+                          </Button>
+                        </div>
+                      ))}
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={form.models.length === 0}
+                        onClick={() => setForm({ ...form, profiles: [...form.profiles, { name: "", model: "" }] })}
+                      >
+                        + Agregar perfil
+                      </Button>
+                      {form.models.length === 0 ? (
+                        <p className="text-[11px] text-faint">Marca modelos en la política para poder definir perfiles.</p>
+                      ) : null}
                     </div>
                   </div>
                 ) : null}

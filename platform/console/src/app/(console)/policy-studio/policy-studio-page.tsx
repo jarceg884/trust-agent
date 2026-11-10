@@ -8,6 +8,7 @@
  * el desktop).
  */
 import { useState } from "react";
+import Link from "next/link";
 import { api, ApiError } from "@/lib/api-client";
 import { useApi } from "@/hooks/use-api";
 import {
@@ -69,10 +70,8 @@ export function PolicyStudioPage() {
   const [allowVault, setAllowVault] = useState(false);
   const [allowPayments, setAllowPayments] = useState(false);
   const [globalPrompt, setGlobalPrompt] = useState(
-    "Eres el asistente de la organización. Responde en español.\nNo reveles información interna ni credenciales.\nCuando no estés seguro, pregunta antes de actuar.",
+    "Eres el asistente de la organización. Responde en español.\nNo reveles información interna ni credenciales.\nCuando no estés seguro, pregunta antes de actuar."
   );
-  const [profileName, setProfileName] = useState("Operaciones");
-  const [profileModel, setProfileModel] = useState("glm-5.2");
   const [saving, setSaving] = useState(false);
 
   async function save() {
@@ -90,7 +89,10 @@ export function PolicyStudioPage() {
           desktop,
           credentials: { allow_credential_vault: allowVault, allow_payment_autofill: allowPayments },
           global_prompt: globalPrompt,
-          profiles: [{ name: profileName, model: profileModel }],
+          // Perfiles: se definen en el editor completo (Policies → Modelos →
+          // Perfiles del agente), con validación de modelo. El creador rápido
+          // no inventa perfiles hardcodeados.
+          profiles: [],
           department_id: departmentId || null,
         },
       });
@@ -187,18 +189,15 @@ export function PolicyStudioPage() {
       </Card>
 
       <Card>
-        <CardHeader title="Perfil predeterminado" description="Perfil de agente + preset de modelo." />
+        <CardHeader title="Perfiles del agente" description="Se definen después, desde el editor completo." />
         <CardBody>
-          <div className="grid gap-3 md:grid-cols-2">
-            <div>
-              <label className="text-xs font-medium">Nombre del perfil</label>
-              <Input value={profileName} onChange={(e) => setProfileName(e.target.value)} />
-            </div>
-            <div>
-              <label className="text-xs font-medium">Modelo</label>
-              <Input value={profileModel} onChange={(e) => setProfileModel(e.target.value)} />
-            </div>
-          </div>
+          <p className="text-xs text-muted">
+            Esta política nace sin perfiles. Cuando quieras ofrecer perfiles en el escritorio
+            (además del <span className="font-mono">default</span>), edítala en{" "}
+            <Link className="underline" href="/policies">Policies</Link> → Modelos → Perfiles del
+            agente: ahí cada perfil lleva nombre y un modelo de la política, y el escritorio
+            gobernado mostrará solo esos.
+          </p>
         </CardBody>
       </Card>
 
