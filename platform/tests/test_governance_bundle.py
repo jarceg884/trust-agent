@@ -503,6 +503,35 @@ def test_pre_llm_call_context_carries_precedence_clause(tag, real_api, tmp_path,
     assert "Budget remaining" in ctx["context"]
 
 
+def test_online_sync_is_not_reported_as_offline_grace(tag, real_api, tmp_path, monkeypatch, pinned_pubkey_file):
+    """Regression (pilot 2026-11-10): an ONLINE device reported "Offline
+    grace: 58 min remaining" on every turn — the bundle validity, renewed on
+    each sync — and the agent concluded it was offline on a stale policy.
+    Offline grace is reported only when the last sync FAILED."""
+    trust = _plugin_env(monkeypatch, tmp_path, real_api, pinned_pubkey_file)
+    _write_device_token(trust)
+    tag.state.reset_state()
+    tag.bundle_client.BundleSyncer().startup()
+
+    out = tag._handle_governance_status()
+    ctx = tag._on_pre_llm_call()["context"]
+    assert "online — synced" in out
+    assert "Control plane: online, policy synced" in ctx
+    for text in (out, ctx):
+        assert "offline grace," not in text.lower()
+        assert "OFFLINE GRACE" not in text
+
+    # The control plane becomes unreachable: NOW the cached bundle is running
+    # on offline grace, and both surfaces say so with the time left.
+    tag.state.get_state().record_sync_error("connection refused")
+    out = tag._handle_governance_status()
+    ctx = tag._on_pre_llm_call()["context"]
+    assert "OFFLINE GRACE — last sync failed (connection refused)" in out
+    assert "before RESTRICTED mode" in out
+    assert "Control plane UNREACHABLE: offline grace" in ctx
+    assert tag.PRECEDENCE_CLAUSE in ctx
+
+
 def test_system_prompt_section_within_limit(tag, real_api, tmp_path, monkeypatch, pinned_pubkey_file):
     """REQ-GOH-007: la sección declara identidad gobernada + precedencia y
     respeta el límite de 4000 chars del core."""
