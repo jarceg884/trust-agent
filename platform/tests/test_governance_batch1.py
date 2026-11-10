@@ -717,3 +717,217 @@ def test_profile_rogue_config_pinned_and_model_clamped(plugin, home):
 
     # Cascarón sin marcadores de identidad: el plugin no crea su config.
     assert not (shell / "config.yaml").exists()
+
+
+# ---------------------------------------------------------------------------
+# Perfiles gobernados — la sesión de un perfil usa el ENROLAMIENTO del
+# dispositivo (incidente en vivo 2026-11-10: el gateway multiplexado ya servía
+# vmware/huawei, pero cada turno del perfil evaluaba profiles/<p>/trust-agent
+# — sin device token — y quedaba en modo restringido "device not enrolled":
+# todas las tools bloqueadas y sin pin P-26 del config del perfil)
+# ---------------------------------------------------------------------------
+OTHER_DEVICE_ID = "99999999-8888-7777-6666-555555555555"
+
+_CORE_SRC = Path(os.environ.get("HERMES_AGENT_SRC", "/usr/local/lib/hermes-agent"))
+
+
+def _profile_context(monkeypatch, home, name: str) -> Path:
+    """Contexto de sesión de un perfil vía env (proceso dedicado
+    ``--profile <name>``): HERMES_HOME → ``<root>/profiles/<name>``."""
+    profile = home / "profiles" / name
+    profile.mkdir(parents=True, exist_ok=True)
+    (profile / "config.yaml").write_text("model: {}\n", encoding="utf-8")
+    monkeypatch.setenv("HERMES_HOME", str(profile))
+    return profile
+
+
+@pytest.fixture()
+def core_constants(monkeypatch):
+    """``hermes_constants`` REAL del core: el override context-local es la
+    vía del gateway multiplexado (env HERMES_HOME = raíz, sesión = perfil)."""
+    path = _CORE_SRC / "hermes_constants.py"
+    if not path.is_file():
+        pytest.skip("hermes-agent core source not available")
+    spec = importlib.util.spec_from_file_location("hermes_constants", path)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    monkeypatch.setitem(sys.modules, "hermes_constants", mod)
+    return mod
+
+
+def test_profile_session_is_governed_by_the_device_enrollment(
+        plugin, home, signing_key, monkeypatch):
+    _enrolled(home)
+    _cache(home, _make_bundle(signing_key))
+    profile = _profile_context(monkeypatch, home, "vmware")
+
+    assert plugin.enroll.trust_dir() == home / "trust-agent"
+    assert plugin.bundle_client.trust_dir() == home / "trust-agent"
+    assert plugin.enroll.load_device_token()["device_id"] == DEVICE_ID
+    assert plugin.bundle_client.load_device_token()["device_id"] == DEVICE_ID
+    snap = plugin.enforcement.STATE.evaluate()
+    assert snap["mode"] == "normal", snap
+    assert snap["payload"]["policy_version"] == 11
+    # El perfil no recibe una copia del token: una sola identidad por dispositivo.
+    assert not (profile / "trust-agent" / "device-token.json").exists()
+
+
+def test_multiplexed_profile_session_uses_device_enrollment(
+        plugin, home, signing_key, core_constants):
+    (home / "config.yaml").write_text("model: {}\n", encoding="utf-8")
+    _enrolled(home)
+    _cache(home, _make_bundle(signing_key))
+    profile = home / "profiles" / "vmware"
+    profile.mkdir(parents=True)
+    (profile / "config.yaml").write_text("model: {}\n", encoding="utf-8")
+
+    token = core_constants.set_hermes_home_override(profile)
+    try:
+        assert plugin.enroll.hermes_home() == profile  # la sesión ES el perfil
+        assert plugin.enroll.trust_dir() == home / "trust-agent"
+        assert plugin.bundle_client.trust_dir() == home / "trust-agent"
+        snap = plugin.enforcement.GovernanceState().evaluate()
+        assert snap["mode"] == "normal", snap
+    finally:
+        core_constants.reset_hermes_home_override(token)
+
+
+def test_profile_with_own_enrollment_keeps_its_identity(plugin, home, monkeypatch):
+    """D-030-09: un perfil enrolado APARTE (workers del servidor) conserva
+    su propia identidad — nunca hereda la del host."""
+    _enrolled(home, device_id=DEVICE_ID)
+    profile = _profile_context(monkeypatch, home, "worker")
+    _enrolled(profile, device_id=OTHER_DEVICE_ID)
+
+    assert plugin.enroll.trust_dir() == profile / "trust-agent"
+    assert plugin.enroll.load_device_token()["device_id"] == OTHER_DEVICE_ID
+    assert plugin.bundle_client.load_device_token()["device_id"] == OTHER_DEVICE_ID
+
+
+def test_profile_of_unenrolled_device_stays_restricted(plugin, home, monkeypatch):
+    profile = _profile_context(monkeypatch, home, "vmware")
+    snap = plugin.enforcement.STATE.evaluate()
+    assert snap["mode"] == "restricted"
+    assert "not enrolled" in snap["cause"]
+    assert plugin.enroll.trust_dir() == profile / "trust-agent"
+
+
+def test_profile_session_turn_pins_its_own_config(plugin, home, signing_key, monkeypatch):
+    """Con el perfil en modo normal, el pre_llm_call del turno pinea SU
+    config.yaml (P-26) — antes el modo restringido retornaba sin sync."""
+    import yaml
+
+    trust = home / "trust-agent"
+    trust.mkdir(parents=True, exist_ok=True)
+    (trust / "device-token.json").write_text(json.dumps({
+        "device_id": DEVICE_ID,
+        "token": "devtok.test",
+        "model_base_url": "https://litellm.org.example/v1",
+        "model_key": "sk-org-issued",
+    }), encoding="utf-8")
+    _cache(home, _make_bundle(signing_key, keys={
+        "policy_models": ["glm-5.2"], "policy_default_model": "glm-5.2"}))
+    profile = _profile_context(monkeypatch, home, "ops")
+    (profile / "config.yaml").write_text(yaml.safe_dump({
+        "model": {"default": "gpt-4o", "provider": "openai",
+                  "base_url": "https://api.openai.com/v1", "api_key": "sk-rogue"},
+        "providers": {"openai": {"api_key": "sk-rogue"}},
+    }), encoding="utf-8")
+
+    plugin.config_enforcement.on_pre_llm_call(session_id="sess-ops")
+
+    cfg = yaml.safe_load((profile / "config.yaml").read_text(encoding="utf-8"))
+    assert cfg["model"]["provider"] == "custom"
+    assert cfg["model"]["base_url"] == "https://litellm.org.example/v1"
+    assert cfg["model"]["api_key"] == "sk-org-issued"
+    assert cfg["model"]["default"] == "glm-5.2"
+    assert cfg["providers"] == {}
+
+
+_MANAGED_WRITE_REASON = "organization-managed files"
+
+
+def test_profile_session_cannot_write_device_credentials(
+        plugin, home, signing_key, monkeypatch):
+    (home / "config.yaml").write_text("model: {}\n", encoding="utf-8")
+    _enrolled(home)
+    # Sin sandbox de escritura: el bloqueo debe venir de la protección de
+    # archivos gestionados, no de otra regla.
+    _cache(home, _make_bundle(signing_key, keys={"require_write_sandbox": False}))
+    _profile_context(monkeypatch, home, "vmware")
+    assert plugin.enforcement.STATE.evaluate()["mode"] == "normal"
+
+    for target in (home / "trust-agent" / "device-token.json",
+                   home / "trust-agent" / "governance-bundle.jws",
+                   home / "config.yaml"):
+        decision = _call(plugin, "write_file", {"path": str(target), "content": "{}"})
+        assert decision and decision["action"] == "block", target
+        assert _MANAGED_WRITE_REASON in decision["message"], decision
+
+
+def test_root_session_cannot_write_a_profile_config(plugin, home, signing_key):
+    _normal(plugin, home, signing_key, keys={"require_write_sandbox": False})
+    _write_profile(home, "vmware", {"model": {"default": "glm-5.2"}})
+    target = home / "profiles" / "vmware" / "config.yaml"
+    decision = _call(plugin, "write_file", {"path": str(target), "content": "x: 1\n"})
+    assert decision and decision["action"] == "block"
+    assert _MANAGED_WRITE_REASON in decision["message"], decision
+
+
+def test_governance_plugin_stays_enabled_in_every_home(plugin, home):
+    """El manager de plugins de cada home solo carga la gobernanza si su
+    config la habilita (y ``plugins.disabled`` gana): el sync la re-pinea en
+    el home propio y en cada perfil vivo."""
+    import yaml
+
+    gov = plugin.config_enforcement.GOVERNANCE_PLUGIN
+    _write_config(home, {"plugins": {"enabled": ["memory-x"], "disabled": [gov]}})
+    _write_profile(home, "vmware", {"model": {"default": "glm-5.2"},
+                                    "plugins": {"disabled": [gov, "other"]}})
+    _write_profile(home, "huawei", {"model": {"default": "glm-5.2"}})
+
+    assert plugin.config_enforcement.sync_managed_config(
+        dict(_PROFILE_PAYLOAD), force=True) is True
+
+    root = yaml.safe_load((home / "config.yaml").read_text(encoding="utf-8"))
+    assert root["plugins"] == {"enabled": ["memory-x", gov], "disabled": []}
+    vmware = yaml.safe_load(
+        (home / "profiles" / "vmware" / "config.yaml").read_text(encoding="utf-8"))
+    assert vmware["plugins"] == {"disabled": ["other"], "enabled": [gov]}
+    huawei = yaml.safe_load(
+        (home / "profiles" / "huawei" / "config.yaml").read_text(encoding="utf-8"))
+    assert huawei["plugins"] == {"enabled": [gov]}
+    # Idempotente.
+    assert plugin.config_enforcement.sync_managed_config(
+        dict(_PROFILE_PAYLOAD), force=True) is False
+
+
+@pytest.mark.parametrize("tool,args", [
+    ("terminal", {"command": "trust-agent profile create ventas"}),
+    ("terminal", {"command": "trust-agent.exe -p ops profile create x --clone"}),
+    ("terminal", {"command": "hermes profile import backup.tar.gz"}),
+    ("execute_code", {"code": "from hermes_cli.profiles import create_profile\n"
+                              "create_profile(name='x', clone_from=None)"}),
+])
+def test_agent_cannot_create_profiles(plugin, home, signing_key, tool, args):
+    _normal(plugin, home, signing_key, keys={
+        "approval_mode": "off", "allowed_terminal_backends": ["local"],
+        "allowed_env_passthrough": ["*"], "require_write_sandbox": False})
+    decision = _call(plugin, tool, args)
+    assert decision and decision["action"] == "block", args
+    assert "profiles are created from the Trust Agent app" in decision["message"]
+
+
+@pytest.mark.parametrize("command", [
+    "trust-agent -p vmware chat -q hola",
+    "trust-agent profile list",
+    "git log --oneline -3",
+])
+def test_profile_creation_veto_spares_other_commands(plugin, home, signing_key, command):
+    _normal(plugin, home, signing_key, keys={
+        "approval_mode": "off", "allowed_terminal_backends": ["local"],
+        "allowed_env_passthrough": ["*"], "require_write_sandbox": False})
+    decision = plugin.config_enforcement._check_profile_creation(
+        "terminal", {"command": command}, {}, "sess-1")
+    assert decision is None, command

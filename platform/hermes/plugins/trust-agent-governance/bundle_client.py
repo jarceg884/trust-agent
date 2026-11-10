@@ -110,8 +110,36 @@ def hermes_home() -> Path:
         return Path.home() / ".hermes"
 
 
+def _named_profile_root(home: Path) -> Path | None:
+    """``<root>`` cuando *home* es un perfil con nombre ``<root>/profiles/<name>``
+    (predicado del core; forma del path fuera del runtime)."""
+    try:
+        from hermes_constants import named_profile_home  # type: ignore
+
+        named = named_profile_home(home)
+        return Path(named).parent.parent if named is not None else None
+    except Exception:  # noqa: BLE001
+        if home.parent.name == "profiles" and not home.name.startswith("."):
+            return home.parent.parent
+        return None
+
+
+def device_home() -> Path:
+    """Home que porta el ENROLAMIENTO del dispositivo en el contexto actual —
+    mismo algoritmo que ``enroll.device_home`` (ver su docstring: un perfil
+    del escritorio sin enrolamiento propio usa la identidad, el bundle y el
+    estado del dispositivo; un perfil enrolado aparte conserva los suyos)."""
+    home = hermes_home()
+    if (home / "trust-agent" / "device-token.json").is_file():
+        return home
+    root = _named_profile_root(home)
+    if root is not None and (root / "trust-agent" / "device-token.json").is_file():
+        return root
+    return home
+
+
 def trust_dir() -> Path:
-    d = hermes_home() / "trust-agent"
+    d = device_home() / "trust-agent"
     d.mkdir(parents=True, exist_ok=True)
     try:
         os.chmod(d, 0o700)  # aquí viven secretos del dispositivo

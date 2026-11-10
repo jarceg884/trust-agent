@@ -635,6 +635,30 @@ _PROFILE_IDENTITY_MARKERS = (
     "config.yaml", ".env", "SOUL.md", "profile.yaml", "auth.json", "state.db",
 )
 
+# Nombre del plugin tal como lo listan ``plugins.enabled`` / ``plugins.disabled``.
+GOVERNANCE_PLUGIN = "trust-agent-governance"
+
+
+def _pin_governance_enabled(cfg: dict[str, Any]) -> bool:
+    """Deja este plugin habilitado en *cfg* (mutado in place): presente en
+    ``plugins.enabled`` y ausente de ``plugins.disabled`` — en el core el
+    disable gana sobre el enable, y un home que no lo habilita arranca su
+    próximo manager de plugins SIN gobernanza. Retorna True si cambió."""
+    plugins = cfg.get("plugins")
+    plugins = dict(plugins) if isinstance(plugins, dict) else {}
+    enabled = [str(x) for x in plugins.get("enabled") or []]
+    disabled = [str(x) for x in plugins.get("disabled") or []]
+    changed = False
+    if GOVERNANCE_PLUGIN not in enabled:
+        plugins["enabled"] = enabled + [GOVERNANCE_PLUGIN]
+        changed = True
+    if GOVERNANCE_PLUGIN in disabled:
+        plugins["disabled"] = [x for x in disabled if x != GOVERNANCE_PLUGIN]
+        changed = True
+    if changed:
+        cfg["plugins"] = plugins
+    return changed
+
 
 def _live_profile_dirs(home: Path) -> list[Path]:
     """Named profiles under ``home/profiles`` that carry identity markers.
@@ -726,6 +750,11 @@ def _normalize_profile_configs(payload: dict[str, Any], model_pin: dict[str, Any
                 if cfg.get(key) not in (None, empty):
                     cfg[key] = empty
                     changed = True
+        # La gobernanza del perfil ES este plugin: el manager de plugins de
+        # cada perfil (uno por home en el gateway multiplexado) solo lo carga
+        # si su config lo habilita, y ``plugins.disabled`` gana sobre enabled.
+        if _pin_governance_enabled(cfg):
+            changed = True
         if not changed:
             continue
         try:
@@ -894,6 +923,12 @@ def sync_managed_config(payload: dict[str, Any], *, force: bool = False) -> bool
             gateway["platforms"] = platforms
             existing["gateway"] = gateway
 
+        # Este plugin ES la gobernanza de este home: su habilitación también
+        # la pinea la organización (el próximo arranque del gateway no debe
+        # cargar este home sin plugin).
+        if _pin_governance_enabled(existing):
+            changed = True
+
         # P-26 per profile (perfiles gobernados): corre en CADA sync — los
         # perfiles se crean entre bundles y su config es tan editable como el
         # principal. Véase _normalize_profile_configs.
@@ -948,12 +983,19 @@ def _is_managed_config_path(path: str) -> bool:
     try:
         candidate = Path(path).expanduser().resolve()
         home = enroll.hermes_home().resolve()
-        protected = {
-            (home / "config.yaml").resolve(),
-            (home / "trust-agent" / "device-token.json").resolve(),
-            (home / "trust-agent" / "governance_status.json").resolve(),
-            (home / "trust-agent" / "governance-bundle.jws").resolve(),
-        }
+        # El home ENROLADO puede ser otro (sesión de un perfil del escritorio:
+        # identidad/bundle del dispositivo viven en la raíz) — sus credenciales
+        # y su config son igual de organization-managed.
+        device = enroll.device_home().resolve()
+        protected = {(home / "config.yaml").resolve(), (device / "config.yaml").resolve()}
+        for base in {home, device}:
+            for name in ("device-token.json", "governance_status.json",
+                         "governance-bundle.jws"):
+                protected.add((base / "trust-agent" / name).resolve())
+        # P-26 por perfil: el config de cada perfil vivo lo pinea el sync;
+        # el agente tampoco lo edita (desde ninguna sesión).
+        for profile_dir in _live_profile_dirs(device):
+            protected.add((profile_dir / "config.yaml").resolve())
         return candidate in protected
     except OSError:
         return False
@@ -988,6 +1030,33 @@ def _check_managed_config_edits(tool: str, args: dict[str, Any],
                 "or the governance bundle is forbidden; provider/model/gateway "
                 "configuration belongs to your organization.",
             )
+    return None
+
+
+# Un perfil creado FUERA de la app (CLI o código del agente, sin clonar) nace
+# sin el plugin de gobernanza y el gateway multiplexado lo sirve en caliente:
+# un agente gobernado no fabrica perfiles. La app los crea clonando uno vivo,
+# así heredan la gobernanza de la organización.
+_PROFILE_CREATE_RE = re.compile(
+    r"\b(hermes|trust-agent)(\.exe)?\b[^\n|;&]*?\bprofiles?\s+(create|import|clone)\b"
+    r"|\bcreate_profile\s*\(|\bimport_profile\s*\(",
+    re.IGNORECASE,
+)
+
+
+def _check_profile_creation(tool: str, args: dict[str, Any],
+                            _payload: dict[str, Any], _session_id: str):
+    if tool not in COMMAND_TOOLS:
+        return None
+    command = str(args.get("command") or args.get("code") or "")
+    if command and _PROFILE_CREATE_RE.search(command):
+        return _block(
+            tool,
+            "profile_create_command",
+            f"{_BLOCK_PREFIX} profiles are created from the Trust Agent app "
+            "(Profiles → New profile) so they inherit your organization's "
+            "governance; the agent cannot create or import profiles.",
+        )
     return None
 
 
@@ -1044,6 +1113,7 @@ def on_pre_tool_call(tool_name: str = "", args: dict[str, Any] | None = None,
     checkers = (
         _check_self_updates,      # P-29 (antes de nada: auto-modificación)
         _check_managed_config_edits,  # P-26 (config/credenciales org)
+        _check_profile_creation,  # perfiles gobernados: solo la app los crea
         _check_approval_mode,     # P-1
         _check_terminal_backend,  # P-2
         _check_env_passthrough,   # P-18

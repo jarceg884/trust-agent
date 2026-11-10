@@ -102,8 +102,53 @@ def hermes_home() -> Path:
         return Path.home() / ".hermes"
 
 
+def _named_profile_root(home: Path) -> Path | None:
+    """``<root>`` cuando *home* es un perfil con nombre ``<root>/profiles/<name>``.
+
+    Usa el predicado del core (``hermes_constants.named_profile_home``: exige
+    que ``<root>`` sea un home real de Hermes); fuera del runtime (tests
+    standalone) cae a la forma del path."""
+    try:
+        from hermes_constants import named_profile_home  # type: ignore
+
+        named = named_profile_home(home)
+        return Path(named).parent.parent if named is not None else None
+    except Exception:  # noqa: BLE001 - fuera del runtime de Hermes (tests)
+        if home.parent.name == "profiles" and not home.name.startswith("."):
+            return home.parent.parent
+        return None
+
+
+def device_home() -> Path:
+    """Home que porta el ENROLAMIENTO del dispositivo en el contexto actual.
+
+    Un perfil con nombre creado en el escritorio gobernado NO se enrola
+    aparte: es otro espacio del MISMO empleado en el MISMO dispositivo y lo
+    gobierna el bundle del dispositivo (decisión de producto 2026-11-10:
+    crear perfiles está permitido bajo gobernanza). Resolver ``trust-agent``
+    bajo el home del perfil — sin device token — dejaba cada sesión del
+    perfil en modo restringido "device not enrolled" (todas las tools
+    bloqueadas y sin pin P-26; incidente en vivo con el gateway
+    multiplexado). Orden:
+
+    1. el home del contexto si tiene su PROPIO ``device-token.json`` (el
+       default, o un perfil enrolado aparte — workers del servidor, D-030-09);
+    2. la raíz de perfiles si el contexto es un perfil y la raíz está enrolada;
+    3. el home del contexto (sin enrolamiento → restringido, fail-closed).
+
+    Mismo algoritmo que ``bundle_client.device_home`` (núcleo v2, que no
+    depende de esta lane opcional)."""
+    home = hermes_home()
+    if (home / "trust-agent" / "device-token.json").is_file():
+        return home
+    root = _named_profile_root(home)
+    if root is not None and (root / "trust-agent" / "device-token.json").is_file():
+        return root
+    return home
+
+
 def trust_dir() -> Path:
-    d = hermes_home() / "trust-agent"
+    d = device_home() / "trust-agent"
     d.mkdir(parents=True, exist_ok=True)
     try:  # 0700: aquí viven la clave privada y el device token.
         os.chmod(d, 0o700)
@@ -781,8 +826,8 @@ def oidc_issuer() -> str | None:
     env = os.environ.get("TRUST_OIDC_ISSUER", "").strip()
     if env:
         return env
-    try:
-        for line in (hermes_home() / ".env").read_text(encoding="utf-8").splitlines():
+    try:  # el binding del tenant vive en el home ENROLADO, no en un perfil
+        for line in (device_home() / ".env").read_text(encoding="utf-8").splitlines():
             if line.startswith("TRUST_OIDC_ISSUER="):
                 return line.split("=", 1)[1].strip() or None
     except OSError:
@@ -795,7 +840,7 @@ def oidc_client_id() -> str:
     if env:
         return env
     try:
-        for line in (hermes_home() / ".env").read_text(encoding="utf-8").splitlines():
+        for line in (device_home() / ".env").read_text(encoding="utf-8").splitlines():
             if line.startswith("TRUST_OIDC_CLIENT_ID="):
                 return line.split("=", 1)[1].strip() or "trust-agent-web"
     except OSError:
