@@ -58,11 +58,22 @@ def ob(admin_conn, idp):
                 " oidc_issuer_url) VALUES (%s, %s, %s, %s, %s, %s)",
                 (tid, f"OB {key}", slug, status, slug, idp.issuer(slug)),
             )
+            # Migration 0044: every user has a department — a fresh org is
+            # born with "General" and its admin lands there (what provisioning
+            # does for an empty declaration). Seeded by SQL, so it emits no
+            # department.created: the wizard/skip audit counts below only see
+            # what the onboarding itself does.
+            general_id = str(uuid.uuid4())
+            cur.execute(
+                "INSERT INTO departments (id, tenant_id, name) "
+                "VALUES (%s, %s, 'General')",
+                (general_id, tid),
+            )
             cur.execute(
                 "INSERT INTO users (id, tenant_id, department_id, email, "
                 " display_name, status, mfa_enrolled, oidc_subject) "
-                "VALUES (%s, %s, NULL, %s, %s, 'active', true, %s)",
-                (admin_uid, tid, f"admin@{slug}.test", f"Admin {key}", sub),
+                "VALUES (%s, %s, %s, %s, %s, 'active', true, %s)",
+                (admin_uid, tid, general_id, f"admin@{slug}.test", f"Admin {key}", sub),
             )
             cur.execute(
                 "INSERT INTO user_roles (id, tenant_id, user_id, role_key) "
@@ -168,12 +179,13 @@ def test_ac38_004_wizard_flow(client, admin_conn, idp, ob):
         )
         assert resp.status_code == 201, (name, resp.text)
 
-    # Overview lists EXACTLY those departments (LEFT JOIN, no budgets yet).
+    # Overview lists EXACTLY those departments plus the "General" the org was
+    # born with (0044) — LEFT JOIN, no budgets yet.
     resp = client.get("/api/budgets/overview", headers=headers)
     assert resp.status_code == 200, resp.text
     deptos = resp.json()["departments"]
     assert {d["name"] for d in deptos} == {
-        "Finanzas", "Marketing", "Ventas", "Recursos Humanos"
+        "General", "Finanzas", "Marketing", "Ventas", "Recursos Humanos"
     }
     assert all(d["budget_cents"] is None for d in deptos)
 
@@ -259,14 +271,18 @@ def test_ac38_005_skip_flow(client, admin_conn, idp, ob):
 
 
 # ---------------------------------------------------------------------------
-# AC-38-007 — org with 0 departments: overview answers, empty list
+# AC-38-007 — org born with no declared structure: since 0044 it holds only
+# "General" (its admin needs a department); the overview answers with that
+# single department and no budgets.
 # ---------------------------------------------------------------------------
 
 def test_ac38_007_overview_empty_org(client, idp, ob):
-    headers = _hdr(client, idp, ob, "skip")  # still 0 departments
+    headers = _hdr(client, idp, ob, "skip")  # skipped the wizard: only "General"
     resp = client.get("/api/budgets/overview", headers=headers)
     assert resp.status_code == 200, resp.text
-    assert resp.json()["departments"] == []  # D-013-07 with the empty list
+    deptos = resp.json()["departments"]
+    assert [d["name"] for d in deptos] == ["General"]
+    assert all(d["budget_cents"] is None for d in deptos)
 
 
 # ---------------------------------------------------------------------------

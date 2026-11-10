@@ -18,6 +18,47 @@ from ..errors import conflict, not_found, validation_failed
 from ..governance import budgets
 from ..profiles.templates import get_template
 
+# Migration 0044 (mandato Miller): no user exists without a department. When
+# nobody chose one, a new user lands in this one.
+DEFAULT_DEPARTMENT_NAME = "General"
+
+
+def ensure_default_department(
+    conn: Connection, *, tenant_id: str, actor_role: str, actor_id: str | None = None,
+) -> str:
+    """Department a new user lands in when nobody chose one.
+
+    Same rule as the 0044 backfill: "General" if it exists, else the oldest
+    department; when the organization has none (a freshly provisioned or
+    self-signed-up org), "General" is created here and audited like any
+    ``department.created``. Filters by tenant explicitly, so it behaves the
+    same under any RLS context.
+    """
+    row = conn.execute(
+        text(
+            "SELECT id FROM departments WHERE tenant_id = CAST(:tid AS uuid) "
+            "ORDER BY (name = :general) DESC, created_at LIMIT 1"
+        ),
+        {"tid": tenant_id, "general": DEFAULT_DEPARTMENT_NAME},
+    ).first()
+    if row is not None:
+        return str(row[0])
+    department_id = str(_uuid.uuid4())
+    conn.execute(
+        text(
+            "INSERT INTO departments (id, tenant_id, name) "
+            "VALUES (CAST(:id AS uuid), CAST(:tid AS uuid), :name)"
+        ),
+        {"id": department_id, "tid": tenant_id, "name": DEFAULT_DEPARTMENT_NAME},
+    )
+    audit.emit(
+        conn, tenant_id=tenant_id, actor_role=actor_role, actor_id=actor_id,
+        action="department.created", target_type="department",
+        target_id=department_id,
+        payload={"name": DEFAULT_DEPARTMENT_NAME, "default": True},
+    )
+    return department_id
+
 
 def _valid_name(name: str) -> str:
     name = (name or "").strip()
