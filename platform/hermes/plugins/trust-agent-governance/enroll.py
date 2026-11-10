@@ -41,10 +41,14 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-try:  # POSIX only; en Windows el lock degrada a no-op (defense: reuse-first)
+try:  # POSIX: flock
     import fcntl
 except ImportError:  # pragma: no cover - fuera de Linux/macOS
     fcntl = None  # type: ignore[assignment]
+try:  # Windows: LockFileEx por byte (msvcrt.locking)
+    import msvcrt
+except ImportError:  # pragma: no cover - fuera de Windows
+    msvcrt = None  # type: ignore[assignment]
 
 TOOLSET = "trust_agent"
 
@@ -140,19 +144,44 @@ class _HomeLock:
         self.acquired = False
         self._fh = None
 
+    @staticmethod
+    def _try_lock(fh: Any) -> None:
+        """Lock exclusivo NO bloqueante; OSError si otro lo tiene.
+
+        POSIX ``flock`` y el lock por byte de Windows (``msvcrt.locking`` =
+        ``LockFileEx`` sobre el byte 0) son por handle abierto: excluyen a
+        otros procesos Y a otros hilos del mismo proceso (cada ``__enter__``
+        abre su propio handle). Sin la rama Windows el lock era un no-op en la
+        plataforma principal: el BundleSyncer y el watcher refrescaban el
+        token a la vez y dos enroll concurrentes podían pisarse el one-time.
+        """
+        if fcntl is not None:
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        else:
+            fh.seek(0)
+            msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+
+    @staticmethod
+    def _unlock(fh: Any) -> None:
+        if fcntl is not None:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+        else:
+            fh.seek(0)
+            msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+
     def __enter__(self) -> "_HomeLock":
-        if fcntl is None:
-            self.acquired = True  # no-op: solo queda la defensa reuse-first
+        if fcntl is None and msvcrt is None:
+            self.acquired = True  # sin primitiva de lock: solo queda reuse-first
             return self
         try:
-            fh = (trust_dir() / ".autoenroll.lock").open("a")
+            fh = (trust_dir() / ".autoenroll.lock").open("a+")
         except OSError:
             self.acquired = True  # sin lock disponible: proseguir (best-effort)
             return self
         deadline = time.monotonic() + self.timeout_s
         while True:
             try:
-                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                self._try_lock(fh)
                 self.acquired = True
                 self._fh = fh
                 return self
@@ -163,9 +192,9 @@ class _HomeLock:
                 time.sleep(0.2)
 
     def __exit__(self, *exc: object) -> None:
-        if fcntl is not None and self._fh is not None:
+        if self._fh is not None:
             try:
-                fcntl.flock(self._fh, fcntl.LOCK_UN)
+                self._unlock(self._fh)
             except OSError:
                 pass
             self._fh.close()

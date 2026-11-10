@@ -675,6 +675,47 @@ def test_auto_enroll_refreshes_expired_token_without_browser(plugin, home,
     assert opened == []
 
 
+def test_refresh_concurrent_threads_single_post(plugin, home, monkeypatch):
+    """Dos hilos del MISMO proceso (BundleSyncer + watcher) con el token
+    expirado: el lock por home los serializa → exactamente UN POST de refresh;
+    el segundo ve el token fresco y no vuelve a llamar al server."""
+    import threading
+
+    tdir = home / "trust-agent"
+    tdir.mkdir(parents=True, exist_ok=True)
+    (tdir / "device-token.json").write_text(json.dumps({
+        "device_id": DEVICE_ID, "token": _device_jwt(-3600)}))
+    monkeypatch.setattr(plugin.enroll, "AUTOENROLL_LOCK_WAIT_S", 10.0)
+    posts = []
+    in_post = threading.Event()
+    release = threading.Event()
+    inner = _fake_refresh(200, _device_jwt(900))
+
+    def slow_request(*args, **kwargs):
+        posts.append(1)
+        in_post.set()
+        assert release.wait(5), "the test never released the first POST"
+        return inner(*args, **kwargs)
+
+    monkeypatch.setattr(plugin.enroll, "_request", slow_request)
+    results = []
+    first = threading.Thread(
+        target=lambda: results.append(plugin.enroll.refresh_expired_device_token()))
+    second = threading.Thread(
+        target=lambda: results.append(plugin.enroll.refresh_expired_device_token()))
+    first.start()
+    assert in_post.wait(5), "first refresh never reached the server"
+    second.start()  # contends for the home lock while the first POST is in flight
+    release.set()
+    first.join(10)
+    second.join(10)
+
+    assert results == ["active", "active"]
+    assert posts == [1], "only one refresh may reach the server"
+    log = (tdir / "plugin.log").read_text()
+    assert log.count("device_token_refreshed") == 1
+
+
 def test_auto_enroll_admin_activated_rejected_needs_activation(plugin, home,
                                                                monkeypatch):
     """Refresh rechazado (revocado / muy viejo) en un escritorio activado por
