@@ -442,6 +442,106 @@ def test_renew_negatives(client, idp):
 
 
 # ---------------------------------------------------------------------------
+# Spec 022 v1.2.0 (D-HRB-03 amend 2) — refresh de un device token EXPIRADO
+# sin sesión: el escritorio activado por token one-time (spec 044) no tiene
+# sesión OIDC con la que re-probar identidad; su propio device token
+# auténtico es la credencial, acotada por iat y por el estado del device.
+# ---------------------------------------------------------------------------
+def _signed_device_token(device_id, *, user_id=USER_CAROL, tenant_id=TENANT_A,
+                         iat_age_s=4500, exp_age_s=3600,
+                         secret="test-device-secret"):
+    import time
+
+    import jwt
+
+    now = int(time.time())
+    return jwt.encode(
+        {"device_id": device_id, "user_id": user_id, "tenant_id": tenant_id,
+         "jti": uuid.uuid4().hex, "iat": now - iat_age_s,
+         "exp": now - exp_age_s},
+        secret, algorithm="HS256",
+    )
+
+
+def _active_device(client, idp, prefix):
+    fp = f"fp-{prefix}-{uuid.uuid4().hex[:8]}"
+    device_id = _enroll(client, idp, fp).json()["device_id"]
+    alice = mint(client, idp, "alice")
+    resp = client.post(f"/api/devices/{device_id}/approve",
+                       headers=bearer_headers(alice))
+    assert resp.status_code == 200, resp.text
+    return device_id, alice
+
+
+def test_refresh_expired_device_token(client, idp, admin_conn):
+    device_id, _alice = _active_device(client, idp, "refresh")
+    expired = _signed_device_token(device_id)
+
+    resp = client.post("/api/devices/token/refresh",
+                       json={"device_token": expired})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["device_id"] == device_id
+    assert body["status"] == "active"
+    assert body["expires_in"] > 0
+    fresh = body["device_token"]
+    assert fresh != expired
+
+    # El token fresco pasa el DeviceGate como cualquier device token válido.
+    carol = mint(client, idp, "carol")
+    headers = {**bearer_headers(carol), "X-Device-Token": fresh}
+    assert client.get("/api/_probe/device", headers=headers).status_code == 200
+    # El token expirado NO pasa el DeviceGate (solo sirve para refrescar).
+    headers_old = {**bearer_headers(carol), "X-Device-Token": expired}
+    assert client.get("/api/_probe/device", headers=headers_old).status_code == 401
+
+    events = _audit_events(admin_conn, TENANT_A, "device.token_refreshed", device_id)
+    assert len(events) == 1
+    assert str(events[0]["actor_id"]) == USER_CAROL
+    assert events[0]["payload"]["outcome"] == "refreshed"
+    assert _device_row(admin_conn, device_id)["last_seen_at"] is not None
+
+
+def test_refresh_expired_device_token_negatives(client, idp, admin_conn):
+    device_id, alice = _active_device(client, idp, "refreshneg")
+
+    def refresh(token):
+        return client.post("/api/devices/token/refresh",
+                           json={"device_token": token})
+
+    # Firma de otra llave -> 401 (no se acepta un token forjado).
+    forged = _signed_device_token(device_id, secret="attacker-secret")
+    assert refresh(forged).status_code == 401
+    # Basura -> 401.
+    assert refresh("not-a-jwt").status_code == 401
+    # Emitido hace más que la ventana máxima (30 días por defecto) -> 401.
+    stale = _signed_device_token(device_id, iat_age_s=31 * 86400,
+                                 exp_age_s=31 * 86400 - 900)
+    assert refresh(stale).status_code == 401
+    # Token de otro usuario para el mismo device (propiedad) -> 401.
+    other_user = _signed_device_token(device_id, user_id=USER_BOB)
+    assert refresh(other_user).status_code == 401
+    # Device inexistente -> el MISMO 401 (sin oráculo).
+    ghost = _signed_device_token(str(uuid.uuid4()))
+    r_ghost = refresh(ghost)
+    assert r_ghost.status_code == 401
+
+    # Revocado -> 401 inmediato: la revocación no se puede saltar refrescando.
+    ok = refresh(_signed_device_token(device_id))
+    assert ok.status_code == 200, ok.text
+    resp = client.post(f"/api/devices/{device_id}/revoke",
+                       headers=bearer_headers(alice))
+    assert resp.status_code == 200, resp.text
+    r_revoked = refresh(_signed_device_token(device_id))
+    assert r_revoked.status_code == 401
+    same = ("code", "reason", "message")
+    assert ({k: r_revoked.json()["error"].get(k) for k in same}
+            == {k: r_ghost.json()["error"].get(k) for k in same})
+    assert not _audit_events(admin_conn, TENANT_A, "device.token_refreshed",
+                             str(uuid.uuid4()))
+
+
+# ---------------------------------------------------------------------------
 # AC-DEV-009 — re-enrollment tras revoke/reject; conflictos de fingerprint
 # ---------------------------------------------------------------------------
 def test_reenroll_after_revocation(client, idp, admin_conn):

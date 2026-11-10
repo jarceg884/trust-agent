@@ -778,6 +778,20 @@ def _browser_login_cooldown_path() -> Path:
     return trust_dir() / ".browser-login-last-attempt"
 
 
+def _admin_activated() -> bool:
+    """True when this home was activated with an admin one-time token.
+
+    The desktop's activation flow (spec 044) writes ``enrollment.json`` with
+    the portal it redeemed against; such a home has no OIDC login to recover
+    with, so the watcher must never open a browser for it.
+    """
+    try:
+        data = json.loads((trust_dir() / "enrollment.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(data, dict) and bool(data.get("portal_url") or data.get("activated_at"))
+
+
 def _browser_login_on_cooldown() -> bool:
     try:
         last = float(_browser_login_cooldown_path().read_text().strip())
@@ -937,12 +951,30 @@ def auto_enroll_once(poll_timeout_s: float = AUTO_ENROLL_POLL_S) -> str:
     device = load_device_token()
     if device is not None and not device_token_expired(device):
         return "already_enrolled"
+    if device is not None and device.get("token"):
+        # Spec 022 v1.2.0 (D-HRB-03 amend 2): an enrolled desktop whose token
+        # merely expired (closed longer than the TTL) trades its own
+        # authentic token for a fresh one first. Opening the browser for an
+        # OIDC login here was wrong for admin-activated desktops: they never
+        # had an id_token, so the watcher popped a login tab every cycle.
+        refreshed = refresh_expired_device_token()
+        if refreshed == "active":
+            return "already_enrolled"
+        if refreshed in ("network", "busy"):
+            return refreshed
+        # "rejected" (revoked / too old): only an OIDC-enrolled home can
+        # still recover below with a fresh id_token.
     org_code = org_binding()
     if not org_code:
         return "no_binding"
     try:
         id_token = _read_id_token(None)
     except FileNotFoundError:
+        if _admin_activated():
+            # Spec 044: activated with the admin's one-time token — there is
+            # no org browser login to fall back to. The employee needs a new
+            # activation token; the desktop shows the restricted state.
+            return "needs_activation"
         # Vinculado a una organización pero sin credenciales todavía: abre
         # el navegador real al login de la organización (una vez por
         # cooldown, nunca en cada tick de 15s) en vez de esperar pasivo un
@@ -973,6 +1005,62 @@ def auto_enroll_once(poll_timeout_s: float = AUTO_ENROLL_POLL_S) -> str:
         _log("auto_enroll_attempt", org_code=org_code, outcome=outcome,
              detail=info.get("message", ""))
     return outcome
+
+
+def refresh_expired_device_token() -> str:
+    """Refresh D-HRB-03 amend 2 (spec 022 v1.2.0): token expirado → fresco.
+
+    Los escritorios activados por el admin con token one-time (spec 044) no
+    tienen ``id-token.txt`` de ``trust-login``: su propio device token
+    auténtico es la credencial. ``POST /api/devices/token/refresh`` devuelve
+    un token fresco si el device sigue ``active`` y el token se emitió dentro
+    de la ventana del server; 401 si fue revocado, es muy viejo o forjado.
+
+    -> "active" (token fresco en disco) | "rejected" (el server no lo
+    refresca: revocado/viejo/endpoint ausente) | "network" | "no_token" |
+    "busy" (otro proceso del home tiene el lock).
+    """
+    device = load_device_token()
+    if device is None or not device.get("token"):
+        return "no_token"
+    with _HomeLock(timeout_s=AUTOENROLL_LOCK_WAIT_S) as lock:
+        if not lock.acquired:
+            return "busy"
+        # Otro proceso del home pudo refrescar ya (mismo lock):
+        device = load_device_token()
+        if device is None or not device.get("token"):
+            return "no_token"
+        if not device_token_expired(device):
+            return "active"
+        try:
+            status, payload = _request(
+                "POST", "/api/devices/token/refresh",
+                {"device_token": device["token"]},
+            )
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            _log("device_token_refresh_failed", outcome="network", detail=str(exc))
+            return "network"
+        fresh = payload.get("device_token") if status == 200 else None
+        if not fresh:
+            _log("device_token_refresh_failed", outcome="rejected", status=status,
+                 detail=_error_message(payload, ""))
+            return "rejected"
+        path = trust_dir() / "device-token.json"
+        data: dict[str, Any] = {}
+        try:
+            existing = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(existing, dict):
+                data.update(existing)  # preserva org, model_key, model_base_url…
+        except (OSError, ValueError):
+            pass
+        data.update({
+            "device_id": str(payload.get("device_id") or device["device_id"]),
+            "token": str(fresh),
+            "renewed_at": int(time.time()),
+        })
+        _write_secret(path, json.dumps(data, indent=2))
+    _log("device_token_refreshed", device_id=data.get("device_id"))
+    return "active"
 
 
 def recover_expired_token(poll_timeout_s: float = AUTO_ENROLL_POLL_S) -> str:
@@ -1028,7 +1116,12 @@ def _auto_enroll_loop(stop: threading.Event) -> None:
         outcome = auto_enroll_once()
         if outcome in ("already_enrolled", "active"):
             return
-        if outcome in ("no_binding", "no_id_token"):
+        if outcome == "needs_activation":
+            # Admin-activated home whose token cannot be refreshed (revoked
+            # or too old): nothing to do until a new activation lands; a slow
+            # re-check keeps the log quiet and picks up the new token.
+            backoff = 300.0
+        elif outcome in ("no_binding", "no_id_token"):
             backoff = max(backoff, 60.0)  # espera a que el desktop escriba
         elif outcome == "network":
             backoff = min(60.0, backoff * 2.0)

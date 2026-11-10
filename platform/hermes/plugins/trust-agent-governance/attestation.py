@@ -201,6 +201,15 @@ def send_attestation(trigger: str = "manual") -> dict[str, Any] | None:
         bundle_client.log_event("attestation_skipped", trigger=trigger,
                                 reason="device not enrolled")
         return None
+    if bundle_client.device_token_expired(device):
+        # An expired token answers 401, which this module (correctly) treats
+        # as revocation — so sending it would wipe the signed bundle and
+        # report "revoked" for a desktop that was merely closed longer than
+        # the TTL. The BundleSyncer refreshes the token; the next session
+        # attests (best-effort, counts are not consumed).
+        bundle_client.log_event("attestation_skipped", trigger=trigger,
+                                reason="device token expired")
+        return None
 
     snapshot = governance_state.get_state().snapshot()
     bundle = snapshot.get("bundle") or {}

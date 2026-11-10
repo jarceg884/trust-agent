@@ -32,25 +32,25 @@ interface BundleList {
 const DESKTOP_OPTIONS: { key: string; label: string; hint: string; def: boolean }[] = [
   { key: "model_main", label: "Model · Main model", hint: "Selector de modelo principal (la organización asigna el modelo; el usuario no lo cambia)", def: false },
   { key: "model_fallback", label: "Model · Fallback models", hint: "Modelos de respaldo", def: false },
-  { key: "model_moa", label: "Model · Mixture of Agents", hint: "Preset corporativo MoA", def: false },
-  { key: "chat_model_switch", label: "Chat · Cambio de modelo", hint: "Hot-swap desde el compositor", def: false },
-  { key: "providers", label: "Providers", hint: "Proveedores y claves de modelo", def: false },
+  { key: "model_moa", label: "Model · Mixture of Agents", hint: "Preset corporativo MoA (selector de modelos y /moa)", def: false },
+  { key: "chat_model_switch", label: "Chat · Cambio de modelo", hint: "Hot-swap desde el compositor, selector de modelos y /model", def: false },
+  { key: "providers", label: "Providers", hint: "Proveedores, claves de modelo y generación de mascotas", def: false },
   { key: "gateways", label: "Gateways", hint: "Conexiones de gateway", def: false },
   { key: "keys", label: "Tools & Keys", hint: "API keys de herramientas y variables de servidor", def: false },
-  { key: "billing", label: "Billing & suscripciones", hint: "Planes, suscripciones y facturación", def: false },
+  { key: "billing", label: "Billing & suscripciones", hint: "Planes, suscripciones, facturación y uso", def: false },
   { key: "web_access", label: "Web access", hint: "Servir la webapp desde este equipo", def: false },
   { key: "browser", label: "Browser", hint: "Navegador integrado", def: false },
   { key: "vault", label: "Passwords & Logins", hint: "Vault y autofill", def: false },
   { key: "voice", label: "Voice", hint: "Modo voz", def: false },
-  { key: "terminal", label: "Advanced · Terminal", hint: "Ejecución de comandos", def: false },
-  { key: "plugins", label: "Plugins & MCP", hint: "Extensiones", def: false },
-  { key: "capabilities", label: "Capabilities", hint: "Skills, plugins, conectores y herramientas", def: false },
-  { key: "messaging", label: "Messaging", hint: "Canales de mensajería", def: false },
+  { key: "terminal", label: "Advanced · Terminal", hint: "Ejecución de comandos y modo de aprobación (/approvals)", def: false },
+  { key: "plugins", label: "Plugins & MCP", hint: "Extensiones, temas del Marketplace e instalación por enlace", def: false },
+  { key: "capabilities", label: "Capabilities", hint: "Skills, plugins, conectores, herramientas y comandos / de skills", def: false },
+  { key: "messaging", label: "Messaging", hint: "Canales de mensajería (/handoff)", def: false },
   { key: "artifacts", label: "Artifacts", hint: "Artefactos generados", def: false },
-  { key: "cron", label: "Scheduled jobs", hint: "Tareas programadas", def: false },
-  { key: "agents", label: "Agents", hint: "Agentes compartidos", def: false },
+  { key: "cron", label: "Scheduled jobs", hint: "Tareas programadas (/goal, /loop, /heartbeat)", def: false },
+  { key: "agents", label: "Agents", hint: "Agentes compartidos y subagentes (/agents, /review, /bg)", def: false },
   { key: "profiles", label: "Profiles", hint: "Perfiles del agente", def: false },
-  { key: "memory", label: "Memory & Context", hint: "Memoria del agente", def: true },
+  { key: "memory", label: "Memory & Context", hint: "Memoria del agente (/memory, /journey, /refine)", def: true },
   { key: "sessions", label: "Sessions", hint: "Borrado permanente de chats", def: true },
   { key: "workspace", label: "Workspace", hint: "Archivos y proyectos", def: true },
 ];
@@ -133,7 +133,7 @@ export function PolicyStudioPage() {
       </Card>
 
       <Card>
-        <CardHeader title="Desktop app UI" description="Réplica de Settings: lo desactivado no estará disponible en la app." />
+        <CardHeader title="Desktop app UI" description="Réplica de Settings: lo desactivado no estará disponible en la app. Siempre bloqueado: suscripciones upstream, envío de diagnósticos, actualizaciones del runtime, onboarding de proveedores, modelos locales y DevTools." />
         <CardBody>
           <div className="space-y-2">
             {DESKTOP_OPTIONS.map((opt) => (

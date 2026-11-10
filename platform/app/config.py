@@ -62,6 +62,13 @@ class Settings(BaseSettings):
     # let anyone forge device tokens).
     device_token_secret: str = ""
     device_token_ttl_minutes: int = 15
+    # Spec 022 v1.2.0 (D-HRB-03 amend 2): a desktop that was closed longer
+    # than the TTL can trade its EXPIRED-but-authentic device token for a
+    # fresh one (POST /api/devices/token/refresh) while the device row is
+    # still active and the token was issued within this window. Revocation
+    # stays immediate (the row is checked on every refresh); past the window
+    # the employee needs a new activation token from the admin.
+    device_token_refresh_max_age_days: int = 30
 
     # --- Governance bundle signing (spec 019, D-GOH-02, ADR-016) -------------
 

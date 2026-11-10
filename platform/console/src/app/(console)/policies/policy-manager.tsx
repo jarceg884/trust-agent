@@ -53,8 +53,8 @@ const DESKTOP_GROUPS: { group: string; hint: string; options: { key: string; lab
     options: [
       { key: "model_main", label: "Main model selector", hint: "Mostrar selector de modelo principal", def: false },
       { key: "model_fallback", label: "Fallback models", hint: "Modelos de respaldo", def: false },
-      { key: "model_moa", label: "Mixture of Agents", hint: "Preset MoA", def: false },
-      { key: "chat_model_switch", label: "Cambio de modelo en chat", hint: "Hot-swap desde el compositor", def: false },
+      { key: "model_moa", label: "Mixture of Agents", hint: "Preset corporativo MoA (selector de modelos y /moa)", def: false },
+      { key: "chat_model_switch", label: "Cambio de modelo en chat", hint: "Hot-swap desde el compositor, selector de modelos y /model", def: false },
     ],
   },
   {
@@ -63,7 +63,7 @@ const DESKTOP_GROUPS: { group: string; hint: string; options: { key: string; lab
     options: [
       { key: "workspace", label: "Workspace", hint: "Archivos y proyectos", def: true },
       { key: "sessions", label: "Sessions", hint: "Borrado permanente de chats", def: true },
-      { key: "memory", label: "Memory & Context", hint: "Memoria del agente", def: true },
+      { key: "memory", label: "Memory & Context", hint: "Memoria del agente (/memory, /journey, /refine)", def: true },
     ],
   },
   {
@@ -82,11 +82,11 @@ const DESKTOP_GROUPS: { group: string; hint: string; options: { key: string; lab
     group: "Superficies de la app",
     hint: "Páginas y canales que el usuario puede abrir.",
     options: [
-      { key: "capabilities", label: "Capabilities", hint: "Skills, plugins, conectores y herramientas", def: false },
-      { key: "messaging", label: "Messaging", hint: "Canales de mensajería", def: false },
+      { key: "capabilities", label: "Capabilities", hint: "Skills, plugins, conectores, herramientas y comandos / de skills", def: false },
+      { key: "messaging", label: "Messaging", hint: "Canales de mensajería (/handoff)", def: false },
       { key: "artifacts", label: "Artifacts", hint: "Artefactos generados", def: false },
-      { key: "cron", label: "Scheduled jobs", hint: "Tareas programadas", def: false },
-      { key: "agents", label: "Agents", hint: "Agentes compartidos", def: false },
+      { key: "cron", label: "Scheduled jobs", hint: "Tareas programadas (/goal, /loop, /heartbeat)", def: false },
+      { key: "agents", label: "Agents", hint: "Agentes compartidos y subagentes (/agents, /review, /bg)", def: false },
       { key: "profiles", label: "Profiles", hint: "Perfiles del agente", def: false },
     ],
   },
@@ -94,16 +94,16 @@ const DESKTOP_GROUPS: { group: string; hint: string; options: { key: string; lab
     group: "Privacidad & Seguridad",
     hint: "Controles sensibles que la organización puede apagar.",
     options: [
-      { key: "providers", label: "Providers", hint: "Proveedores y claves de modelo", def: false },
+      { key: "providers", label: "Providers", hint: "Proveedores, claves de modelo y generación de mascotas", def: false },
       { key: "gateways", label: "Gateways", hint: "Conexiones de gateway", def: false },
       { key: "keys", label: "Tools & Keys", hint: "API keys de herramientas y variables de servidor", def: false },
-      { key: "billing", label: "Billing & suscripciones", hint: "Planes, suscripciones y facturación", def: false },
+      { key: "billing", label: "Billing & suscripciones", hint: "Planes, suscripciones, facturación y uso", def: false },
       { key: "web_access", label: "Web access", hint: "Servir la webapp desde este equipo", def: false },
       { key: "vault", label: "Vault / Passwords", hint: "Vault y autofill", def: false },
       { key: "browser", label: "Browser", hint: "Navegador integrado", def: false },
       { key: "voice", label: "Voice", hint: "Modo voz", def: false },
-      { key: "terminal", label: "Advanced · Terminal", hint: "Ejecución de comandos", def: false },
-      { key: "plugins", label: "Plugins & MCP", hint: "Extensiones", def: false },
+      { key: "terminal", label: "Advanced · Terminal", hint: "Ejecución de comandos y modo de aprobación (/approvals)", def: false },
+      { key: "plugins", label: "Plugins & MCP", hint: "Extensiones, temas del Marketplace e instalación por enlace", def: false },
     ],
   },
 ];
@@ -396,7 +396,7 @@ export function PolicyManagerPage() {
                   <div className="space-y-4">
                     <div className="flex items-start justify-between gap-3">
                       <p className="text-xs text-muted">
-                        Réplica de Settings de Shawm Agent Desktop + capacidades CLI. Lo que apagues aquí no estará disponible para el usuario ni para el agente en terminal.
+                        Réplica de Settings de Trust Agent Desktop + capacidades CLI. Lo que apagues aquí no estará disponible para el usuario ni para el agente en terminal. Siempre bloqueado en Trust Agent, sin importar la política: suscripciones y créditos del proveedor upstream, envío de diagnósticos, actualizaciones del runtime, onboarding de proveedores, modelos locales y DevTools.
                       </p>
                       <div className="flex shrink-0 items-center gap-2">
                         <Button

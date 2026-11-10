@@ -518,11 +518,13 @@ def ledger_delta_sandbox(admin_conn, litellm_fake):
     litellm_fake.logs[:] = logs_snapshot
     with admin_conn.cursor() as cur:
         if before:
+            # psycopg 3 no adapta una tupla para `IN %s` (idioma de
+            # psycopg2): la lista se pasa como array y se compara con ALL.
             cur.execute(
                 "DELETE FROM spend_ledger "
                 f"WHERE tenant_id IN ('{TENANT_A}', '{TENANT_B}') "
-                "AND request_id NOT IN %s",
-                (tuple(before),),
+                "AND request_id <> ALL(%s)",
+                (list(before),),
             )
         else:
             cur.execute(

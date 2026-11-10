@@ -6,6 +6,9 @@ Routes:
                                          owner -> 200 + fresh device_token
                                          (D-HRB-03 amend, spec 022 v1.1.0)
   POST /api/devices/enroll/exchange      one-time enrollment_token -> device token
+  POST /api/devices/token/refresh        expired-but-authentic device token of an
+                                         active device -> fresh device token
+                                         (spec 022 v1.2.0, no session needed)
   POST /api/devices/{device_id}/token    renew device token (session + MFA + owner)
   GET  /api/devices/me                   own devices
   GET  /api/devices                      admin list (devices.manage)
@@ -56,6 +59,12 @@ class ExchangeBody(BaseModel):
     public_key: str | None = None
     device_name: str | None = None
     platform: str | None = None
+
+
+class RefreshBody(BaseModel):
+    """Spec 022 v1.2.0: the device's own (possibly expired) device token."""
+
+    device_token: str
 
 
 class PreauthorizeBody(BaseModel):
@@ -179,6 +188,17 @@ def preauthorize(
         device_name=body.device_name,
         platform=body.platform,
     )
+
+
+@router.post("/token/refresh")
+def refresh_device_token(body: RefreshBody):
+    """Refresh an EXPIRED device token of an active device (spec 022 v1.2.0).
+
+    No session: the authentic device token is the credential. 401 uniform
+    when the token is forged, too old, or the device/user/tenant is no
+    longer active (revocation stays immediate).
+    """
+    return service.refresh_expired_token(get_engine(), body.device_token)
 
 
 @router.post("/{device_id}/token")
