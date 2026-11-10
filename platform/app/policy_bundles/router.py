@@ -45,6 +45,33 @@ def _require_admin(principal: Principal) -> None:
         raise permission_denied("Only organization administrators manage policies.")
 
 
+def _validate_profiles(body: BundleBody) -> None:
+    """Spec 044: los perfiles de la política son ``{name, model}`` y el modelo
+    debe estar entre los que la propia política concede.
+
+    Un perfil que nombre un modelo fuera de ``models`` es un hueco de
+    gobernanza: el empleado entraría por el perfil a un modelo que la política
+    no le da. La validación vive en el servidor porque el bundle viaja firmado
+    — cualquier cliente que escriba la política pasa por aquí."""
+    seen: set[str] = set()
+    for entry in body.profiles:
+        if not isinstance(entry, dict):
+            raise validation_failed("Cada perfil debe ser un objeto {name, model}.")
+        name = str(entry.get("name") or "").strip()
+        model = str(entry.get("model") or "").strip()
+        if not name or not model:
+            raise validation_failed("Cada perfil necesita nombre y modelo.")
+        if name.lower() in seen:
+            raise validation_failed(f"Perfil duplicado: '{name}'.")
+        seen.add(name.lower())
+        if body.models and model not in body.models:
+            raise validation_failed(
+                f"El perfil '{name}' usa el modelo '{model}', que no está entre "
+                "los modelos de esta política. Márcalo en la sección Modelos y "
+                "vuelve a guardar."
+            )
+
+
 def _row(row) -> dict:
     return {
         "id": str(row["id"]),
@@ -100,6 +127,7 @@ def create_bundle(
     conn: Connection = Depends(get_tx),
 ):
     _require_admin(principal)
+    _validate_profiles(body)
     dep, usr = _scope(body, principal)
     row = conn.execute(
         text(
@@ -151,6 +179,7 @@ def update_bundle(
 ):
     _require_admin(principal)
     bundle_id = require_uuid(bundle_id, "bundle_id")
+    _validate_profiles(body)
     dep, usr = _scope(body, principal)
     row = conn.execute(
         text(
