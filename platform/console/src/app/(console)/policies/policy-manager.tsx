@@ -51,8 +51,8 @@ const DESKTOP_GROUPS: { group: string; hint: string; options: { key: string; lab
     group: "Model",
     hint: "El modelo lo define la política; el usuario no lo cambia.",
     options: [
-      { key: "model_main", label: "Main model selector", hint: "Mostrar selector de modelo principal", def: false },
-      { key: "model_fallback", label: "Fallback models", hint: "Modelos de respaldo", def: false },
+      { key: "model_main", label: "Main model selector", hint: "Página Modelo principal: el usuario elige entre los modelos aprobados para sesiones nuevas; el proveedor siempre es la organización", def: false },
+      { key: "model_fallback", label: "Fallback models", hint: "Cadena de modelos de respaldo, solo con modelos aprobados", def: false },
       { key: "model_moa", label: "Mixture of Agents", hint: "Preset corporativo MoA (selector de modelos y /moa)", def: false },
       { key: "chat_model_switch", label: "Cambio de modelo en chat", hint: "Hot-swap desde el compositor, selector de modelos y /model", def: false },
     ],
@@ -86,7 +86,7 @@ const DESKTOP_GROUPS: { group: string; hint: string; options: { key: string; lab
       { key: "messaging", label: "Messaging", hint: "Canales de mensajería (/handoff)", def: false },
       { key: "artifacts", label: "Artifacts", hint: "Artefactos generados", def: false },
       { key: "cron", label: "Scheduled jobs", hint: "Tareas programadas (/goal, /loop, /heartbeat)", def: false },
-      { key: "agents", label: "Agents", hint: "Agentes compartidos y subagentes (/agents, /review, /bg)", def: false },
+      { key: "agents", label: "Agents", hint: "Agentes compartidos y subagentes (/agents, /review, /bg) y sus límites de iteraciones y concurrencia", def: false },
       { key: "profiles", label: "Profiles", hint: "Perfiles del agente", def: false },
     ],
   },
@@ -94,7 +94,7 @@ const DESKTOP_GROUPS: { group: string; hint: string; options: { key: string; lab
     group: "Privacidad & Seguridad",
     hint: "Controles sensibles que la organización puede apagar.",
     options: [
-      { key: "providers", label: "Providers", hint: "Proveedores, claves de modelo y generación de mascotas", def: false },
+      { key: "providers", label: "Providers", hint: "Proveedores, claves de modelo, modelos auxiliares por tarea, proveedor/modelo de subagentes y generación de mascotas", def: false },
       { key: "gateways", label: "Gateways", hint: "Conexiones de gateway", def: false },
       { key: "keys", label: "Tools & Keys", hint: "API keys de herramientas y variables de servidor", def: false },
       { key: "billing", label: "Billing & suscripciones", hint: "Planes, suscripciones, facturación y uso", def: false },

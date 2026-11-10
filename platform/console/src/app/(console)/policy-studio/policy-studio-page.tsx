@@ -30,11 +30,11 @@ interface BundleList {
 }
 
 const DESKTOP_OPTIONS: { key: string; label: string; hint: string; def: boolean }[] = [
-  { key: "model_main", label: "Model · Main model", hint: "Selector de modelo principal (la organización asigna el modelo; el usuario no lo cambia)", def: false },
-  { key: "model_fallback", label: "Model · Fallback models", hint: "Modelos de respaldo", def: false },
+  { key: "model_main", label: "Model · Main model", hint: "Página Modelo principal: el usuario elige entre los modelos aprobados para sesiones nuevas; el proveedor siempre es la organización", def: false },
+  { key: "model_fallback", label: "Model · Fallback models", hint: "Cadena de modelos de respaldo, solo con modelos aprobados", def: false },
   { key: "model_moa", label: "Model · Mixture of Agents", hint: "Preset corporativo MoA (selector de modelos y /moa)", def: false },
   { key: "chat_model_switch", label: "Chat · Cambio de modelo", hint: "Hot-swap desde el compositor, selector de modelos y /model", def: false },
-  { key: "providers", label: "Providers", hint: "Proveedores, claves de modelo y generación de mascotas", def: false },
+  { key: "providers", label: "Providers", hint: "Proveedores, claves de modelo, modelos auxiliares por tarea, proveedor/modelo de subagentes y generación de mascotas", def: false },
   { key: "gateways", label: "Gateways", hint: "Conexiones de gateway", def: false },
   { key: "keys", label: "Tools & Keys", hint: "API keys de herramientas y variables de servidor", def: false },
   { key: "billing", label: "Billing & suscripciones", hint: "Planes, suscripciones, facturación y uso", def: false },
@@ -48,7 +48,7 @@ const DESKTOP_OPTIONS: { key: string; label: string; hint: string; def: boolean 
   { key: "messaging", label: "Messaging", hint: "Canales de mensajería (/handoff)", def: false },
   { key: "artifacts", label: "Artifacts", hint: "Artefactos generados", def: false },
   { key: "cron", label: "Scheduled jobs", hint: "Tareas programadas (/goal, /loop, /heartbeat)", def: false },
-  { key: "agents", label: "Agents", hint: "Agentes compartidos y subagentes (/agents, /review, /bg)", def: false },
+  { key: "agents", label: "Agents", hint: "Agentes compartidos y subagentes (/agents, /review, /bg) y sus límites de iteraciones y concurrencia", def: false },
   { key: "profiles", label: "Profiles", hint: "Perfiles del agente", def: false },
   { key: "memory", label: "Memory & Context", hint: "Memoria del agente (/memory, /journey, /refine)", def: true },
   { key: "sessions", label: "Sessions", hint: "Borrado permanente de chats", def: true },
