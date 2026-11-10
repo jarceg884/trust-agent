@@ -148,12 +148,35 @@ def _audit_count(admin_conn, action: str, device_id: str = DEVICE_ALICE) -> int:
         return cur.fetchone()[0]
 
 
+def _device_policy_version() -> int:
+    """La versión que ve el dispositivo: la fórmula REAL del servidor
+    (máx versión activa de ``policies`` MÁS la revisión de contenido del
+    tenant, migración 0047) — el mismo código que corren el heartbeat y la
+    compilación del bundle, no una copia."""
+    from sqlalchemy import text as _text
+
+    from app.db import get_engine
+    from app.governance.bundle import _policy_version
+
+    with get_engine().connect() as conn:
+        conn.execute(_text("SELECT set_config('app.tenant_id', :t, true)"),
+                     {"t": TENANT_A})
+        dept = conn.execute(
+            _text("SELECT department_id FROM users WHERE id = :u"),
+            {"u": USER_ALICE},
+        ).scalar_one()
+        return _policy_version(conn, department_id=dept, user_id=USER_ALICE)
+
+
 def _bump_org_policy(client, idp, baseline: int, value: int = 24) -> int:
     """Admin (alice, org_admin) bumps the org policy ABOVE the baseline.
 
-    ``_policy_version`` is the MAX active version across keys, and a NEW key
-    is born at v1 — so a single PUT may not raise the max. We PUT the same
-    key until its version exceeds the baseline (idempotent-safe, capped).
+    ``_policy_version`` es la máx versión activa MÁS la revisión de contenido
+    del tenant (migración 0047: Policy Studio y Model Access también suben la
+    versión), y una key nueva nace en v1 — así que un solo PUT puede no mover
+    el máximo. Se PUTea la misma key hasta que la versión QUE VE EL
+    DISPOSITIVO supera la base (idempotent-safe, capped). Comparar la versión
+    de la FILA contra la base (que ya incluye la revisión) nunca converge.
 
     Key choice: ``attestation_overdue_hours`` (integer, variable) — no other
     suite PUTs it, so this file does not perturb the order-sensitive
@@ -161,19 +184,18 @@ def _bump_org_policy(client, idp, baseline: int, value: int = 24) -> int:
     Values stay >= 1: the bundle contract tests only floor this claim.
     """
     alice = mint(client, idp, "alice")
-    version = baseline
-    for _ in range(20):
+    for _ in range(40):
         resp = client.put(
             "/api/policies/org",
             json={"key": "attestation_overdue_hours", "value": value},
             headers=bearer_headers(alice),
         )
         assert resp.status_code == 200, resp.text
-        version = resp.json()["version"]
+        value += 1
+        version = _device_policy_version()
         if version > baseline:
             return version
-        value += 1
-    raise AssertionError("20 PUTs no elevaron la versión por encima de la base")
+    raise AssertionError("40 PUTs no elevaron la versión por encima de la base")
 
 
 # =============================================================================

@@ -91,7 +91,7 @@ _TENANT_TABLES = [
     "connector_instances", "audit_log", "model_access", "api_keys",
     "sessions", "jobs", "agents", "agent_grants", "notifications",
     "audit_chain_checkpoint", "vault_connections", "branding_assets",
-    "branding_versions",
+    "branding_versions", "policy_bundles", "policy_revisions",
 ]
 
 

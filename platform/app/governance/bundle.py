@@ -356,15 +356,28 @@ def _explicit_policy_keys(
 
 
 def _policy_version(conn, *, department_id: str | None, user_id: str) -> int:
-    """Máx versión activa combinada (org + depto del usuario + usuario)."""
+    """Versión de la política efectiva del usuario (claim ``policy_version``).
+
+    Máx versión activa de ``policies`` (org + depto del usuario + usuario)
+    MÁS la revisión de contenido del tenant (``policy_revisions``, migración
+    0047): Policy Studio y Model Access no versionan por fila, y sin este
+    término sus cambios llegaban con la misma versión — el heartbeat no
+    anunciaba la actualización y la attestation no probaba qué contenido
+    aplicó el dispositivo. Granularidad de tenant: un cambio en otro
+    departamento también sube la versión (el contenido de este usuario puede
+    no cambiar; nunca al revés).
+    """
     row = conn.execute(
         text(
-            "SELECT COALESCE(MAX(version), 0) AS v FROM policies "
-            "WHERE is_active AND ("
-            "  level = 'org'"
-            "  OR (level = 'dept' AND department_id = CAST(:dept AS uuid))"
-            "  OR (level = 'user' AND user_id = CAST(:usr AS uuid))"
-            ")"
+            "SELECT COALESCE((SELECT MAX(version) FROM policies "
+            "  WHERE is_active AND ("
+            "    level = 'org'"
+            "    OR (level = 'dept' AND department_id = CAST(:dept AS uuid))"
+            "    OR (level = 'user' AND user_id = CAST(:usr AS uuid))"
+            "  )), 0)"
+            " + COALESCE((SELECT r.revision FROM policy_revisions r"
+            "   JOIN users u ON u.tenant_id = r.tenant_id"
+            "   WHERE u.id = CAST(:usr AS uuid)), 0) AS v"
         ),
         {"dept": department_id, "usr": user_id},
     ).mappings().first()
