@@ -42,7 +42,7 @@ const DESKTOP_OPTIONS: { key: string; label: string; hint: string; def: boolean 
   { key: "browser", label: "Browser", hint: "Navegador integrado", def: false },
   { key: "vault", label: "Passwords & Logins", hint: "Vault y autofill", def: false },
   { key: "voice", label: "Voice", hint: "Modo voz", def: false },
-  { key: "terminal", label: "Advanced · Terminal", hint: "Ejecución de comandos y modo de aprobación (/approvals)", def: false },
+  { key: "terminal", label: "Advanced · Terminal", hint: "Paneles de terminal y modo de aprobación (/approvals) del escritorio. Los comandos del agente se conceden en CLI & Agente → Terminal / shell", def: false },
   { key: "plugins", label: "Plugins & MCP", hint: "Extensiones, temas del Marketplace e instalación por enlace", def: false },
   { key: "capabilities", label: "Capabilities", hint: "Skills, plugins, conectores, herramientas y comandos / de skills", def: false },
   { key: "messaging", label: "Messaging", hint: "Canales de mensajería (/handoff)", def: false },

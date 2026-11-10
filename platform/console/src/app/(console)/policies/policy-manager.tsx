@@ -70,10 +70,10 @@ const DESKTOP_GROUPS: { group: string; hint: string; options: { key: string; lab
   },
   {
     group: "CLI & Agente",
-    hint: "Capacidades del agente en la CLI y en segundo plano (no solo la UI).",
+    hint: "Herramientas que el agente usa en todas sus sesiones (chat del escritorio, CLI y segundo plano). Activar concede; un allowed_tools explícito en Desktop Policy actúa como techo.",
     options: [
       { key: "cli", label: "Acceso a la CLI", hint: "Comandos hermes en terminal", def: false },
-      { key: "cli_terminal", label: "Terminal / shell", hint: "Ejecutar comandos del sistema", def: false },
+      { key: "cli_terminal", label: "Terminal / shell", hint: "El agente ejecuta comandos del sistema (terminal y procesos en segundo plano)", def: false },
       { key: "cli_files_read", label: "Leer archivos", hint: "Acceso de lectura al filesystem", def: false },
       { key: "cli_files_write", label: "Escribir archivos", hint: "Crear/modificar archivos", def: false },
       { key: "cli_web", label: "Web search / fetch", hint: "Buscar y descargar de internet", def: false },
@@ -104,7 +104,7 @@ const DESKTOP_GROUPS: { group: string; hint: string; options: { key: string; lab
       { key: "vault", label: "Vault / Passwords", hint: "Vault y autofill", def: false },
       { key: "browser", label: "Browser", hint: "Navegador integrado", def: false },
       { key: "voice", label: "Voice", hint: "Modo voz", def: false },
-      { key: "terminal", label: "Advanced · Terminal", hint: "Ejecución de comandos y modo de aprobación (/approvals)", def: false },
+      { key: "terminal", label: "Advanced · Terminal", hint: "Paneles de terminal y modo de aprobación (/approvals) del escritorio. Los comandos del agente se conceden en CLI & Agente → Terminal / shell", def: false },
       { key: "plugins", label: "Plugins & MCP", hint: "Extensiones, temas del Marketplace e instalación por enlace", def: false },
     ],
   },
