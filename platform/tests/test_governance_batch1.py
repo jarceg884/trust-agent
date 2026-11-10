@@ -624,3 +624,96 @@ def test_sync_pins_org_model_provider_and_credentials(plugin, home):
     assert cfg["auxiliary"] == {}
     assert cfg["moa"] == {}
     assert cfg["providers"] == {}
+
+
+# ---------------------------------------------------------------------------
+# Perfiles gobernados — P-26 por perfil + strip del opt-out del multiplexor
+# (incidente en vivo 2026-11-10: perfiles clonados con gateway.standalone
+# heredado nacían sin servicio → profile_mismatch en cada sesión)
+# ---------------------------------------------------------------------------
+def _write_profile(home, name: str, config: dict):
+    import yaml
+
+    d = home / "profiles" / name
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "config.yaml").write_text(
+        yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+
+
+_PROFILE_PAYLOAD = {
+    "jti": "profiles-test",
+    "allowed_providers": ["litellm_gateway"],
+    "approved_models": ["glm-5.2", "deepseek-v4-flash"],
+    "policy_models": ["glm-5.2", "deepseek-v4-flash"],
+    "policy_default_model": "glm-5.2",
+}
+
+
+def test_profile_standalone_opt_out_stripped_and_idempotent(plugin, home):
+    import yaml
+
+    _write_profile(home, "vmware", {
+        "gateway": {"standalone": True, "voice": {"enabled_voice_only": False}},
+        "model": {"default": "glm-5.2", "provider": "custom",
+                  "base_url": "https://litellm.org.example/v1"},
+    })
+    assert plugin.config_enforcement.sync_managed_config(
+        dict(_PROFILE_PAYLOAD), force=True) is True
+    cfg = yaml.safe_load(
+        (home / "profiles" / "vmware" / "config.yaml").read_text(encoding="utf-8"))
+    assert "standalone" not in cfg["gateway"]
+    assert cfg["gateway"]["voice"] == {"enabled_voice_only": False}
+    assert cfg["model"]["default"] == "glm-5.2"  # aprobado: se conserva
+    # Idempotente: ni el config principal ni los perfiles cambian → False.
+    assert plugin.config_enforcement.sync_managed_config(
+        dict(_PROFILE_PAYLOAD), force=True) is False
+
+
+def test_profile_rogue_config_pinned_and_model_clamped(plugin, home):
+    """Un perfil con config editado a mano no escapa del gateway de la org:
+    provider/base_url/api_key pineados (P-26), puertas alternativas cerradas
+    y el modelo clampeado a los aprobados. Un perfil con modelo aprobado lo
+    conserva; un cascarón sin marcadores jamás se toca."""
+    import yaml
+
+    trust = home / "trust-agent"
+    trust.mkdir(parents=True, exist_ok=True)
+    (trust / "device-token.json").write_text(json.dumps({
+        "device_id": DEVICE_ID,
+        "token": "devtok.test",
+        "model_base_url": "https://litellm.org.example/v1",
+        "model_key": "sk-org-issued",
+    }), encoding="utf-8")
+    _write_profile(home, "ops", {
+        "model": {"default": "gpt-4o", "provider": "openai",
+                  "base_url": "https://api.openai.com/v1",
+                  "api_key": "sk-rogue"},
+        "providers": {"openai": {"api_key": "sk-rogue"}},
+        "gateway": {"standalone": True},
+    })
+    _write_profile(home, "finanzas", {
+        "model": {"default": "deepseek-v4-flash", "provider": "custom"},
+    })
+    shell = home / "profiles" / "cascaron"
+    shell.mkdir(parents=True)
+    (shell / "basura.txt").write_text("x", encoding="utf-8")
+
+    assert plugin.config_enforcement.sync_managed_config(
+        dict(_PROFILE_PAYLOAD), force=True) is True
+
+    ops = yaml.safe_load(
+        (home / "profiles" / "ops" / "config.yaml").read_text(encoding="utf-8"))
+    assert ops["model"]["default"] == "glm-5.2"  # gpt-4o no aprobado → default de la policy
+    assert ops["model"]["provider"] == "custom"
+    assert ops["model"]["base_url"] == "https://litellm.org.example/v1"
+    assert ops["model"]["api_key"] == "sk-org-issued"
+    assert ops["providers"] == {}
+    assert "standalone" not in ops["gateway"]
+
+    fin = yaml.safe_load(
+        (home / "profiles" / "finanzas" / "config.yaml").read_text(encoding="utf-8"))
+    assert fin["model"]["default"] == "deepseek-v4-flash"  # aprobado: se conserva
+    assert fin["model"]["base_url"] == "https://litellm.org.example/v1"
+
+    # Cascarón sin marcadores de identidad: el plugin no crea su config.
+    assert not (shell / "config.yaml").exists()

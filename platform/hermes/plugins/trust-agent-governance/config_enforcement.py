@@ -631,6 +631,113 @@ def _blocked_messaging_platforms(payload: dict[str, Any]) -> list[str]:
     return sorted(blocked)
 
 
+_PROFILE_IDENTITY_MARKERS = (
+    "config.yaml", ".env", "SOUL.md", "profile.yaml", "auth.json", "state.db",
+)
+
+
+def _live_profile_dirs(home: Path) -> list[Path]:
+    """Named profiles under ``home/profiles`` that carry identity markers.
+
+    Same predicate family as the core (``hermes_constants``): a marker-less
+    dir is runtime side-effect shell — never listed, never served, and never
+    normalized here (creating a config.yaml would make it servable, which is
+    the host's decision, not the plugin's)."""
+    root = home / "profiles"
+    if not root.is_dir():
+        return []
+    try:
+        from hermes_constants import named_profile_has_identity as _has_identity
+    except Exception:  # noqa: BLE001 - standalone tests: fall back to the marker set
+        def _has_identity(profile_home: Path) -> bool:  # type: ignore[misc]
+            return any((profile_home / m).is_file() for m in _PROFILE_IDENTITY_MARKERS)
+    out: list[Path] = []
+    for entry in sorted(root.iterdir()):
+        if entry.is_dir() and not entry.name.startswith(".") and _has_identity(entry):
+            out.append(entry)
+    return out
+
+
+def _normalize_profile_configs(payload: dict[str, Any], model_pin: dict[str, Any]) -> list[str]:
+    """P-26 per profile: every LIVE named profile runs on the org's gateway.
+
+    Crear perfiles está PERMITIDO bajo gobernanza (decisión de producto,
+    2026-11-10) — pero cada perfil es una isla con su PROPIO config.yaml y
+    nada lo normalizaba: un perfil clonado heredaba ``gateway.standalone:
+    true`` del default gobernado y el multiplexor del host jamás lo servía
+    (``profile_mismatch`` en cada sesión — incidente en vivo), y un config
+    editado a mano podía nombrar otro proveedor/endpoint/modelo. En cada sync:
+
+    - ``gateway.standalone`` se elimina: el host multiplexa los perfiles.
+    - provider/base_url/api_key se pinean como el config principal (P-26) y
+      las puertas alternativas (fallback_providers, providers, …) se cierran.
+    - el modelo del perfil se CONSERVA solo si está entre los aprobados
+      (``approved_models``); si no, se clampa al default de la policy.
+
+    Idempotente: escribe solo si el contenido cambia. Retorna los perfiles
+    sincronizados para la línea de audit del sync."""
+    if not isinstance(payload, dict):
+        return []
+    approved = payload.get("approved_models")
+    if not isinstance(approved, list) or not approved:
+        approved = policy_contract.policy_value(payload, "policy_models") or []
+    home = enroll.hermes_home()
+    synced: list[str] = []
+    for profile_dir in _live_profile_dirs(home):
+        path = profile_dir / "config.yaml"
+        if not path.is_file():
+            continue  # isla viva sin config: nada que pinear (y no lo creamos)
+        try:
+            import yaml  # copia vendor del plugin (ver arriba)
+
+            loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        cfg = loaded if isinstance(loaded, dict) else {}
+        changed = False
+        gateway = cfg.get("gateway")
+        gateway = dict(gateway) if isinstance(gateway, dict) else {}
+        if gateway.get("standalone") is not None:
+            gateway.pop("standalone", None)
+            cfg["gateway"] = gateway
+            changed = True
+        if model_pin:
+            model = cfg.get("model")
+            model = dict(model) if isinstance(model, dict) else {}
+            for key, value in model_pin.items():
+                if key == "default":
+                    continue  # el perfil puede usar OTRO modelo aprobado
+                if model.get(key) != value:
+                    model[key] = value
+                    changed = True
+            current = str(model.get("default") or "").strip()
+            if current and approved and current not in approved:
+                model["default"] = model_pin.get("default")
+                changed = True
+            elif not current and model_pin.get("default"):
+                model["default"] = model_pin["default"]
+                changed = True
+            cfg["model"] = model
+            for key, empty in (
+                ("fallback_providers", []), ("provider_routing", {}),
+                ("auxiliary", {}), ("local_runtime", {}), ("moa", {}),
+                ("providers", {}),
+            ):
+                if cfg.get(key) not in (None, empty):
+                    cfg[key] = empty
+                    changed = True
+        if not changed:
+            continue
+        try:
+            tmp = path.with_suffix(path.suffix + ".tmp")
+            tmp.write_text(yaml.safe_dump(cfg, sort_keys=False), encoding="utf-8")
+            tmp.replace(path)
+        except OSError:
+            continue
+        synced.append(f"profile:{profile_dir.name}")
+    return synced
+
+
 def sync_managed_config(payload: dict[str, Any], *, force: bool = False) -> bool:
     """Impone en ``config.yaml`` las restricciones que la policy gobierna
     (managed scope como vehículo, ADR-016):
@@ -787,13 +894,19 @@ def sync_managed_config(payload: dict[str, Any], *, force: bool = False) -> bool
             gateway["platforms"] = platforms
             existing["gateway"] = gateway
 
+        # P-26 per profile (perfiles gobernados): corre en CADA sync — los
+        # perfiles se crean entre bundles y su config es tan editable como el
+        # principal. Véase _normalize_profile_configs.
+        profile_synced = _normalize_profile_configs(payload, model_pin)
         if not changed:
+            if profile_synced:
+                log_event("managed_config_synced", keys=profile_synced)
             try:
                 marker_path.write_text(json.dumps({"jti": jti, "at": int(time.time())}),
                                        encoding="utf-8")
             except OSError:
                 pass
-            return False
+            return bool(profile_synced)
         tmp = path.with_suffix(path.suffix + ".tmp")
         tmp.write_text(yaml.safe_dump(existing, sort_keys=False), encoding="utf-8")
         tmp.replace(path)
@@ -806,6 +919,7 @@ def sync_managed_config(payload: dict[str, Any], *, force: bool = False) -> bool
             synced_keys.append("webapp.enabled")
         if voice_pin:
             synced_keys.append("gateway.voice.enabled_voice_only")
+        synced_keys += profile_synced
         log_event("managed_config_synced", keys=synced_keys)
         try:
             marker_path.write_text(json.dumps({"jti": jti, "at": int(time.time())}),
