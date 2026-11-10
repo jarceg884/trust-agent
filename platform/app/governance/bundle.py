@@ -33,6 +33,7 @@ import logging
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Any
 
 import jwt
 from fastapi import APIRouter, Request
@@ -230,7 +231,75 @@ STUDIO_TOOL_FAMILIES: dict[str, dict[str, tuple[str, ...]]] = {
         "grant": ("execute_code",),
         "block": ("execute_code", "python"),
     },
+    # Desktop-app switches whose console hint promises an AGENT capability
+    # (not just a Settings page): ON must also grant the tool behind it, or
+    # the page is visible and the agent still cannot use it.
+    "memory": {                      # "Memoria del agente (/memory ...)"
+        "grant": ("memory",),
+        "block": ("memory",),
+    },
+    "agents": {                      # "Agentes compartidos y subagentes"
+        "grant": ("delegate_task",),
+        "block": ("delegate_task",),
+    },
+    "capabilities": {                # "Skills, plugins, conectores, ..."
+        "grant": ("skills_list", "skill_view"),
+        "block": ("skills_list", "skill_view", "skill_manage"),
+    },
+    "cron": {                        # "Tareas programadas (/goal, /loop ...)"
+        "grant": ("cronjob_manage",),
+        "block": ("cronjob_manage",),
+    },
+    "voice": {                       # "Modo voz"
+        "grant": ("text_to_speech",),
+        "block": ("text_to_speech",),
+    },
+    "vault": {                       # "Vault y autofill"
+        "grant": ("browser_vault",),
+        "block": ("browser_vault",),
+    },
+    "browser": {                     # "Navegador integrado"
+        "grant": ("browser_exec", "browser_cdp", "browser_dialog"),
+        "block": ("browser_exec", "browser_cdp", "browser_dialog",
+                  "browser_navigate", "browser"),
+    },
 }
+
+# Technical policy keys a Studio switch needs to actually work. Without them
+# the switch grants the tool and a plugin rule (P-x) still vetoes every call:
+# live on e2e-lab, "Terminal / shell" ON reached the device and P-2 vetoed the
+# local backend because the provider default is ["docker"] and a Windows
+# desktop has no Docker.
+STUDIO_IMPLIED_KEYS: dict[str, dict[str, Any]] = {
+    "cli_terminal": {"allowed_terminal_backends": ["local", "docker"]},   # P-2
+    "cron": {
+        "allow_scheduled_tasks": True,     # P-9  cronjob_manage
+        "allow_recurring_prompts": True,   # P-10 /loop, /heartbeat
+        "allow_goal_mode": True,           # P-11 /goal
+    },
+    "voice": {"allow_voice_mode": True},              # P-21 /voice
+    "vault": {"allow_credential_vault": True},        # P-16 browser_vault
+}
+
+
+def apply_studio_implied_keys(payload: dict, ui: dict, explicit: set[str]) -> None:
+    """Set the technical keys implied by the Policy Studio switches.
+
+    * switch ON  → the implied value, UNLESS the key has an explicit policy
+      at org/dept/user level: that value is the admin's technical decision
+      and stays as the ceiling (deny-overrides).
+    * switch OFF → implied boolean keys are forced to False (the capability
+      is off on every surface, even over an explicit true). List keys are
+      left alone: the family's tools are already out of allowed_tools.
+    * switch absent → nothing changes (no Studio bundle / older bundle).
+    """
+    for feature, implied in STUDIO_IMPLIED_KEYS.items():
+        value = ui.get(feature)
+        for key, on_value in implied.items():
+            if value is True and key not in explicit:
+                payload[key] = list(on_value) if isinstance(on_value, list) else on_value
+            elif value is False and isinstance(on_value, bool):
+                payload[key] = False
 
 
 def clamp_tools_to_studio(
@@ -263,26 +332,27 @@ def clamp_tools_to_studio(
     return tools
 
 
-def _has_explicit_tools_policy(
+def _explicit_policy_keys(
     conn, *, department_id: str | None, user_id: str
-) -> bool:
-    """¿Algún nivel (org, depto del usuario, usuario) fijó allowed_tools?
+) -> set[str]:
+    """Keys with an explicit active policy at the user's levels (org, the
+    user's department, the user). Defaults from the catalog do not count.
 
     Same level filter as ``_policy_version``; tenant scoping comes from RLS
     (forced on ``policies``).
     """
-    row = conn.execute(
+    rows = conn.execute(
         text(
-            "SELECT 1 FROM policies "
-            "WHERE key = 'allowed_tools' AND is_active AND ("
+            "SELECT DISTINCT key FROM policies "
+            "WHERE is_active AND ("
             "  level = 'org'"
             "  OR (level = 'dept' AND department_id = CAST(:dept AS uuid))"
             "  OR (level = 'user' AND user_id = CAST(:usr AS uuid))"
-            ") LIMIT 1"
+            ")"
         ),
         {"dept": department_id, "usr": user_id},
-    ).first()
-    return row is not None
+    ).scalars()
+    return {str(key) for key in rows}
 
 
 def _policy_version(conn, *, department_id: str | None, user_id: str) -> int:
@@ -408,13 +478,13 @@ def compile_bundle_payload(
     # (desktop chat, CLI, background runs): ON grants the family, OFF removes
     # it — bounded by an explicit allowed_tools policy if one exists.
     ui = payload.get("ui_features") or {}
+    explicit_keys = _explicit_policy_keys(
+        conn, department_id=principal.department_id, user_id=principal.user_id,
+    )
     payload["allowed_tools"] = clamp_tools_to_studio(
         payload.get("allowed_tools") or [],
         ui,
-        explicit_ceiling=_has_explicit_tools_policy(
-            conn, department_id=principal.department_id,
-            user_id=principal.user_id,
-        ),
+        explicit_ceiling="allowed_tools" in explicit_keys,
     )
 
     # REQ-GOH-024: TODAS las keys del catálogo vigente, aplanadas. Los claims
@@ -425,6 +495,9 @@ def compile_bundle_payload(
         if key in RESERVED_CLAIMS or key in payload:
             continue
         payload[key] = value
+    # After flattening: the implied keys override catalog DEFAULTS only
+    # (explicit policies are left as the ceiling — see the function).
+    apply_studio_implied_keys(payload, ui, explicit_keys)
     return payload
 
 

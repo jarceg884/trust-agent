@@ -22,7 +22,12 @@ import pytest
 
 from conftest import TENANT_A, USER_ALICE, bearer_headers, mint
 
-from app.governance.bundle import STUDIO_TOOL_FAMILIES, clamp_tools_to_studio
+from app.governance.bundle import (
+    STUDIO_IMPLIED_KEYS,
+    STUDIO_TOOL_FAMILIES,
+    apply_studio_implied_keys,
+    clamp_tools_to_studio,
+)
 
 # Default del proveedor (catalog.policy_keys.allowed_tools): sin terminal.
 PROVIDER_DEFAULT = ["web_search", "read_file", "write_file", "governance_status"]
@@ -48,7 +53,55 @@ INCIDENT_UI = {
 
 def test_incident_policy_grants_terminal():
     tools = clamp_tools_to_studio(PROVIDER_DEFAULT, INCIDENT_UI, explicit_ceiling=False)
-    assert tools == ["governance_status", "terminal", "process_manage"]
+    # Terminal / shell ON + Memory & Agents ON (sus herramientas del agente);
+    # leer/escribir/web/código OFF retiran las del default del proveedor.
+    assert tools == [
+        "governance_status", "terminal", "process_manage", "memory", "delegate_task",
+    ]
+
+
+def test_incident_policy_implies_a_usable_terminal_backend():
+    """P-2: con el default del proveedor (["docker"]) la terminal concedida
+    era inutilizable en un escritorio Windows sin Docker."""
+    payload = {"allowed_terminal_backends": ["docker"], "allow_scheduled_tasks": True}
+    apply_studio_implied_keys(payload, INCIDENT_UI, explicit=set())
+    assert payload["allowed_terminal_backends"] == ["local", "docker"]
+    # cron OFF en la política del incidente → tareas programadas apagadas.
+    assert payload["allow_scheduled_tasks"] is False
+
+
+@pytest.mark.parametrize("feature", sorted(STUDIO_IMPLIED_KEYS))
+def test_each_switch_on_sets_its_implied_keys(feature):
+    payload: dict = {}
+    apply_studio_implied_keys(payload, {feature: True}, explicit=set())
+    assert payload == STUDIO_IMPLIED_KEYS[feature]
+
+
+def test_explicit_technical_policy_is_the_ceiling_for_implied_keys():
+    payload = {"allowed_terminal_backends": ["docker"], "allow_scheduled_tasks": False}
+    apply_studio_implied_keys(
+        payload, {"cli_terminal": True, "cron": True},
+        explicit={"allowed_terminal_backends", "allow_scheduled_tasks"},
+    )
+    assert payload["allowed_terminal_backends"] == ["docker"]
+    assert payload["allow_scheduled_tasks"] is False
+    # Las implícitas sin política explícita sí se aplican.
+    assert payload["allow_recurring_prompts"] is True
+
+
+def test_switch_off_forces_implied_booleans_off_even_over_explicit_true():
+    payload = {"allow_voice_mode": True, "allow_credential_vault": True}
+    apply_studio_implied_keys(
+        payload, {"voice": False, "vault": False},
+        explicit={"allow_voice_mode", "allow_credential_vault"},
+    )
+    assert payload == {"allow_voice_mode": False, "allow_credential_vault": False}
+
+
+def test_absent_switches_leave_technical_keys_alone():
+    payload = {"allowed_terminal_backends": ["docker"], "allow_voice_mode": True}
+    apply_studio_implied_keys(payload, {}, explicit=set())
+    assert payload == {"allowed_terminal_backends": ["docker"], "allow_voice_mode": True}
 
 
 @pytest.mark.parametrize("feature", sorted(STUDIO_TOOL_FAMILIES))
