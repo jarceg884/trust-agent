@@ -61,7 +61,7 @@ const DESKTOP_GROUPS: { group: string; hint: string; options: { key: string; lab
   },
   {
     group: "Chat & Workspace",
-    hint: "Superficies de trabajo del agente.",
+    hint: "Superficies de trabajo del agente. Memory también le concede su herramienta de memoria.",
     options: [
       { key: "workspace", label: "Workspace", hint: "Archivos y proyectos", def: true },
       { key: "sessions", label: "Sessions", hint: "Borrado permanente de chats", def: true },
@@ -70,10 +70,10 @@ const DESKTOP_GROUPS: { group: string; hint: string; options: { key: string; lab
   },
   {
     group: "CLI & Agente",
-    hint: "Herramientas que el agente usa en todas sus sesiones (chat del escritorio, CLI y segundo plano). Activar concede; un allowed_tools explícito en Desktop Policy actúa como techo.",
+    hint: "Herramientas que el agente usa en todas sus sesiones (chat del escritorio, CLI y segundo plano). Activar concede la herramienta y lo técnico que necesita (Terminal habilita el backend local); lo que fije Desktop Policy actúa como techo.",
     options: [
       { key: "cli", label: "Acceso a la CLI", hint: "Comandos hermes en terminal", def: false },
-      { key: "cli_terminal", label: "Terminal / shell", hint: "El agente ejecuta comandos del sistema (terminal y procesos en segundo plano)", def: false },
+      { key: "cli_terminal", label: "Terminal / shell", hint: "El agente ejecuta comandos en el equipo del usuario (terminal local y procesos)", def: false },
       { key: "cli_files_read", label: "Leer archivos", hint: "Acceso de lectura al filesystem", def: false },
       { key: "cli_files_write", label: "Escribir archivos", hint: "Crear/modificar archivos", def: false },
       { key: "cli_web", label: "Web search / fetch", hint: "Buscar y descargar de internet", def: false },
@@ -82,7 +82,7 @@ const DESKTOP_GROUPS: { group: string; hint: string; options: { key: string; lab
   },
   {
     group: "Superficies de la app",
-    hint: "Páginas y canales que el usuario puede abrir.",
+    hint: "Páginas y canales que el usuario puede abrir. Capabilities, Scheduled jobs y Agents también conceden al agente skills, tareas programadas y subagentes.",
     options: [
       { key: "capabilities", label: "Capabilities", hint: "Skills, plugins, conectores, herramientas y comandos / de skills", def: false },
       { key: "messaging", label: "Messaging", hint: "Canales de mensajería (/handoff)", def: false },
@@ -94,7 +94,7 @@ const DESKTOP_GROUPS: { group: string; hint: string; options: { key: string; lab
   },
   {
     group: "Privacidad & Seguridad",
-    hint: "Controles sensibles que la organización puede apagar.",
+    hint: "Controles sensibles que la organización puede apagar. Vault, Browser y Voice también conceden al agente la bóveda, el navegador y la voz.",
     options: [
       { key: "providers", label: "Providers", hint: "Proveedores, claves de modelo, modelos auxiliares por tarea, proveedor/modelo de subagentes y generación de mascotas", def: false },
       { key: "gateways", label: "Gateways", hint: "Conexiones de gateway", def: false },
