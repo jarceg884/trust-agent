@@ -17,8 +17,15 @@ import hashlib
 import json
 
 import jwt as pyjwt
+import pytest
 
 from conftest import TENANT_A, USER_ALICE, bearer_headers, mint
+
+# The hole is reproduced with a REAL 200 chat as Alice (tenant A): without the
+# module sandbox that log stayed in the session-wide gateway double and any
+# later worker run ingested it into the shared ledger — skewing the exact
+# per-tenant counts of test_usage_analytics / test_spend_cutoff.
+pytestmark = pytest.mark.usefixtures("ledger_delta_sandbox")
 
 from app.models import keys as keys_service
 

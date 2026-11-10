@@ -546,6 +546,11 @@ def test_ac036_spend_ledger_accepts_provider_mode(client, idp, upstream):
                 "WHERE request_id = %s", (f"spend-prov-{pid[:8]}",),
             )
             assert cur.fetchone()[0] == "provider"
+        # Only the CHECK is under test: the row must NOT stay in the shared
+        # ledger. Committed, it counted as a real request of Carol today and
+        # broke the exact counts of test_spend_cutoff / test_usage_analytics
+        # whenever the whole suite ran (they pass in isolation).
+        conn.rollback()
 
 
 # ---------------------------------------------------------------------------
