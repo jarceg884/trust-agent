@@ -57,6 +57,9 @@ STRUCTURAL_CLAIMS = frozenset({
     # deben contar como "unknown policy keys".
     "ui_features", "policy_credentials", "policy_profiles", "policy_models",
     "policy_default_model", "policy_agents", "policy_contracts",
+    # White-label identity (2026-11-05): the desktop renders the product and
+    # organization name from the signed bundle — data, not policy keys.
+    "product_name", "tenant_name",
 })
 
 # Keys del catálogo que este plugin conoce (18 existentes + 29 nuevas de la
