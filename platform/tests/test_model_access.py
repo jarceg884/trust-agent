@@ -587,3 +587,16 @@ def test_user_level_resolves_department(client, idp, admin_conn):
             "AND level = 'user' AND user_id = %s",
             (TENANT_A, USER_BOB),
         )
+
+
+def test_policy_models_narrow_model_access_and_never_widen_it():
+    """Spec 044 rule shared by compile_bundle_payload (what the device is told) and
+    keys.issue_key (what the gateway accepts): Policy Studio models restrict Model Access in
+    the policy's order; an empty Model Access set stays deny-all (it used to hand the policy's
+    models to a user whose approvals were all revoked)."""
+    from app.models.access import narrow_to_policy_models as narrow
+
+    assert narrow(["a", "b", "c"], ["c", "b"]) == ["c", "b"]
+    assert narrow(["a"], ["a", "z"]) == ["a"]
+    assert narrow([], ["a", "b"]) == []
+    assert narrow(["a", "b"], []) == ["a", "b"]

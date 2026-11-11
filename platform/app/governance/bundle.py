@@ -482,9 +482,11 @@ def compile_bundle_payload(
     payload["policy_default_model"] = (studio_bundle or {}).get("default_model")
     payload["policy_agents"] = (studio_bundle or {}).get("agents") or []
     payload["policy_contracts"] = (studio_bundle or {}).get("contracts") or []
-    if payload["policy_models"]:
-        allowed = set(payload.get("approved_models") or [])
-        payload["approved_models"] = [m for m in payload["policy_models"] if not allowed or m in allowed]
+    # Policy Studio narrows Model Access and never widens it; an empty Model Access set stays
+    # deny-all. keys.issue_key applies the same function, so a key is born with this scope.
+    payload["approved_models"] = model_access.narrow_to_policy_models(
+        list(payload.get("approved_models") or []), payload["policy_models"],
+    )
 
     # CLI/agent capabilities (Policy Studio → CLI & Agente). The switches
     # govern the tool surface the governance plugin enforces in EVERY session
