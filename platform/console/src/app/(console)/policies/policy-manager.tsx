@@ -9,9 +9,11 @@
  * agentes compartidos y acceso al vault. No existen políticas personales ni
  * "organization policies": la asignación es siempre explícita.
  */
+import Link from "next/link";
 import { useMemo, useState } from "react";
 import { api, ApiError } from "@/lib/api-client";
 import { useApi } from "@/hooks/use-api";
+import type { AccessOverview } from "@/lib/types";
 import {
   Button,
   Card,
@@ -29,7 +31,7 @@ interface Policy {
   desktop: Record<string, boolean>;
   credentials: Record<string, boolean>;
   global_prompt: string;
-  profiles: unknown[];
+  profiles: { name?: string; model?: string }[];
   contracts?: { name?: string; text?: string }[];
   models: string[];
   default_model: string | null;
@@ -49,29 +51,29 @@ interface VaultList { credentials: VaultSecret[] }
 const DESKTOP_GROUPS: { group: string; hint: string; options: { key: string; label: string; hint: string; def: boolean }[] }[] = [
   {
     group: "Model",
-    hint: "El modelo lo define la política; el usuario no lo cambia.",
+    hint: "Por defecto el modelo lo define la política. Activar una opción solo permite elegir entre los modelos aprobados; el proveedor siempre es la organización.",
     options: [
-      { key: "model_main", label: "Main model selector", hint: "Mostrar selector de modelo principal", def: false },
-      { key: "model_fallback", label: "Fallback models", hint: "Modelos de respaldo", def: false },
-      { key: "model_moa", label: "Mixture of Agents", hint: "Preset MoA", def: false },
-      { key: "chat_model_switch", label: "Cambio de modelo en chat", hint: "Hot-swap desde el compositor", def: false },
+      { key: "model_main", label: "Main model selector", hint: "Página Modelo principal: el usuario elige entre los modelos aprobados para sesiones nuevas; el proveedor siempre es la organización", def: false },
+      { key: "model_fallback", label: "Fallback models", hint: "Cadena de modelos de respaldo, solo con modelos aprobados", def: false },
+      { key: "model_moa", label: "Mixture of Agents", hint: "Preset corporativo MoA (selector de modelos y /moa)", def: false },
+      { key: "chat_model_switch", label: "Cambio de modelo en chat", hint: "Hot-swap desde el compositor, selector de modelos y /model", def: false },
     ],
   },
   {
     group: "Chat & Workspace",
-    hint: "Superficies de trabajo del agente.",
+    hint: "Superficies de trabajo del agente. Memory también le concede su herramienta de memoria.",
     options: [
       { key: "workspace", label: "Workspace", hint: "Archivos y proyectos", def: true },
       { key: "sessions", label: "Sessions", hint: "Borrado permanente de chats", def: true },
-      { key: "memory", label: "Memory & Context", hint: "Memoria del agente", def: true },
+      { key: "memory", label: "Memory & Context", hint: "Memoria del agente (/memory, /journey, /refine)", def: true },
     ],
   },
   {
     group: "CLI & Agente",
-    hint: "Capacidades del agente en la CLI y en segundo plano (no solo la UI).",
+    hint: "Herramientas que el agente usa en todas sus sesiones (chat del escritorio, CLI y segundo plano). Activar concede la herramienta y lo técnico que necesita (Terminal habilita el backend local); lo que fije Desktop Policy actúa como techo.",
     options: [
       { key: "cli", label: "Acceso a la CLI", hint: "Comandos hermes en terminal", def: false },
-      { key: "cli_terminal", label: "Terminal / shell", hint: "Ejecutar comandos del sistema", def: false },
+      { key: "cli_terminal", label: "Terminal / shell", hint: "El agente ejecuta comandos en el equipo del usuario (terminal local y procesos)", def: false },
       { key: "cli_files_read", label: "Leer archivos", hint: "Acceso de lectura al filesystem", def: false },
       { key: "cli_files_write", label: "Escribir archivos", hint: "Crear/modificar archivos", def: false },
       { key: "cli_web", label: "Web search / fetch", hint: "Buscar y descargar de internet", def: false },
@@ -80,30 +82,30 @@ const DESKTOP_GROUPS: { group: string; hint: string; options: { key: string; lab
   },
   {
     group: "Superficies de la app",
-    hint: "Páginas y canales que el usuario puede abrir.",
+    hint: "Páginas y canales que el usuario puede abrir. Capabilities, Scheduled jobs y Agents también conceden al agente skills, tareas programadas y subagentes.",
     options: [
-      { key: "capabilities", label: "Capabilities", hint: "Skills, plugins, conectores y herramientas", def: false },
-      { key: "messaging", label: "Messaging", hint: "Canales de mensajería", def: false },
+      { key: "capabilities", label: "Capabilities", hint: "Skills, plugins, conectores, herramientas y comandos / de skills", def: false },
+      { key: "messaging", label: "Messaging", hint: "Canales de mensajería (/handoff)", def: false },
       { key: "artifacts", label: "Artifacts", hint: "Artefactos generados", def: false },
-      { key: "cron", label: "Scheduled jobs", hint: "Tareas programadas", def: false },
-      { key: "agents", label: "Agents", hint: "Agentes compartidos", def: false },
-      { key: "profiles", label: "Profiles", hint: "Perfiles del agente", def: false },
+      { key: "cron", label: "Scheduled jobs", hint: "Tareas programadas (/goal, /loop, /heartbeat)", def: false },
+      { key: "agents", label: "Agents", hint: "Agentes compartidos y subagentes (/agents, /review, /bg) y sus límites de iteraciones y concurrencia", def: false },
+      { key: "profiles", label: "Profiles", hint: "Rail de perfiles del escritorio. Los perfiles se definen en Modelos → Perfiles del agente; con la lista vacía los usuarios solo ven el default", def: false },
     ],
   },
   {
     group: "Privacidad & Seguridad",
-    hint: "Controles sensibles que la organización puede apagar.",
+    hint: "Controles sensibles que la organización puede apagar. Vault, Browser y Voice también conceden al agente la bóveda, el navegador y la voz.",
     options: [
-      { key: "providers", label: "Providers", hint: "Proveedores y claves de modelo", def: false },
+      { key: "providers", label: "Providers", hint: "Proveedores, claves de modelo, modelos auxiliares por tarea, proveedor/modelo de subagentes y generación de mascotas", def: false },
       { key: "gateways", label: "Gateways", hint: "Conexiones de gateway", def: false },
       { key: "keys", label: "Tools & Keys", hint: "API keys de herramientas y variables de servidor", def: false },
-      { key: "billing", label: "Billing & suscripciones", hint: "Planes, suscripciones y facturación", def: false },
+      { key: "billing", label: "Billing & suscripciones", hint: "Planes, suscripciones, facturación y uso", def: false },
       { key: "web_access", label: "Web access", hint: "Servir la webapp desde este equipo", def: false },
       { key: "vault", label: "Vault / Passwords", hint: "Vault y autofill", def: false },
       { key: "browser", label: "Browser", hint: "Navegador integrado", def: false },
       { key: "voice", label: "Voice", hint: "Modo voz", def: false },
-      { key: "terminal", label: "Advanced · Terminal", hint: "Ejecución de comandos", def: false },
-      { key: "plugins", label: "Plugins & MCP", hint: "Extensiones", def: false },
+      { key: "terminal", label: "Advanced · Terminal", hint: "Paneles de terminal y modo de aprobación (/approvals) del escritorio. Los comandos del agente se conceden en CLI & Agente → Terminal / shell", def: false },
+      { key: "plugins", label: "Plugins & MCP", hint: "Extensiones, temas del Marketplace e instalación por enlace", def: false },
     ],
   },
 ];
@@ -137,6 +139,7 @@ function defaults() {
     ] as { name: string; text: string }[],
     models: [] as string[],
     defaultModel: "",
+    profiles: [] as { name: string; model: string }[],
     agents: [] as string[],
     vaultSecretIds: [] as string[],
   };
@@ -146,6 +149,20 @@ export function PolicyManagerPage() {
   const { push } = useToast();
   const policies = useApi<PolicyList>("/api/policy-bundles");
   const departments = useApi<DepartmentsList>("/api/departments");
+  // Model Access (la OTRA mitad del interruptor): el escritorio recibe la
+  // intersección de esta política con las aprobaciones por nivel. Sin esto,
+  // un modelo marcado aquí pero sin aprobar en Model Access desaparece en
+  // silencio del escritorio (incidente glm-5.3, 2026-11-10).
+  const access = useApi<AccessOverview>("/api/models/access");
+  const orgApproved = useMemo(
+    () =>
+      new Set(
+        (access.data?.models ?? [])
+          .filter(m => m.approvals.some(a => a.level === "org"))
+          .map(m => m.model_name)
+      ),
+    [access.data]
+  );
   const users = useApi<DirectoryList>("/api/users");
   const models = useApi<ModelList>("/api/models");
   const agents = useApi<AgentList>("/api/agents");
@@ -155,6 +172,12 @@ export function PolicyManagerPage() {
   const [editing, setEditing] = useState<Policy | null>(null);
   const [section, setSection] = useState<SectionKey>("general");
   const [form, setForm] = useState(defaults());
+  // Modelos marcados en la política que Model Access no tiene aprobados:
+  // no llegan al escritorio (intersección). Ver aviso en la sección "models".
+  const selectedWithoutAccess = useMemo(
+    () => form.models.filter(m => !orgApproved.has(m)),
+    [form.models, orgApproved]
+  );
   const [saving, setSaving] = useState(false);
   const [query, setQuery] = useState("");
 
@@ -185,6 +208,12 @@ export function PolicyManagerPage() {
         : [{ name: "Contrato general", text: policy.global_prompt || "" }],
       models: policy.models ?? [],
       defaultModel: policy.default_model ?? "",
+      // El editor debe cargar los perfiles existentes: antes este campo se
+      // mandaba vacío en cada PUT y el servidor (que escribe lo que recibe)
+      // BORRABA la lista con solo editar la política.
+      profiles: (policy.profiles ?? [])
+        .map((p) => ({ name: p?.name ?? "", model: p?.model ?? "" }))
+        .filter((p) => p.name),
       agents: policy.agents ?? [],
       vaultSecretIds: Array.isArray((policy.credentials as { vault_secret_ids?: string[] })?.vault_secret_ids)
         ? ((policy.credentials as { vault_secret_ids?: string[] }).vault_secret_ids as string[])
@@ -207,6 +236,20 @@ export function PolicyManagerPage() {
       push("error", "Selecciona la persona a la que se asigna.");
       return;
     }
+    for (const p of form.profiles) {
+      if (!p.name.trim() || !p.model) {
+        push("error", "Cada perfil necesita nombre y modelo.");
+        return;
+      }
+      if (form.models.length > 0 && !form.models.includes(p.model)) {
+        push("error", `El perfil "${p.name}" usa un modelo que no está marcado en la política.`);
+        return;
+      }
+    }
+    if (new Set(form.profiles.map((p) => p.name.trim().toLowerCase())).size !== form.profiles.length) {
+      push("error", "Los perfiles deben tener nombres distintos.");
+      return;
+    }
     setSaving(true);
     try {
       const body = {
@@ -216,7 +259,7 @@ export function PolicyManagerPage() {
         credentials: { vault_secret_ids: form.vaultSecretIds, allow_payment_autofill: false },
         contracts: form.contracts,
         global_prompt: form.contracts.map((c) => `[${c.name}]\n${c.text}`).join("\n\n"),
-        profiles: [],
+        profiles: form.profiles,
         models: form.models,
         default_model: form.defaultModel || null,
         agents: form.agents,
@@ -396,7 +439,7 @@ export function PolicyManagerPage() {
                   <div className="space-y-4">
                     <div className="flex items-start justify-between gap-3">
                       <p className="text-xs text-muted">
-                        Réplica de Settings de Shawm Agent Desktop + capacidades CLI. Lo que apagues aquí no estará disponible para el usuario ni para el agente en terminal.
+                        Réplica de Settings de Trust Agent Desktop + capacidades CLI. Lo que apagues aquí no estará disponible para el usuario ni para el agente en terminal. Siempre bloqueado en Trust Agent, sin importar la política: suscripciones y créditos del proveedor upstream, envío de diagnósticos, actualizaciones del runtime, onboarding de proveedores, modelos locales y DevTools.
                       </p>
                       <div className="flex shrink-0 items-center gap-2">
                         <Button
@@ -512,6 +555,15 @@ export function PolicyManagerPage() {
                 {section === "models" ? (
                   <div className="space-y-3">
                     <p className="text-xs text-muted">Marca los modelos a los que esta política da acceso.</p>
+                    {selectedWithoutAccess.length > 0 ? (
+                      <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-2.5 text-xs text-amber-300">
+                        <span className="font-semibold">Ojo:</span> {selectedWithoutAccess.length === 1 ? "este modelo seleccionado no" : `${selectedWithoutAccess.length} modelos seleccionados no`}{" "}
+                        está aprobado en Model Access y <span className="font-semibold">no llegará al escritorio</span>:{" "}
+                        <span className="font-mono">{selectedWithoutAccess.join(", ")}</span>. El escritorio recibe la
+                        intersección de esta política con Model Access. Apruébalo en{" "}
+                        <Link className="underline" href="/models">Models → Model Access</Link> (nivel organización).
+                      </div>
+                    ) : null}
                     <div className="max-h-72 space-y-1 overflow-y-auto rounded-lg border border-border-subtle p-2">
                       {(models.data?.models ?? []).map((model) => {
                         const checked = form.models.includes(model.model_name);
@@ -530,6 +582,11 @@ export function PolicyManagerPage() {
                             />
                             <span className="font-medium">{model.display_name || model.model_name}</span>
                             <span className="text-faint">{model.provider}</span>
+                            {!orgApproved.has(model.model_name) ? (
+                              <span className="ml-auto rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] text-amber-300">
+                                sin aprobar en Model Access
+                              </span>
+                            ) : null}
                           </label>
                         );
                       })}
@@ -540,6 +597,63 @@ export function PolicyManagerPage() {
                         <option value="">Sin modelo por defecto</option>
                         {form.models.map((m) => <option key={m} value={m}>{m}</option>)}
                       </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-xs font-medium">Perfiles del agente</label>
+                      <p className="text-[11px] text-muted">
+                        Perfiles que esta política ofrece en el escritorio además del default. El
+                        escritorio gobernado muestra SOLO estos (con el switch Profiles activado en
+                        Características); el modelo debe estar marcado arriba.
+                      </p>
+                      {form.desktop.profiles && form.profiles.length === 0 ? (
+                        <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-2.5 text-xs text-amber-300">
+                          <span className="font-semibold">Ojo:</span> el switch Profiles está activado pero la
+                          lista está vacía — los usuarios solo verán el perfil <span className="font-mono">default</span>.
+                        </div>
+                      ) : null}
+                      {form.profiles.map((profile, index) => (
+                        <div key={index} className="flex items-center gap-2">
+                          <Input
+                            value={profile.name}
+                            onChange={(e) => {
+                              const next = [...form.profiles];
+                              next[index] = { ...next[index], name: e.target.value };
+                              setForm({ ...form, profiles: next });
+                            }}
+                            placeholder="Nombre (p.ej. Operaciones)"
+                          />
+                          <Select
+                            value={profile.model}
+                            onChange={(e) => {
+                              const next = [...form.profiles];
+                              next[index] = { ...next[index], model: e.target.value };
+                              setForm({ ...form, profiles: next });
+                            }}
+                            className="w-44"
+                          >
+                            <option value="">Modelo…</option>
+                            {form.models.map((m) => <option key={m} value={m}>{m}</option>)}
+                          </Select>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => setForm({ ...form, profiles: form.profiles.filter((_, i) => i !== index) })}
+                          >
+                            Eliminar
+                          </Button>
+                        </div>
+                      ))}
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={form.models.length === 0}
+                        onClick={() => setForm({ ...form, profiles: [...form.profiles, { name: "", model: "" }] })}
+                      >
+                        + Agregar perfil
+                      </Button>
+                      {form.models.length === 0 ? (
+                        <p className="text-[11px] text-faint">Marca modelos en la política para poder definir perfiles.</p>
+                      ) : null}
                     </div>
                   </div>
                 ) : null}

@@ -8,6 +8,7 @@ trigger disabled — the only possible path (D-AU-01); the application path
 import json
 import subprocess
 import sys
+import uuid
 
 import pytest
 from sqlalchemy import text
@@ -104,10 +105,18 @@ def _seed_tamper_tenant(idp, tenant_id, admin_user_id, admin_sub):
             (tenant_id, f"Tamper {tenant_id[-4:]}", f"tamper-{tenant_id[-6:]}",
              idp.issuer("tenant-a")),
         )
+        # Migration 0044: every user belongs to a department. Seeded by SQL:
+        # no audit event, so the tenant keeps EXACTLY the 3 events below.
+        dept_id = str(uuid.uuid4())
         cur.execute(
-            "INSERT INTO users (id, tenant_id, email, display_name, status, "
-            "mfa_enrolled, oidc_subject) VALUES (%s, %s, %s, %s, 'active', true, %s)",
-            (admin_user_id, tenant_id, f"admin@{tenant_id[:8]}.test",
+            "INSERT INTO departments (id, tenant_id, name) VALUES (%s, %s, 'General')",
+            (dept_id, tenant_id),
+        )
+        cur.execute(
+            "INSERT INTO users (id, tenant_id, department_id, email, display_name, "
+            "status, mfa_enrolled, oidc_subject) "
+            "VALUES (%s, %s, %s, %s, %s, 'active', true, %s)",
+            (admin_user_id, tenant_id, dept_id, f"admin@{tenant_id[:8]}.test",
              "Tamper Admin", admin_sub),
         )
         cur.execute(

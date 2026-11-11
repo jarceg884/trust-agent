@@ -110,8 +110,36 @@ def hermes_home() -> Path:
         return Path.home() / ".hermes"
 
 
+def _named_profile_root(home: Path) -> Path | None:
+    """``<root>`` cuando *home* es un perfil con nombre ``<root>/profiles/<name>``
+    (predicado del core; forma del path fuera del runtime)."""
+    try:
+        from hermes_constants import named_profile_home  # type: ignore
+
+        named = named_profile_home(home)
+        return Path(named).parent.parent if named is not None else None
+    except Exception:  # noqa: BLE001
+        if home.parent.name == "profiles" and not home.name.startswith("."):
+            return home.parent.parent
+        return None
+
+
+def device_home() -> Path:
+    """Home que porta el ENROLAMIENTO del dispositivo en el contexto actual —
+    mismo algoritmo que ``enroll.device_home`` (ver su docstring: un perfil
+    del escritorio sin enrolamiento propio usa la identidad, el bundle y el
+    estado del dispositivo; un perfil enrolado aparte conserva los suyos)."""
+    home = hermes_home()
+    if (home / "trust-agent" / "device-token.json").is_file():
+        return home
+    root = _named_profile_root(home)
+    if root is not None and (root / "trust-agent" / "device-token.json").is_file():
+        return root
+    return home
+
+
 def trust_dir() -> Path:
-    d = hermes_home() / "trust-agent"
+    d = device_home() / "trust-agent"
     d.mkdir(parents=True, exist_ok=True)
     try:
         os.chmod(d, 0o700)  # aquí viven secretos del dispositivo
@@ -183,19 +211,23 @@ def save_renewed_device_token(device: dict[str, str], new_token: str) -> None:
     contrato entre módulos).
     """
     path = trust_dir() / "device-token.json"
-    payload = {
-        "device_id": device["device_id"],
-        "token": new_token,
-        "renewed_at": int(time.time()),
-    }
+    payload: dict[str, Any] = {}
     try:
         existing = json.loads(path.read_text(encoding="utf-8"))
-        for key in ("enrolled_at", "org_code", "tenant_slug"):
-            if key in existing:
-                payload[key] = existing[key]
+        if isinstance(existing, dict):
+            # Keep EVERY field of the enrollment (org, model_key,
+            # model_base_url, product_name…): the managed-config pin restores
+            # the org-issued model credential from this file, so a renewal
+            # that dropped them silently weakened the pin.
+            payload.update(existing)
     except (OSError, ValueError):
         pass  # archivo ausente/corrupto: los campos opcionales se pierden,
         # el token renovado es lo que importa (device_id + token).
+    payload.update({
+        "device_id": device["device_id"],
+        "token": new_token,
+        "renewed_at": int(time.time()),
+    })
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     os.chmod(tmp, 0o600)
@@ -563,7 +595,14 @@ class BundleSyncer:
         try:
             from . import enroll as enroll_mod
 
-            outcome = enroll_mod.recover_expired_token()
+            # Spec 022 v1.2.0: a desktop activated by the admin's one-time
+            # token has no trust-login id_token, so it first trades its own
+            # expired-but-authentic device token (server checks the device is
+            # still active). The id_token re-enroll stays as the fallback for
+            # OIDC-enrolled devices.
+            outcome = enroll_mod.refresh_expired_device_token()
+            if outcome != "active":
+                outcome = enroll_mod.recover_expired_token()
         except Exception as exc:  # noqa: BLE001 - la recuperación JAMÁS tumba
             log_event("token_recovery_error", detail=str(exc))
             return None

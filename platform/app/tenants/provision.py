@@ -391,10 +391,14 @@ def _provision_in_db(
             },
         )
 
-        # Departments DECLARED at birth (spec 038 D-38-01/05 — no implicit
-        # seed): template keys or custom names, in the declared order. An
-        # empty declaration leaves the org with ZERO departments (the
-        # structure wizard picks up from there on first login).
+        # Departments DECLARED at birth (spec 038 D-38-01/05): template keys or
+        # custom names, in the declared order. Migration 0044 (no user without
+        # a department) supersedes D-38's "zero departments" birth: with an
+        # empty declaration the org is born with "General", where its initial
+        # org_admin lands. Without this, provisioning AND the org self-signup
+        # died with NotNullViolation on users.department_id (since 0044). The
+        # structure wizard is driven by tenants.structure_onboarding_pending,
+        # not by the department count, so it still runs on first login.
         first_dept_id = None
         for spec in dept_specs:
             row = conn.execute(
@@ -421,6 +425,16 @@ def _provision_in_db(
                 payload={"name": spec.name,
                          **({"profile_template": spec.profile_template}
                             if spec.profile_template else {})},
+            )
+        if first_dept_id is None:
+            from ..org.departments import DEFAULT_DEPARTMENT_NAME, ensure_default_department
+
+            first_dept_id = ensure_default_department(
+                conn, tenant_id=tenant_id, actor_role=actor_role, actor_id=actor_id,
+            )
+            result.departments.append(
+                {"id": first_dept_id, "profile_template": None,
+                 "name": DEFAULT_DEPARTMENT_NAME}
             )
 
         # Initial org_admin (Keycloak subject linked, MFA pending enrollment).

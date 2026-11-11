@@ -439,6 +439,89 @@ def renew_token(conn: Connection, *, principal: Principal, device_id: str) -> di
 
 
 # ---------------------------------------------------------------------------
+# Refresh of an EXPIRED device token (spec 022 v1.2.0, D-HRB-03 amend 2)
+# ---------------------------------------------------------------------------
+def refresh_expired_token(engine: Engine, device_token: str) -> dict:
+    """Trade an authentic (possibly expired) device token for a fresh one.
+
+    Admin-activated desktops (spec 044, one-time token) have no OIDC session
+    to re-prove identity, so a desktop closed for longer than the TTL would
+    otherwise fall into restricted(token_expired) and require a new
+    activation every morning. The device token itself is the credential:
+
+    - signature/claims verified (pinned HS256), ``exp`` relaxed but ``iat``
+      bounded by ``device_token_refresh_max_age_days``;
+    - the device row must be ``active`` and owned by the token's user, and
+      the tenant and user must be active — so revocation stays immediate;
+    - every refresh is audited (``device.token_refreshed``).
+
+    Any failure answers the same 401 (no oracle on device existence).
+    """
+    from ..db import set_tenant
+    from ..errors import invalid_token
+    from .tokens import verify_device_token_for_refresh
+
+    settings = get_settings()
+    claims = verify_device_token_for_refresh(settings, device_token)
+    device_id = str(claims["device_id"])
+    user_id = str(claims["user_id"])
+    tenant_id = str(claims["tenant_id"])
+    try:
+        uuid.UUID(device_id)
+        uuid.UUID(user_id)
+        uuid.UUID(tenant_id)
+    except ValueError:
+        raise invalid_token("Invalid device token.")
+    with engine.begin() as conn:
+        set_tenant(conn, tenant_id)
+        row = conn.execute(
+            text(
+                "SELECT d.status AS device_status, d.user_id, "
+                "u.status AS user_status, t.status AS tenant_status "
+                "FROM devices d JOIN users u ON u.id = d.user_id "
+                "JOIN tenants t ON t.id = d.tenant_id "
+                "WHERE d.id = CAST(:did AS uuid)"
+            ),
+            {"did": device_id},
+        ).mappings().first()
+        if (
+            row is None
+            or row["device_status"] != "active"
+            or str(row["user_id"]) != user_id
+            or row["user_status"] != "active"
+            or row["tenant_status"] != "active"
+        ):
+            raise invalid_token("Invalid device token.")
+        conn.execute(
+            text(
+                "UPDATE devices SET last_seen_at = now(), updated_at = now() "
+                "WHERE id = CAST(:did AS uuid)"
+            ),
+            {"did": device_id},
+        )
+        audit_service.emit(
+            conn,
+            tenant_id=tenant_id,
+            actor_role="user",
+            actor_id=user_id,
+            action="device.token_refreshed",
+            target_type="device",
+            target_id=device_id,
+            device_id=device_id,
+            payload={"outcome": "refreshed", "expired_token_jti": claims.get("jti")},
+        )
+    fresh = issue_device_token(
+        settings, device_id=device_id, user_id=user_id, tenant_id=tenant_id
+    )
+    return {
+        "device_token": fresh,
+        "device_id": device_id,
+        "status": "active",
+        "expires_in": settings.device_token_ttl_minutes * 60,
+    }
+
+
+# ---------------------------------------------------------------------------
 # User view (own devices only)
 # ---------------------------------------------------------------------------
 def my_devices(conn: Connection, principal: Principal) -> list[dict]:

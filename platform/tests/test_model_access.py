@@ -541,27 +541,19 @@ def test_user_level_resolves_department(client, idp, admin_conn):
     )
     assert cross.status_code == 404
 
-    # A user WITHOUT a department cannot have a user-level row → 422.
-    nodept_id = str(_uuid.uuid4())
+    # A user WITHOUT a department cannot exist since migration 0044: the
+    # invariant moved into the database (NOT NULL), so the API's "no
+    # department" 422 guard is now unreachable defense in depth.
+    import psycopg as _psycopg
+
     with _admin(TEST_DB) as c:
-        c.execute(
-            "INSERT INTO users (id, tenant_id, department_id, email, "
-            "display_name, status) VALUES (%s, %s, NULL, "
-            "'nodept@tenant-a.test', 'No Dept', 'active')",
-            (nodept_id, TENANT_A),
-        )
-    try:
-        nodept = client.put(
-            "/api/models/access",
-            json={"model_name": "glm-5.2", "level": "user",
-                  "user_id": nodept_id},
-            headers=bearer_headers(alice),
-        )
-        assert nodept.status_code == 422
-        assert "no department" in nodept.json()["error"]["message"]
-    finally:
-        with _admin(TEST_DB) as c:
-            c.execute("DELETE FROM users WHERE id = %s", (nodept_id,))
+        with pytest.raises(_psycopg.errors.NotNullViolation):
+            c.execute(
+                "INSERT INTO users (id, tenant_id, department_id, email, "
+                "display_name, status) VALUES (%s, %s, NULL, "
+                "'nodept@tenant-a.test', 'No Dept', 'active')",
+                (str(_uuid.uuid4()), TENANT_A),
+            )
 
     # --- Symmetric revoke by user_id alone (what the UI sends) ---
     revoked = client.post(
@@ -595,3 +587,16 @@ def test_user_level_resolves_department(client, idp, admin_conn):
             "AND level = 'user' AND user_id = %s",
             (TENANT_A, USER_BOB),
         )
+
+
+def test_policy_models_narrow_model_access_and_never_widen_it():
+    """Spec 044 rule shared by compile_bundle_payload (what the device is told) and
+    keys.issue_key (what the gateway accepts): Policy Studio models restrict Model Access in
+    the policy's order; an empty Model Access set stays deny-all (it used to hand the policy's
+    models to a user whose approvals were all revoked)."""
+    from app.models.access import narrow_to_policy_models as narrow
+
+    assert narrow(["a", "b", "c"], ["c", "b"]) == ["c", "b"]
+    assert narrow(["a"], ["a", "z"]) == ["a"]
+    assert narrow([], ["a", "b"]) == []
+    assert narrow(["a", "b"], []) == ["a", "b"]

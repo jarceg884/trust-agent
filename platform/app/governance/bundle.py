@@ -28,9 +28,12 @@ La attestation auditable llega con el incremento 3 (REQ-GOH-012).
 """
 from __future__ import annotations
 
+import logging
+
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Any
 
 import jwt
 from fastapi import APIRouter, Request
@@ -50,8 +53,12 @@ from ..devices.tokens import verify_device_token
 from ..errors import ApiError, device_not_authorized, invalid_token
 from ..models import access as model_access
 from . import budgets as budgets_service
+from ..models import keys as keys_service
 from . import jws_keys
 from .service import effective_policy
+
+
+logger = logging.getLogger(__name__)
 
 # Piso del proveedor para la gracia offline (D-GOH-08: default 60, piso 15).
 OFFLINE_GRACE_FLOOR_MINUTES = 15
@@ -193,16 +200,184 @@ def require_bundle_auth(request: Request) -> BundleAuth:
     return BundleAuth(principal=principal, device_id=str(device_claims["device_id"]))
 
 
-def _policy_version(conn, *, department_id: str | None, user_id: str) -> int:
-    """Máx versión activa combinada (org + depto del usuario + usuario)."""
-    row = conn.execute(
+# Policy Studio → CLI & Agente: each switch governs one family of Hermes
+# tools (real names from hermes-agent toolsets.py). ``grant`` is what ON
+# concedes; ``block`` is what OFF removes (adds legacy aliases so an OFF
+# switch also strips names older bundles may carry).
+#
+# Before 2026-11-10 the switches were subtract-only over the provider
+# default (``catalog.policy_keys.allowed_tools`` = conversational tools
+# WITHOUT terminal), so "Terminal / shell" ON could never grant terminal:
+# the console offered a switch that did nothing (live incident, e2e-lab).
+STUDIO_TOOL_FAMILIES: dict[str, dict[str, tuple[str, ...]]] = {
+    "cli_terminal": {
+        "grant": ("terminal", "process_manage"),
+        "block": ("terminal", "process_manage", "process", "shell", "bash"),
+    },
+    "cli_files_read": {
+        "grant": ("read_file", "search_files"),
+        "block": ("read_file", "search_files"),
+    },
+    "cli_files_write": {
+        "grant": ("write_file", "patch"),
+        "block": ("write_file", "patch", "edit_file"),
+    },
+    "cli_web": {
+        "grant": ("web_search", "web_extract"),
+        "block": ("web_search", "web_extract", "web_fetch", "browser",
+                  "browser_navigate"),
+    },
+    "cli_code": {
+        "grant": ("execute_code",),
+        "block": ("execute_code", "python"),
+    },
+    # Desktop-app switches whose console hint promises an AGENT capability
+    # (not just a Settings page): ON must also grant the tool behind it, or
+    # the page is visible and the agent still cannot use it.
+    "memory": {                      # "Memoria del agente (/memory ...)"
+        "grant": ("memory",),
+        "block": ("memory",),
+    },
+    "agents": {                      # "Agentes compartidos y subagentes"
+        "grant": ("delegate_task",),
+        "block": ("delegate_task",),
+    },
+    "capabilities": {                # "Skills, plugins, conectores, ..."
+        "grant": ("skills_list", "skill_view"),
+        "block": ("skills_list", "skill_view", "skill_manage"),
+    },
+    "cron": {                        # "Tareas programadas (/goal, /loop ...)"
+        "grant": ("cronjob_manage",),
+        "block": ("cronjob_manage",),
+    },
+    "voice": {                       # "Modo voz"
+        "grant": ("text_to_speech",),
+        "block": ("text_to_speech",),
+    },
+    "vault": {                       # "Vault y autofill"
+        "grant": ("browser_vault",),
+        "block": ("browser_vault",),
+    },
+    "browser": {                     # "Navegador integrado"
+        "grant": ("browser_exec", "browser_cdp", "browser_dialog"),
+        "block": ("browser_exec", "browser_cdp", "browser_dialog",
+                  "browser_navigate", "browser"),
+    },
+}
+
+# Technical policy keys a Studio switch needs to actually work. Without them
+# the switch grants the tool and a plugin rule (P-x) still vetoes every call:
+# live on e2e-lab, "Terminal / shell" ON reached the device and P-2 vetoed the
+# local backend because the provider default is ["docker"] and a Windows
+# desktop has no Docker.
+STUDIO_IMPLIED_KEYS: dict[str, dict[str, Any]] = {
+    "cli_terminal": {"allowed_terminal_backends": ["local", "docker"]},   # P-2
+    "cron": {
+        "allow_scheduled_tasks": True,     # P-9  cronjob_manage
+        "allow_recurring_prompts": True,   # P-10 /loop, /heartbeat
+        "allow_goal_mode": True,           # P-11 /goal
+    },
+    "voice": {"allow_voice_mode": True},              # P-21 /voice
+    "vault": {"allow_credential_vault": True},        # P-16 browser_vault
+}
+
+
+def apply_studio_implied_keys(payload: dict, ui: dict, explicit: set[str]) -> None:
+    """Set the technical keys implied by the Policy Studio switches.
+
+    * switch ON  → the implied value, UNLESS the key has an explicit policy
+      at org/dept/user level: that value is the admin's technical decision
+      and stays as the ceiling (deny-overrides).
+    * switch OFF → implied boolean keys are forced to False (the capability
+      is off on every surface, even over an explicit true). List keys are
+      left alone: the family's tools are already out of allowed_tools.
+    * switch absent → nothing changes (no Studio bundle / older bundle).
+    """
+    for feature, implied in STUDIO_IMPLIED_KEYS.items():
+        value = ui.get(feature)
+        for key, on_value in implied.items():
+            if value is True and key not in explicit:
+                payload[key] = list(on_value) if isinstance(on_value, list) else on_value
+            elif value is False and isinstance(on_value, bool):
+                payload[key] = False
+
+
+def clamp_tools_to_studio(
+    base: list[str] | tuple[str, ...],
+    ui: dict,
+    *,
+    explicit_ceiling: bool,
+) -> list[str]:
+    """allowed_tools after the Policy Studio CLI & Agente switches.
+
+    * ``cli`` OFF → no tools at all (master switch, unchanged semantics).
+    * family switch OFF → its ``block`` names are removed.
+    * family switch ON → its ``grant`` names are added, UNLESS an explicit
+      ``allowed_tools`` policy exists at org/dept/user level: that list is
+      the admin's ceiling and, by deny-overrides, ON never exceeds it.
+    * switch absent (no Studio bundle / older bundle) → base unchanged.
+
+    Order is preserved and duplicates dropped (deterministic bundles).
+    """
+    if ui.get("cli") is False:
+        return []
+    tools = list(dict.fromkeys(str(t) for t in base))
+    for feature, family in STUDIO_TOOL_FAMILIES.items():
+        value = ui.get(feature)
+        if value is False:
+            blocked = set(family["block"])
+            tools = [t for t in tools if t not in blocked]
+        elif value is True and not explicit_ceiling:
+            tools.extend(t for t in family["grant"] if t not in tools)
+    return tools
+
+
+def _explicit_policy_keys(
+    conn, *, department_id: str | None, user_id: str
+) -> set[str]:
+    """Keys with an explicit active policy at the user's levels (org, the
+    user's department, the user). Defaults from the catalog do not count.
+
+    Same level filter as ``_policy_version``; tenant scoping comes from RLS
+    (forced on ``policies``).
+    """
+    rows = conn.execute(
         text(
-            "SELECT COALESCE(MAX(version), 0) AS v FROM policies "
+            "SELECT DISTINCT key FROM policies "
             "WHERE is_active AND ("
             "  level = 'org'"
             "  OR (level = 'dept' AND department_id = CAST(:dept AS uuid))"
             "  OR (level = 'user' AND user_id = CAST(:usr AS uuid))"
             ")"
+        ),
+        {"dept": department_id, "usr": user_id},
+    ).scalars()
+    return {str(key) for key in rows}
+
+
+def _policy_version(conn, *, department_id: str | None, user_id: str) -> int:
+    """Versión de la política efectiva del usuario (claim ``policy_version``).
+
+    Máx versión activa de ``policies`` (org + depto del usuario + usuario)
+    MÁS la revisión de contenido del tenant (``policy_revisions``, migración
+    0047): Policy Studio y Model Access no versionan por fila, y sin este
+    término sus cambios llegaban con la misma versión — el heartbeat no
+    anunciaba la actualización y la attestation no probaba qué contenido
+    aplicó el dispositivo. Granularidad de tenant: un cambio en otro
+    departamento también sube la versión (el contenido de este usuario puede
+    no cambiar; nunca al revés).
+    """
+    row = conn.execute(
+        text(
+            "SELECT COALESCE((SELECT MAX(version) FROM policies "
+            "  WHERE is_active AND ("
+            "    level = 'org'"
+            "    OR (level = 'dept' AND department_id = CAST(:dept AS uuid))"
+            "    OR (level = 'user' AND user_id = CAST(:usr AS uuid))"
+            "  )), 0)"
+            " + COALESCE((SELECT r.revision FROM policy_revisions r"
+            "   JOIN users u ON u.tenant_id = r.tenant_id"
+            "   WHERE u.id = CAST(:usr AS uuid)), 0) AS v"
         ),
         {"dept": department_id, "usr": user_id},
     ).mappings().first()
@@ -307,31 +482,25 @@ def compile_bundle_payload(
     payload["policy_default_model"] = (studio_bundle or {}).get("default_model")
     payload["policy_agents"] = (studio_bundle or {}).get("agents") or []
     payload["policy_contracts"] = (studio_bundle or {}).get("contracts") or []
-    if payload["policy_models"]:
-        allowed = set(payload.get("approved_models") or [])
-        payload["approved_models"] = [m for m in payload["policy_models"] if not allowed or m in allowed]
+    # Policy Studio narrows Model Access and never widens it; an empty Model Access set stays
+    # deny-all. keys.issue_key applies the same function, so a key is born with this scope.
+    payload["approved_models"] = model_access.narrow_to_policy_models(
+        list(payload.get("approved_models") or []), payload["policy_models"],
+    )
 
-    # CLI/agent capabilities (Policy Studio → Desktop restrictions → CLI &
-    # Agente). The desktop switches must also clamp the tool surface the
-    # governance plugin enforces for CLI and background runs.
+    # CLI/agent capabilities (Policy Studio → CLI & Agente). The switches
+    # govern the tool surface the governance plugin enforces in EVERY session
+    # (desktop chat, CLI, background runs): ON grants the family, OFF removes
+    # it — bounded by an explicit allowed_tools policy if one exists.
     ui = payload.get("ui_features") or {}
-    tool_features = {
-        "cli_terminal": {"terminal", "shell", "bash"},
-        "cli_files_read": {"read_file"},
-        "cli_files_write": {"write_file", "patch", "edit_file"},
-        "cli_web": {"web_search", "web_fetch", "browser", "browser_navigate"},
-        "cli_code": {"execute_code", "python"},
-    }
-    if ui.get("cli") is False:
-        payload["allowed_tools"] = []
-    else:
-        blocked: set[str] = set()
-        for feature, tools in tool_features.items():
-            if ui.get(feature) is False:
-                blocked.update(tools)
-        payload["allowed_tools"] = [
-            tool for tool in (payload.get("allowed_tools") or []) if tool not in blocked
-        ]
+    explicit_keys = _explicit_policy_keys(
+        conn, department_id=principal.department_id, user_id=principal.user_id,
+    )
+    payload["allowed_tools"] = clamp_tools_to_studio(
+        payload.get("allowed_tools") or [],
+        ui,
+        explicit_ceiling="allowed_tools" in explicit_keys,
+    )
 
     # REQ-GOH-024: TODAS las keys del catálogo vigente, aplanadas. Los claims
     # estructurales (ya presentes, con su compilación propia: piso de gracia,
@@ -341,6 +510,9 @@ def compile_bundle_payload(
         if key in RESERVED_CLAIMS or key in payload:
             continue
         payload[key] = value
+    # After flattening: the implied keys override catalog DEFAULTS only
+    # (explicit policies are left as the ceiling — see the function).
+    apply_studio_implied_keys(payload, ui, explicit_keys)
     return payload
 
 
@@ -366,6 +538,19 @@ def governance_bundle(request: Request):
         # DeviceGate en la misma transacción: revocación → 401 inmediato.
         check_device_access(conn, auth.device_id, auth.principal)
         payload = compile_bundle_payload(conn, auth.principal, device_id=auth.device_id)
+        # Spec 044: la política que el dispositivo acaba de recibir es la que
+        # su clave del gateway debe enforcear. Sin esto, un modelo retirado de
+        # la política sigue respondiendo con claves emitidas antes del cambio
+        # (verificado en vivo: HTTP 200 tras quitarlo). Best-effort: si el
+        # gateway está caído el sync no se rompe — el próximo sync reintenta.
+        try:
+            keys_service.rescope_user_keys(
+                conn, auth.principal,
+                user_id=auth.principal.user_id,
+                models=list(payload.get("approved_models") or []),
+            )
+        except Exception:
+            logger.warning("key rescope failed during bundle sync", exc_info=True)
     bundle = sign_bundle(payload)
     return {
         "bundle": bundle,

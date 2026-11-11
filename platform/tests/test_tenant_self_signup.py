@@ -174,7 +174,7 @@ def test_signup_creates_pending_tenant(client, fake_kc, admin_conn, idp):
     assert tenant["slug"] == SLUG
     assert tenant["status"] == "pending_activation"
     assert tenant["oidc_issuer_url"] == idp.issuer(SLUG)
-    assert tenant["counts"]["departments"] == 0  # spec 038: nace VACÍA (AC-26-001 enmendado)
+    assert tenant["counts"]["departments"] == 1  # 0044: nace con "General" (el admin necesita departamento)
     assert tenant["counts"]["users"] == 1
     assert tenant["counts"]["org_budgets"] == 1
     assert tenant["counts"]["approved_models"] > 0
@@ -224,7 +224,8 @@ def test_signup_creates_pending_tenant(client, fake_kc, admin_conn, idp):
         admin_conn, "SELECT action FROM audit_log WHERE tenant_id = %s", (tid,))}
     assert {"user.created", "role.assigned",
             "budget.updated", "policy.updated", "model.approved"} <= seed_actions
-    assert "department.created" not in seed_actions
+    # 0044: el departamento "General" con el que nace la org queda auditado.
+    assert "department.created" in seed_actions
 
 
 # ---------------------------------------------------------------------------

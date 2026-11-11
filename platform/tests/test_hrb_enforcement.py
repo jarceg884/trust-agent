@@ -61,6 +61,10 @@ def home(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     monkeypatch.setenv("TRUST_AGENT_API", "http://127.0.0.1:1")  # puerto cerrado
     monkeypatch.delenv("TRUST_DEVICE_TOKEN", raising=False)
+    # Hermético: un host enrolado exporta su binding (TRUST_ORG_CODE…) y
+    # haría pasar por "vinculado" a un home que en el test no lo está.
+    monkeypatch.delenv("TRUST_ORG_CODE", raising=False)
+    monkeypatch.delenv("TRUST_DEVICE_TYPE", raising=False)
     return tmp_path
 
 
@@ -627,8 +631,130 @@ def test_auto_enroll_retries_when_token_expired(plugin, home):
     (tdir / "device-token.json").write_text(json.dumps({
         "device_id": DEVICE_ID, "token": _device_jwt(-3600),
     }))
-    # Sin id_token no puede completar, pero SÍ re-intentó (antes: nunca).
+    # Spec 022 v1.2.0: primero intenta el refresh con su propio token (red
+    # cerrada del fixture → network, honesto); antes ni siquiera re-intentaba.
+    assert plugin.enroll.auto_enroll_once() == "network"
+    log = (tdir / "plugin.log").read_text()
+    assert "device_token_refresh_failed" in log and "network" in log
+
+
+def _fake_refresh(status, token=None):
+    def fake_request(method, path, body=None, headers=None, timeout=15.0):
+        assert method == "POST" and path == "/api/devices/token/refresh", path
+        if status == 200:
+            return 200, {"device_id": DEVICE_ID, "status": "active",
+                         "device_token": token, "expires_in": 900}
+        return status, {"error": {"code": "unauthorized",
+                                  "message": "Invalid device token."}}
+    return fake_request
+
+
+def test_auto_enroll_refreshes_expired_token_without_browser(plugin, home,
+                                                             monkeypatch):
+    """Escritorio activado por token one-time del admin (spec 044): token
+    expirado → refresh con su propio token; NUNCA abre el navegador."""
+    tdir = home / "trust-agent"
+    tdir.mkdir(parents=True, exist_ok=True)
+    (tdir / "org-code.txt").write_text("acme\n")
+    (tdir / "enrollment.json").write_text(json.dumps({
+        "org": "acme", "portal_url": "http://portal.test",
+        "activated_at": "2026-11-06T00:00:00Z"}))
+    (tdir / "device-token.json").write_text(json.dumps({
+        "device_id": DEVICE_ID, "token": _device_jwt(-3600),
+        "model_base_url": "http://gw.test/litellm"}))
+    opened = []
+    monkeypatch.setattr(plugin.enroll, "attempt_browser_login",
+                        lambda *a, **k: opened.append(1) or False)
+    monkeypatch.setattr(plugin.enroll, "_request",
+                        _fake_refresh(200, _device_jwt(900)))
+
+    assert plugin.enroll.auto_enroll_once() == "already_enrolled"
+    data = json.loads((tdir / "device-token.json").read_text())
+    assert not plugin.enroll.device_token_expired({"token": data["token"]})
+    assert data["model_base_url"] == "http://gw.test/litellm"
+    assert opened == []
+
+
+def test_refresh_concurrent_threads_single_post(plugin, home, monkeypatch):
+    """Dos hilos del MISMO proceso (BundleSyncer + watcher) con el token
+    expirado: el lock por home los serializa → exactamente UN POST de refresh;
+    el segundo ve el token fresco y no vuelve a llamar al server."""
+    import threading
+
+    tdir = home / "trust-agent"
+    tdir.mkdir(parents=True, exist_ok=True)
+    (tdir / "device-token.json").write_text(json.dumps({
+        "device_id": DEVICE_ID, "token": _device_jwt(-3600)}))
+    monkeypatch.setattr(plugin.enroll, "AUTOENROLL_LOCK_WAIT_S", 10.0)
+    posts = []
+    in_post = threading.Event()
+    release = threading.Event()
+    inner = _fake_refresh(200, _device_jwt(900))
+
+    def slow_request(*args, **kwargs):
+        posts.append(1)
+        in_post.set()
+        assert release.wait(5), "the test never released the first POST"
+        return inner(*args, **kwargs)
+
+    monkeypatch.setattr(plugin.enroll, "_request", slow_request)
+    results = []
+    first = threading.Thread(
+        target=lambda: results.append(plugin.enroll.refresh_expired_device_token()))
+    second = threading.Thread(
+        target=lambda: results.append(plugin.enroll.refresh_expired_device_token()))
+    first.start()
+    assert in_post.wait(5), "first refresh never reached the server"
+    second.start()  # contends for the home lock while the first POST is in flight
+    release.set()
+    first.join(10)
+    second.join(10)
+
+    assert results == ["active", "active"]
+    assert posts == [1], "only one refresh may reach the server"
+    log = (tdir / "plugin.log").read_text()
+    assert log.count("device_token_refreshed") == 1
+
+
+def test_auto_enroll_admin_activated_rejected_needs_activation(plugin, home,
+                                                               monkeypatch):
+    """Refresh rechazado (revocado / muy viejo) en un escritorio activado por
+    el admin → needs_activation; sin pestañas de login en cada ciclo."""
+    tdir = home / "trust-agent"
+    tdir.mkdir(parents=True, exist_ok=True)
+    (tdir / "org-code.txt").write_text("acme\n")
+    (tdir / "enrollment.json").write_text(json.dumps({
+        "org": "acme", "portal_url": "http://portal.test"}))
+    (tdir / "device-token.json").write_text(json.dumps({
+        "device_id": DEVICE_ID, "token": _device_jwt(-3600)}))
+    opened = []
+    monkeypatch.setattr(plugin.enroll, "attempt_browser_login",
+                        lambda *a, **k: opened.append(1) or False)
+    monkeypatch.setattr(plugin.enroll, "_request", _fake_refresh(401))
+
+    assert plugin.enroll.auto_enroll_once() == "needs_activation"
+    assert opened == []
+    log = (tdir / "plugin.log").read_text()
+    assert "device_token_refresh_failed" in log and "rejected" in log
+
+
+def test_auto_enroll_oidc_home_rejected_falls_back_to_browser(plugin, home,
+                                                              monkeypatch):
+    """Home enrolado por OIDC (sin enrollment.json de activación): si el
+    refresh se rechaza, conserva el camino de login del navegador."""
+    tdir = home / "trust-agent"
+    tdir.mkdir(parents=True, exist_ok=True)
+    (tdir / "org-code.txt").write_text("acme\n")
+    (tdir / "device-token.json").write_text(json.dumps({
+        "device_id": DEVICE_ID, "token": _device_jwt(-3600)}))
+    opened = []
+    monkeypatch.setattr(plugin.enroll, "attempt_browser_login",
+                        lambda *a, **k: opened.append(1) or False)
+    monkeypatch.setattr(plugin.enroll, "_browser_login_on_cooldown", lambda: False)
+    monkeypatch.setattr(plugin.enroll, "_request", _fake_refresh(401))
+
     assert plugin.enroll.auto_enroll_once() == "no_id_token"
+    assert opened == [1]
 
 
 def test_enroll_flow_direct_reissue_200(plugin, home, monkeypatch):

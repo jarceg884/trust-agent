@@ -67,6 +67,9 @@ def home(tmp_path, monkeypatch):
     monkeypatch.setenv("TRUST_AGENT_API", "http://controlplane.test")
     monkeypatch.delenv("TRUST_DEVICE_TOKEN", raising=False)
     monkeypatch.delenv("TRUST_SYNC_INTERVAL", raising=False)
+    # Hermético frente a un host enrolado que exporta su binding.
+    monkeypatch.delenv("TRUST_ORG_CODE", raising=False)
+    monkeypatch.delenv("TRUST_DEVICE_TYPE", raising=False)
     return tmp_path
 
 
@@ -515,3 +518,118 @@ def test_expired_token_without_id_token_is_token_expired_not_revoked(
     # La caché del bundle NO se borró (no fue revocación — REQ-GOH-010 solo
     # invalida la caché ante 401/403):
     assert (tdir / "governance-bundle.jws").exists()
+
+
+# ---------------------------------------------------------------------------
+# Spec 022 v1.2.0 (D-HRB-03 amend 2) — escritorio activado por token one-time
+# (sin id_token de trust-login): el token expirado se REFRESCA con el propio
+# device token; la revocación sigue cortando (401 → no se refresca).
+# ---------------------------------------------------------------------------
+class _RefreshControlPlane:
+    def __init__(self, *, refresh_status, fresh_token, jws):
+        self.requests = []
+        self.refresh_status = refresh_status
+        self.fresh_token = fresh_token
+        self.jws = jws
+
+    def __call__(self, req, timeout=None, context=None):
+        url = req.full_url
+        body = json.loads(req.data.decode()) if req.data else None
+        self.requests.append({"url": url, "body": body})
+        if url.endswith("/api/devices/token/refresh"):
+            if self.refresh_status != 200:
+                raise urllib.error.HTTPError(
+                    url, self.refresh_status, "unauthorized", {},
+                    __import__("io").BytesIO(json.dumps(
+                        {"error": {"code": "unauthorized",
+                                   "message": "Invalid device token."}}).encode()),
+                )
+            return FakeResponse({"device_id": DEVICE_ID, "status": "active",
+                                 "device_token": self.fresh_token,
+                                 "expires_in": 900}, status=200)
+        if url.endswith("/api/me/governance-bundle"):
+            return FakeResponse({"bundle": self.jws})
+        if url.endswith("/api/me/device-heartbeat"):
+            return FakeResponse({
+                "device_id": DEVICE_ID, "current_policy_version": 7,
+                "policy_update_available": False,
+                "heartbeat_interval_seconds": 300,
+                "online_window_seconds": 600,
+                "server_time": "2026-11-06T00:00:00Z",
+            })
+        return FakeResponse({}, status=404)
+
+
+def _write_expired_activation(tdir):
+    tdir.mkdir(parents=True, exist_ok=True)
+    (tdir / "org-code.txt").write_text("acme\n")
+    # SIN id-token.txt: activación por token one-time del admin (spec 044).
+    (tdir / "device-token.json").write_text(json.dumps({
+        "device_id": DEVICE_ID, "token": _device_jwt(-3600),
+        "org_code": "acme", "tenant_slug": "acme",
+        "model_key": "sk-org-issued", "model_base_url": "http://gw.test:4000",
+    }))
+
+
+def test_expired_token_refreshes_without_id_token(plugin, monkeypatch,
+                                                 signing_key, home):
+    tdir = home / "trust-agent"
+    _write_expired_activation(tdir)
+    fresh = _device_jwt(900)
+    fake = _RefreshControlPlane(refresh_status=200, fresh_token=fresh,
+                                jws=_make_bundle(signing_key, policy_version=7))
+    monkeypatch.setattr(plugin.bundle_client.urllib.request, "urlopen", fake)
+
+    snap = plugin.bundle_client.BundleSyncer().tick()
+
+    assert snap["mode"] == "normal", snap
+    refresh_calls = [r for r in fake.requests
+                     if r["url"].endswith("/api/devices/token/refresh")]
+    assert len(refresh_calls) == 1
+    assert refresh_calls[0]["body"]["device_token"] != fresh
+    assert not [r for r in fake.requests if r["url"].endswith("/api/devices/enroll")]
+    data = json.loads((tdir / "device-token.json").read_text())
+    assert data["token"] != _device_jwt(-3600)
+    assert not plugin.bundle_client.device_token_expired({"token": data["token"]})
+    # El refresh preserva la credencial del modelo emitida por la org:
+    assert data["model_key"] == "sk-org-issued"
+    assert data["model_base_url"] == "http://gw.test:4000"
+    log = (tdir / "plugin.log").read_text()
+    assert "device_token_refreshed" in log
+    assert "device_token_recovered" in log
+
+
+def test_expired_token_refresh_rejected_is_token_expired_not_revoked(
+        plugin, monkeypatch, signing_key, home):
+    """Device revocado/token muy viejo: el server responde 401 al refresh →
+    sin id_token no hay recuperación: restricted(token_expired) honesto; la
+    caché firmada NO se borra (el siguiente sync dirá si fue revocación)."""
+    tdir = home / "trust-agent"
+    _write_expired_activation(tdir)
+    jws = _make_bundle(signing_key, policy_version=7)
+    (tdir / "governance-bundle.jws").write_text(jws)
+    fake = _RefreshControlPlane(refresh_status=401, fresh_token="", jws=jws)
+    monkeypatch.setattr(plugin.bundle_client.urllib.request, "urlopen", fake)
+
+    snap = plugin.bundle_client.BundleSyncer().tick()
+
+    assert snap["mode"] == "restricted"
+    assert snap["reason"] == "token_expired", snap
+    assert (tdir / "governance-bundle.jws").exists()
+    log = (tdir / "plugin.log").read_text()
+    assert "device_token_refresh_failed" in log
+
+
+def test_sliding_renewal_preserves_enrollment_fields(plugin, home):
+    """La renovación por heartbeat NO debe perder model_key/model_base_url:
+    el pin de config restaura la credencial del modelo desde este archivo."""
+    tdir = home / "trust-agent"
+    _write_expired_activation(tdir)
+    device = plugin.bundle_client.load_device_token()
+    plugin.bundle_client.save_renewed_device_token(device, "renewed-token")
+    data = json.loads((tdir / "device-token.json").read_text())
+    assert data["token"] == "renewed-token"
+    assert data["model_key"] == "sk-org-issued"
+    assert data["model_base_url"] == "http://gw.test:4000"
+    assert data["org_code"] == "acme"
+    assert data["renewed_at"]

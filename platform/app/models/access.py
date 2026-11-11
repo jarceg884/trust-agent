@@ -280,6 +280,25 @@ def _level_defines_rows(
     return row is not None
 
 
+def narrow_to_policy_models(approved: list[str], policy_models: list[str]) -> list[str]:
+    """The model scope a device AND its gateway key enforce (spec 044).
+
+    Policy Studio ``models`` NARROW what Model Access approves; they never widen it. The
+    result is the policy list (its order, which the desktop shows) restricted to *approved*.
+    An empty *approved* is an explicit deny-all (D-CP-15 deny-overrides) and stays empty: a
+    policy that lists models must not hand them to a user whose approvals were all revoked.
+    With no policy list, *approved* is returned unchanged.
+
+    One function for both consumers: ``compile_bundle_payload`` (what the device is told)
+    and ``keys.issue_key`` (what the gateway accepts). Two copies of this rule drifted once:
+    keys were born wider than the bundle (live, pilot e2e-lab, 2026-11-11).
+    """
+    if not policy_models:
+        return list(approved)
+    allowed = set(approved)
+    return [m for m in policy_models if m in allowed]
+
+
 def effective_models_for_user(
     conn: Connection, principal: Principal
 ) -> list[str]:

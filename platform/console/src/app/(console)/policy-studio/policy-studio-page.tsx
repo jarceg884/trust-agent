@@ -8,6 +8,7 @@
  * el desktop).
  */
 import { useState } from "react";
+import Link from "next/link";
 import { api, ApiError } from "@/lib/api-client";
 import { useApi } from "@/hooks/use-api";
 import {
@@ -30,27 +31,27 @@ interface BundleList {
 }
 
 const DESKTOP_OPTIONS: { key: string; label: string; hint: string; def: boolean }[] = [
-  { key: "model_main", label: "Model · Main model", hint: "Selector de modelo principal (la organización asigna el modelo; el usuario no lo cambia)", def: false },
-  { key: "model_fallback", label: "Model · Fallback models", hint: "Modelos de respaldo", def: false },
-  { key: "model_moa", label: "Model · Mixture of Agents", hint: "Preset corporativo MoA", def: false },
-  { key: "chat_model_switch", label: "Chat · Cambio de modelo", hint: "Hot-swap desde el compositor", def: false },
-  { key: "providers", label: "Providers", hint: "Proveedores y claves de modelo", def: false },
+  { key: "model_main", label: "Model · Main model", hint: "Página Modelo principal: el usuario elige entre los modelos aprobados para sesiones nuevas; el proveedor siempre es la organización", def: false },
+  { key: "model_fallback", label: "Model · Fallback models", hint: "Cadena de modelos de respaldo, solo con modelos aprobados", def: false },
+  { key: "model_moa", label: "Model · Mixture of Agents", hint: "Preset corporativo MoA (selector de modelos y /moa)", def: false },
+  { key: "chat_model_switch", label: "Chat · Cambio de modelo", hint: "Hot-swap desde el compositor, selector de modelos y /model", def: false },
+  { key: "providers", label: "Providers", hint: "Proveedores, claves de modelo, modelos auxiliares por tarea, proveedor/modelo de subagentes y generación de mascotas", def: false },
   { key: "gateways", label: "Gateways", hint: "Conexiones de gateway", def: false },
   { key: "keys", label: "Tools & Keys", hint: "API keys de herramientas y variables de servidor", def: false },
-  { key: "billing", label: "Billing & suscripciones", hint: "Planes, suscripciones y facturación", def: false },
+  { key: "billing", label: "Billing & suscripciones", hint: "Planes, suscripciones, facturación y uso", def: false },
   { key: "web_access", label: "Web access", hint: "Servir la webapp desde este equipo", def: false },
   { key: "browser", label: "Browser", hint: "Navegador integrado", def: false },
   { key: "vault", label: "Passwords & Logins", hint: "Vault y autofill", def: false },
   { key: "voice", label: "Voice", hint: "Modo voz", def: false },
-  { key: "terminal", label: "Advanced · Terminal", hint: "Ejecución de comandos", def: false },
-  { key: "plugins", label: "Plugins & MCP", hint: "Extensiones", def: false },
-  { key: "capabilities", label: "Capabilities", hint: "Skills, plugins, conectores y herramientas", def: false },
-  { key: "messaging", label: "Messaging", hint: "Canales de mensajería", def: false },
+  { key: "terminal", label: "Advanced · Terminal", hint: "Paneles de terminal y modo de aprobación (/approvals) del escritorio. Los comandos del agente se conceden en CLI & Agente → Terminal / shell", def: false },
+  { key: "plugins", label: "Plugins & MCP", hint: "Extensiones, temas del Marketplace e instalación por enlace", def: false },
+  { key: "capabilities", label: "Capabilities", hint: "Skills, plugins, conectores, herramientas y comandos / de skills", def: false },
+  { key: "messaging", label: "Messaging", hint: "Canales de mensajería (/handoff)", def: false },
   { key: "artifacts", label: "Artifacts", hint: "Artefactos generados", def: false },
-  { key: "cron", label: "Scheduled jobs", hint: "Tareas programadas", def: false },
-  { key: "agents", label: "Agents", hint: "Agentes compartidos", def: false },
+  { key: "cron", label: "Scheduled jobs", hint: "Tareas programadas (/goal, /loop, /heartbeat)", def: false },
+  { key: "agents", label: "Agents", hint: "Agentes compartidos y subagentes (/agents, /review, /bg) y sus límites de iteraciones y concurrencia", def: false },
   { key: "profiles", label: "Profiles", hint: "Perfiles del agente", def: false },
-  { key: "memory", label: "Memory & Context", hint: "Memoria del agente", def: true },
+  { key: "memory", label: "Memory & Context", hint: "Memoria del agente (/memory, /journey, /refine)", def: true },
   { key: "sessions", label: "Sessions", hint: "Borrado permanente de chats", def: true },
   { key: "workspace", label: "Workspace", hint: "Archivos y proyectos", def: true },
 ];
@@ -69,10 +70,8 @@ export function PolicyStudioPage() {
   const [allowVault, setAllowVault] = useState(false);
   const [allowPayments, setAllowPayments] = useState(false);
   const [globalPrompt, setGlobalPrompt] = useState(
-    "Eres el asistente de la organización. Responde en español.\nNo reveles información interna ni credenciales.\nCuando no estés seguro, pregunta antes de actuar.",
+    "Eres el asistente de la organización. Responde en español.\nNo reveles información interna ni credenciales.\nCuando no estés seguro, pregunta antes de actuar."
   );
-  const [profileName, setProfileName] = useState("Operaciones");
-  const [profileModel, setProfileModel] = useState("glm-5.2");
   const [saving, setSaving] = useState(false);
 
   async function save() {
@@ -90,7 +89,10 @@ export function PolicyStudioPage() {
           desktop,
           credentials: { allow_credential_vault: allowVault, allow_payment_autofill: allowPayments },
           global_prompt: globalPrompt,
-          profiles: [{ name: profileName, model: profileModel }],
+          // Perfiles: se definen en el editor completo (Policies → Modelos →
+          // Perfiles del agente), con validación de modelo. El creador rápido
+          // no inventa perfiles hardcodeados.
+          profiles: [],
           department_id: departmentId || null,
         },
       });
@@ -133,7 +135,7 @@ export function PolicyStudioPage() {
       </Card>
 
       <Card>
-        <CardHeader title="Desktop app UI" description="Réplica de Settings: lo desactivado no estará disponible en la app." />
+        <CardHeader title="Desktop app UI" description="Réplica de Settings: lo desactivado no estará disponible en la app. Siempre bloqueado: suscripciones upstream, envío de diagnósticos, actualizaciones del runtime, onboarding de proveedores, modelos locales y DevTools." />
         <CardBody>
           <div className="space-y-2">
             {DESKTOP_OPTIONS.map((opt) => (
@@ -187,18 +189,15 @@ export function PolicyStudioPage() {
       </Card>
 
       <Card>
-        <CardHeader title="Perfil predeterminado" description="Perfil de agente + preset de modelo." />
+        <CardHeader title="Perfiles del agente" description="Se definen después, desde el editor completo." />
         <CardBody>
-          <div className="grid gap-3 md:grid-cols-2">
-            <div>
-              <label className="text-xs font-medium">Nombre del perfil</label>
-              <Input value={profileName} onChange={(e) => setProfileName(e.target.value)} />
-            </div>
-            <div>
-              <label className="text-xs font-medium">Modelo</label>
-              <Input value={profileModel} onChange={(e) => setProfileModel(e.target.value)} />
-            </div>
-          </div>
+          <p className="text-xs text-muted">
+            Esta política nace sin perfiles. Cuando quieras ofrecer perfiles en el escritorio
+            (además del <span className="font-mono">default</span>), edítala en{" "}
+            <Link className="underline" href="/policies">Policies</Link> → Modelos → Perfiles del
+            agente: ahí cada perfil lleva nombre y un modelo de la política, y el escritorio
+            gobernado mostrará solo esos.
+          </p>
         </CardBody>
       </Card>
 

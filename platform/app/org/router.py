@@ -21,8 +21,12 @@ router = APIRouter(prefix="/api", dependencies=[Depends(require_mfa)])
 
 class InviteBody(BaseModel):
     email: str
-    # Regla de producto: todo usuario pertenece a un departamento.
-    department_id: str
+    # Regla de producto: todo usuario pertenece a un departamento. Optional
+    # in the BODY on purpose: a required field makes FastAPI answer 422
+    # before the handler runs, so a caller WITHOUT users.invite learned the
+    # schema instead of getting 403. The handler checks the permission first
+    # and validate_invite() rejects a missing department with 422.
+    department_id: str | None = None
     role_key: str = "user"
     display_name: str | None = None
 
@@ -55,9 +59,12 @@ def invite_user(
     principal: Principal = Depends(get_principal),
     conn: Connection = Depends(get_tx),
 ):
-    department_id = require_uuid(body.department_id, "department_id")
     if "users.invite" not in principal.permissions:
         raise permission_denied("Missing permission: users.invite")
+    department_id = (
+        require_uuid(body.department_id, "department_id")
+        if body.department_id else None
+    )
     invite.validate_invite(
         conn, principal, email=body.email,
         department_id=department_id, role_key=body.role_key,

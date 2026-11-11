@@ -140,21 +140,23 @@ def test_provision_full_flow(client, admin_conn):
 
     tenant_id = tenant["id"]
     with admin_conn.cursor() as cur:
-        # AC-ONB-001 (amended by spec 038 D-38-01): no departments declared
-        # -> the tenant is born EMPTY and the org_admin has department NULL.
+        # AC-ONB-001 (spec 038 D-38-01, amended by migration 0044 — no user
+        # without a department): no departments declared -> the tenant is
+        # born with exactly "General" (audited) and the org_admin lands there.
         cur.execute(
-            "SELECT count(*) FROM departments WHERE tenant_id = %s", (tenant_id,)
+            "SELECT id, name FROM departments WHERE tenant_id = %s", (tenant_id,)
         )
-        assert cur.fetchone()[0] == 0
+        depts = cur.fetchall()
+        assert [d[1] for d in depts] == ["General"]
+        cur.execute(
+            "SELECT department_id FROM users WHERE tenant_id = %s", (tenant_id,)
+        )
+        assert [str(r[0]) for r in cur.fetchall()] == [str(depts[0][0])]
         cur.execute(
             "SELECT count(*) FROM audit_log WHERE tenant_id = %s "
             "AND action = 'department.created'", (tenant_id,)
         )
-        assert cur.fetchone()[0] == 0
-        cur.execute(
-            "SELECT department_id FROM users WHERE tenant_id = %s", (tenant_id,)
-        )
-        assert cur.fetchone()[0] is None  # org_admin born unassigned (D-38-01)
+        assert cur.fetchone()[0] == 1
         cur.execute(
             "SELECT count(*) FROM users WHERE tenant_id = %s", (tenant_id,)
         )
@@ -236,7 +238,8 @@ def test_provision_full_flow(client, admin_conn):
         for expected in ("user.created", "role.assigned",
                          "budget.updated", "policy.updated", "model.approved"):
             assert expected in actions
-        assert "department.created" not in actions
+        # 0044: the default "General" department is audited like any other.
+        assert actions.count("department.created") == 1
         cur.execute("SELECT audit_verify_chain(%s)", (tenant_id,))
         assert cur.fetchone()[0][0] == "ok"
 
@@ -284,7 +287,7 @@ def test_provision_full_flow(client, admin_conn):
     after = _counts(admin_conn)
     assert after["tenants"] == before["tenants"] + 1
     # Spec 038 (D-38-01): born with ZERO departments — nothing to add.
-    assert after["departments"] == before["departments"]
+    assert after["departments"] == before["departments"] + 1  # 0044: "General"
     assert after["users"] == before["users"] + 1
     assert after["budgets"] == before["budgets"] + 1
     _state["tenant_id"] = tenant_id
@@ -549,7 +552,7 @@ def test_provider_state_and_healthcheck_endpoints(client):
     assert resp.status_code == 200
     state = resp.json()["tenant"]
     assert state["id"] == _state["tenant_id"]
-    assert state["counts"]["departments"] == 0  # spec 038: born empty
+    assert state["counts"]["departments"] == 1  # 0044: born with "General"
     assert state["counts"]["users"] == 1
     assert state["counts"]["org_budgets"] == 1
     assert state["counts"]["approved_models"] >= 2

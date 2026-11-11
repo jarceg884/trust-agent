@@ -50,3 +50,32 @@ def verify_device_token(settings: Settings, token: str) -> dict:
     except jwt.PyJWTError:
         raise invalid_token("Invalid device token.")
     return claims
+
+
+def verify_device_token_for_refresh(settings: Settings, token: str) -> dict:
+    """Verify an authentic device token that MAY be expired (spec 022 v1.2.0).
+
+    Signature (pinned HS256) and required claims are enforced exactly like
+    :func:`verify_device_token`; only ``exp`` is relaxed. The token must have
+    been issued within ``device_token_refresh_max_age_days`` — an older token
+    is refused, so a leaked copy cannot be refreshed forever. The caller MUST
+    still check that the device row is active (revocation stays immediate).
+    """
+    try:
+        claims = jwt.decode(
+            token,
+            settings.device_token_secret,
+            algorithms=[_DEVICE_ALG],
+            options={
+                "verify_exp": False,
+                "require": ["exp", "iat", "jti", "device_id", "user_id",
+                            "tenant_id"],
+            },
+        )
+    except jwt.PyJWTError:
+        raise invalid_token("Invalid device token.")
+    max_age = timedelta(days=max(0, settings.device_token_refresh_max_age_days))
+    issued_at = datetime.fromtimestamp(int(claims["iat"]), timezone.utc)
+    if datetime.now(timezone.utc) - issued_at > max_age:
+        raise invalid_token("Invalid device token.")
+    return claims

@@ -41,10 +41,14 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-try:  # POSIX only; en Windows el lock degrada a no-op (defense: reuse-first)
+try:  # POSIX: flock
     import fcntl
 except ImportError:  # pragma: no cover - fuera de Linux/macOS
     fcntl = None  # type: ignore[assignment]
+try:  # Windows: LockFileEx por byte (msvcrt.locking)
+    import msvcrt
+except ImportError:  # pragma: no cover - fuera de Windows
+    msvcrt = None  # type: ignore[assignment]
 
 TOOLSET = "trust_agent"
 
@@ -98,8 +102,53 @@ def hermes_home() -> Path:
         return Path.home() / ".hermes"
 
 
+def _named_profile_root(home: Path) -> Path | None:
+    """``<root>`` cuando *home* es un perfil con nombre ``<root>/profiles/<name>``.
+
+    Usa el predicado del core (``hermes_constants.named_profile_home``: exige
+    que ``<root>`` sea un home real de Hermes); fuera del runtime (tests
+    standalone) cae a la forma del path."""
+    try:
+        from hermes_constants import named_profile_home  # type: ignore
+
+        named = named_profile_home(home)
+        return Path(named).parent.parent if named is not None else None
+    except Exception:  # noqa: BLE001 - fuera del runtime de Hermes (tests)
+        if home.parent.name == "profiles" and not home.name.startswith("."):
+            return home.parent.parent
+        return None
+
+
+def device_home() -> Path:
+    """Home que porta el ENROLAMIENTO del dispositivo en el contexto actual.
+
+    Un perfil con nombre creado en el escritorio gobernado NO se enrola
+    aparte: es otro espacio del MISMO empleado en el MISMO dispositivo y lo
+    gobierna el bundle del dispositivo (decisión de producto 2026-11-10:
+    crear perfiles está permitido bajo gobernanza). Resolver ``trust-agent``
+    bajo el home del perfil — sin device token — dejaba cada sesión del
+    perfil en modo restringido "device not enrolled" (todas las tools
+    bloqueadas y sin pin P-26; incidente en vivo con el gateway
+    multiplexado). Orden:
+
+    1. el home del contexto si tiene su PROPIO ``device-token.json`` (el
+       default, o un perfil enrolado aparte — workers del servidor, D-030-09);
+    2. la raíz de perfiles si el contexto es un perfil y la raíz está enrolada;
+    3. el home del contexto (sin enrolamiento → restringido, fail-closed).
+
+    Mismo algoritmo que ``bundle_client.device_home`` (núcleo v2, que no
+    depende de esta lane opcional)."""
+    home = hermes_home()
+    if (home / "trust-agent" / "device-token.json").is_file():
+        return home
+    root = _named_profile_root(home)
+    if root is not None and (root / "trust-agent" / "device-token.json").is_file():
+        return root
+    return home
+
+
 def trust_dir() -> Path:
-    d = hermes_home() / "trust-agent"
+    d = device_home() / "trust-agent"
     d.mkdir(parents=True, exist_ok=True)
     try:  # 0700: aquí viven la clave privada y el device token.
         os.chmod(d, 0o700)
@@ -140,19 +189,44 @@ class _HomeLock:
         self.acquired = False
         self._fh = None
 
+    @staticmethod
+    def _try_lock(fh: Any) -> None:
+        """Lock exclusivo NO bloqueante; OSError si otro lo tiene.
+
+        POSIX ``flock`` y el lock por byte de Windows (``msvcrt.locking`` =
+        ``LockFileEx`` sobre el byte 0) son por handle abierto: excluyen a
+        otros procesos Y a otros hilos del mismo proceso (cada ``__enter__``
+        abre su propio handle). Sin la rama Windows el lock era un no-op en la
+        plataforma principal: el BundleSyncer y el watcher refrescaban el
+        token a la vez y dos enroll concurrentes podían pisarse el one-time.
+        """
+        if fcntl is not None:
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        else:
+            fh.seek(0)
+            msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+
+    @staticmethod
+    def _unlock(fh: Any) -> None:
+        if fcntl is not None:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+        else:
+            fh.seek(0)
+            msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+
     def __enter__(self) -> "_HomeLock":
-        if fcntl is None:
-            self.acquired = True  # no-op: solo queda la defensa reuse-first
+        if fcntl is None and msvcrt is None:
+            self.acquired = True  # sin primitiva de lock: solo queda reuse-first
             return self
         try:
-            fh = (trust_dir() / ".autoenroll.lock").open("a")
+            fh = (trust_dir() / ".autoenroll.lock").open("a+")
         except OSError:
             self.acquired = True  # sin lock disponible: proseguir (best-effort)
             return self
         deadline = time.monotonic() + self.timeout_s
         while True:
             try:
-                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                self._try_lock(fh)
                 self.acquired = True
                 self._fh = fh
                 return self
@@ -163,9 +237,9 @@ class _HomeLock:
                 time.sleep(0.2)
 
     def __exit__(self, *exc: object) -> None:
-        if fcntl is not None and self._fh is not None:
+        if self._fh is not None:
             try:
-                fcntl.flock(self._fh, fcntl.LOCK_UN)
+                self._unlock(self._fh)
             except OSError:
                 pass
             self._fh.close()
@@ -752,8 +826,8 @@ def oidc_issuer() -> str | None:
     env = os.environ.get("TRUST_OIDC_ISSUER", "").strip()
     if env:
         return env
-    try:
-        for line in (hermes_home() / ".env").read_text(encoding="utf-8").splitlines():
+    try:  # el binding del tenant vive en el home ENROLADO, no en un perfil
+        for line in (device_home() / ".env").read_text(encoding="utf-8").splitlines():
             if line.startswith("TRUST_OIDC_ISSUER="):
                 return line.split("=", 1)[1].strip() or None
     except OSError:
@@ -766,7 +840,7 @@ def oidc_client_id() -> str:
     if env:
         return env
     try:
-        for line in (hermes_home() / ".env").read_text(encoding="utf-8").splitlines():
+        for line in (device_home() / ".env").read_text(encoding="utf-8").splitlines():
             if line.startswith("TRUST_OIDC_CLIENT_ID="):
                 return line.split("=", 1)[1].strip() or "trust-agent-web"
     except OSError:
@@ -776,6 +850,20 @@ def oidc_client_id() -> str:
 
 def _browser_login_cooldown_path() -> Path:
     return trust_dir() / ".browser-login-last-attempt"
+
+
+def _admin_activated() -> bool:
+    """True when this home was activated with an admin one-time token.
+
+    The desktop's activation flow (spec 044) writes ``enrollment.json`` with
+    the portal it redeemed against; such a home has no OIDC login to recover
+    with, so the watcher must never open a browser for it.
+    """
+    try:
+        data = json.loads((trust_dir() / "enrollment.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(data, dict) and bool(data.get("portal_url") or data.get("activated_at"))
 
 
 def _browser_login_on_cooldown() -> bool:
@@ -937,12 +1025,30 @@ def auto_enroll_once(poll_timeout_s: float = AUTO_ENROLL_POLL_S) -> str:
     device = load_device_token()
     if device is not None and not device_token_expired(device):
         return "already_enrolled"
+    if device is not None and device.get("token"):
+        # Spec 022 v1.2.0 (D-HRB-03 amend 2): an enrolled desktop whose token
+        # merely expired (closed longer than the TTL) trades its own
+        # authentic token for a fresh one first. Opening the browser for an
+        # OIDC login here was wrong for admin-activated desktops: they never
+        # had an id_token, so the watcher popped a login tab every cycle.
+        refreshed = refresh_expired_device_token()
+        if refreshed == "active":
+            return "already_enrolled"
+        if refreshed in ("network", "busy"):
+            return refreshed
+        # "rejected" (revoked / too old): only an OIDC-enrolled home can
+        # still recover below with a fresh id_token.
     org_code = org_binding()
     if not org_code:
         return "no_binding"
     try:
         id_token = _read_id_token(None)
     except FileNotFoundError:
+        if _admin_activated():
+            # Spec 044: activated with the admin's one-time token — there is
+            # no org browser login to fall back to. The employee needs a new
+            # activation token; the desktop shows the restricted state.
+            return "needs_activation"
         # Vinculado a una organización pero sin credenciales todavía: abre
         # el navegador real al login de la organización (una vez por
         # cooldown, nunca en cada tick de 15s) en vez de esperar pasivo un
@@ -973,6 +1079,62 @@ def auto_enroll_once(poll_timeout_s: float = AUTO_ENROLL_POLL_S) -> str:
         _log("auto_enroll_attempt", org_code=org_code, outcome=outcome,
              detail=info.get("message", ""))
     return outcome
+
+
+def refresh_expired_device_token() -> str:
+    """Refresh D-HRB-03 amend 2 (spec 022 v1.2.0): token expirado → fresco.
+
+    Los escritorios activados por el admin con token one-time (spec 044) no
+    tienen ``id-token.txt`` de ``trust-login``: su propio device token
+    auténtico es la credencial. ``POST /api/devices/token/refresh`` devuelve
+    un token fresco si el device sigue ``active`` y el token se emitió dentro
+    de la ventana del server; 401 si fue revocado, es muy viejo o forjado.
+
+    -> "active" (token fresco en disco) | "rejected" (el server no lo
+    refresca: revocado/viejo/endpoint ausente) | "network" | "no_token" |
+    "busy" (otro proceso del home tiene el lock).
+    """
+    device = load_device_token()
+    if device is None or not device.get("token"):
+        return "no_token"
+    with _HomeLock(timeout_s=AUTOENROLL_LOCK_WAIT_S) as lock:
+        if not lock.acquired:
+            return "busy"
+        # Otro proceso del home pudo refrescar ya (mismo lock):
+        device = load_device_token()
+        if device is None or not device.get("token"):
+            return "no_token"
+        if not device_token_expired(device):
+            return "active"
+        try:
+            status, payload = _request(
+                "POST", "/api/devices/token/refresh",
+                {"device_token": device["token"]},
+            )
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            _log("device_token_refresh_failed", outcome="network", detail=str(exc))
+            return "network"
+        fresh = payload.get("device_token") if status == 200 else None
+        if not fresh:
+            _log("device_token_refresh_failed", outcome="rejected", status=status,
+                 detail=_error_message(payload, ""))
+            return "rejected"
+        path = trust_dir() / "device-token.json"
+        data: dict[str, Any] = {}
+        try:
+            existing = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(existing, dict):
+                data.update(existing)  # preserva org, model_key, model_base_url…
+        except (OSError, ValueError):
+            pass
+        data.update({
+            "device_id": str(payload.get("device_id") or device["device_id"]),
+            "token": str(fresh),
+            "renewed_at": int(time.time()),
+        })
+        _write_secret(path, json.dumps(data, indent=2))
+    _log("device_token_refreshed", device_id=data.get("device_id"))
+    return "active"
 
 
 def recover_expired_token(poll_timeout_s: float = AUTO_ENROLL_POLL_S) -> str:
@@ -1028,7 +1190,12 @@ def _auto_enroll_loop(stop: threading.Event) -> None:
         outcome = auto_enroll_once()
         if outcome in ("already_enrolled", "active"):
             return
-        if outcome in ("no_binding", "no_id_token"):
+        if outcome == "needs_activation":
+            # Admin-activated home whose token cannot be refreshed (revoked
+            # or too old): nothing to do until a new activation lands; a slow
+            # re-check keeps the log quiet and picks up the new token.
+            backoff = 300.0
+        elif outcome in ("no_binding", "no_id_token"):
             backoff = max(backoff, 60.0)  # espera a que el desktop escriba
         elif outcome == "network":
             backoff = min(60.0, backoff * 2.0)

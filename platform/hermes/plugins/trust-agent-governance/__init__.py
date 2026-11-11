@@ -55,6 +55,7 @@ Config por entorno (perfil del usuario):
 """
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from . import bundle_client, policy_contract, state
@@ -91,6 +92,36 @@ def _mmss(seconds: Any) -> str:
     except (TypeError, ValueError):
         return "n/a"
     return f"{seconds // 60} min {seconds % 60:02d} s"
+
+
+def _connectivity(snapshot: dict[str, Any]) -> tuple[str, str]:
+    """(status-line, per-turn context) for the control-plane connection.
+
+    The bundle's ``exp`` is renewed on EVERY successful sync, so its remaining
+    validity is NOT "offline grace" while the device is online. Reporting it
+    as "Offline grace: 58 min remaining" on every turn made the agent believe
+    it was offline and running from a stale policy (live pilot, 2026-11-10).
+    Offline grace only applies when the last sync FAILED.
+    """
+    grace = snapshot.get("grace_remaining_seconds")
+    error = snapshot.get("last_sync_error")
+    if error:
+        return (
+            f"OFFLINE GRACE — last sync failed ({error}); running from the "
+            f"signed cache, {_mmss(grace)} left before RESTRICTED mode",
+            f"Control plane UNREACHABLE: offline grace, {_mmss(grace)} left "
+            "before restricted mode. ",
+        )
+    synced_at = snapshot.get("last_sync_at")
+    if isinstance(synced_at, (int, float)):
+        ago = f"{_mmss(time.time() - float(synced_at))} ago"
+    else:
+        ago = "at startup"
+    return (
+        f"online — synced {ago}; policy changes arrive automatically "
+        "(no offline grace in use)",
+        f"Control plane: online, policy synced {ago}. ",
+    )
 
 
 def _budget_line(snapshot: dict[str, Any]) -> str:
@@ -140,7 +171,7 @@ def _handle_governance_status(args: dict[str, Any] | None = None, **_: Any) -> s
             "  device (/trust-enroll) or check connectivity to the\n"
             "  organization's control plane."
         )
-    grace = snapshot.get("grace_remaining_seconds")
+    sync_line = _connectivity(snapshot)[0]
     lines = [
         "Trust Agent — governed session state (signed bundle)",
         f"  Mode:               {str(snapshot.get('mode', 'normal')).upper()}",
@@ -152,7 +183,7 @@ def _handle_governance_status(args: dict[str, Any] | None = None, **_: Any) -> s
         f"  Allowed tools:      {', '.join(bundle.get('allowed_tools') or []) or 'none'}",
         f"  Allowed connectors: {', '.join(bundle.get('allowed_connectors') or []) or 'none'}",
         f"  Unbind mode:        {bundle.get('unbind_mode')}",
-        f"  Offline grace:      {_mmss(grace)} remaining",
+        f"  Control plane:      {sync_line}",
     ]
     if snapshot.get("last_sync_error"):
         lines.append(f"  Last sync error:    {snapshot['last_sync_error']}")
@@ -196,6 +227,7 @@ def _on_pre_llm_call(**_: Any) -> dict[str, str] | None:
         if cutoffs
         else ""
     )
+    sync_context = _connectivity(snapshot)[1]
     return {
         "context": (
             "[organization governance] "
@@ -203,7 +235,7 @@ def _on_pre_llm_call(**_: Any) -> dict[str, str] | None:
             f"Budget remaining — {_budget_line(snapshot)}.{cutoff_note} "
             f"Approved models: {', '.join(bundle.get('approved_models') or []) or 'none'}. "
             f"Allowed tools: {', '.join(bundle.get('allowed_tools') or []) or 'none'}. "
-            f"Offline grace: {_mmss(snapshot.get('grace_remaining_seconds'))} remaining. "
+            + sync_context
             + PRECEDENCE_CLAUSE
         )
     }

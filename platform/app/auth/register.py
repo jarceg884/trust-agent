@@ -126,19 +126,25 @@ def register_user(
     # DB rows + audit in ONE tenant transaction.
     with engine.begin() as conn:
         set_tenant(conn, tenant_id)
+        from ..org.departments import ensure_default_department
+
+        # 0044: the new user needs a department ("General" first, created
+        # if the org has none — the subquery alone yielded NULL there).
+        department_id = ensure_default_department(
+            conn, tenant_id=tenant_id, actor_role="user",
+        )
         row = conn.execute(
             text(
                 "INSERT INTO users (id, tenant_id, department_id, email, "
                 " display_name, status, mfa_enrolled, oidc_subject) "
                 "VALUES (CAST(:id AS uuid), CAST(:tid AS uuid), "
-                " (SELECT id FROM departments WHERE tenant_id = CAST(:tid AS uuid) "
-                "  ORDER BY (name = 'General') DESC, created_at LIMIT 1), "
+                " CAST(:dept AS uuid), "
                 " :email, :display, 'active', false, :sub) "
                 "ON CONFLICT (tenant_id, email) DO NOTHING "
                 "RETURNING id"
             ),
             {
-                "id": str(_uuid.uuid4()), "tid": tenant_id,
+                "id": str(_uuid.uuid4()), "tid": tenant_id, "dept": department_id,
                 "email": email, "display": display_name.strip(), "sub": kc_sub,
             },
         ).mappings().first()
@@ -186,18 +192,20 @@ def auto_provision_brokered(
     Returns the new user row id. Caller has already checked the
     ``allow_self_registration`` policy.
     """
+    from ..org.departments import ensure_default_department
+
+    department_id = ensure_default_department(conn, tenant_id=tenant_id, actor_role="user")
     row = conn.execute(
         text(
             "INSERT INTO users (id, tenant_id, department_id, email, "
             " display_name, status, mfa_enrolled, oidc_subject) "
             "VALUES (CAST(:id AS uuid), CAST(:tid AS uuid), "
-            " (SELECT id FROM departments WHERE tenant_id = CAST(:tid AS uuid) "
-            "  ORDER BY (name = 'General') DESC, created_at LIMIT 1), "
+            " CAST(:dept AS uuid), "
             " :email, :display, 'active', false, :sub) "
             "RETURNING id"
         ),
         {
-            "id": str(_uuid.uuid4()), "tid": tenant_id,
+            "id": str(_uuid.uuid4()), "tid": tenant_id, "dept": department_id,
             "email": email, "display": display_name, "sub": sub,
         },
     ).mappings().first()

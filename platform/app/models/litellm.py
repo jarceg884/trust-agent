@@ -164,6 +164,28 @@ class LiteLLMClient:
             )
         return resp.json()
 
+    def update_key_models(self, key_hash: str, models: list[str]) -> dict:
+        """POST /key/update re-alcanceando la lista ``models`` de la clave.
+
+        Spec 044: cuando la política retira un modelo, la clave del gateway
+        debe seguirlo — sin esto, un modelo desautorizado sigue respondiendo
+        con claves emitidas antes del cambio (verificado en vivo: HTTP 200
+        tras quitarlo de la política). Nunca null/[]: /key/update trata null
+        como CLEAR y una lista vacía permitiría TODO (fail-open).
+        """
+        if not models:
+            raise ValueError("Refusing to re-scope a key to an empty model list.")
+        resp = self._request(
+            "POST", "/key/update",
+            json={"key": key_hash, "models": models},
+        )
+        if resp.status_code != 200:
+            raise service_unavailable(
+                f"LiteLLM /key/update failed: {resp.status_code} "
+                f"{resp.text[:200]}"
+            )
+        return resp.json()
+
     # --- Model registration (spec 032, dynamic discovery) -------------------
 
     def add_model(

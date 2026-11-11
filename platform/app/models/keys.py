@@ -16,6 +16,11 @@ from ..errors import not_found, validation_failed
 from . import access
 from .litellm import LiteLLMClient, budget_duration_for, get_litellm
 
+# Deny-all scope for a gateway key (rescope_user_keys). LiteLLM has no "no models" value —
+# `models: []` means every model — so a key with nothing approved is pinned to this name, which
+# no deployment serves: every request is refused (403) until a non-empty rescope restores it.
+NO_MODELS_SENTINEL = "trust-agent:no-approved-models"
+
 
 def _target_principal(conn: Connection, tenant_id: str, user_id: str) -> Principal:
     """Build a Principal for the target user (same tenant scope — RLS)."""
@@ -66,6 +71,14 @@ def issue_key(
     litellm = litellm or get_litellm()
     target = _target_principal(conn, principal.tenant_id, user_id)
     models = access.effective_models_for_user(conn, target)
+    # Spec 044: the key is born with the scope the signed bundle approves. Model Access alone
+    # is wider whenever the Policy Studio lists fewer models, and only the device's first
+    # bundle sync used to narrow the key — a client that redeemed an enrollment token and
+    # never synced kept models outside the policy. Imported here as compile_bundle_payload does.
+    from ..policy_bundles.router import effective_bundle_for_user
+
+    policy_models = (effective_bundle_for_user(conn, user_id) or {}).get("models") or []
+    models = access.narrow_to_policy_models(models, list(policy_models))
     if not models:
         # Fail closed: a LiteLLM key with models=[] would allow EVERYTHING.
         raise validation_failed(
@@ -178,3 +191,61 @@ def list_keys_for_user(conn: Connection, user_id: str) -> list[dict]:
         }
         for r in rows
     ]
+
+
+def rescope_user_keys(
+    conn: Connection,
+    principal: Principal,
+    *,
+    user_id: str,
+    models: list[str],
+    litellm: LiteLLMClient | None = None,
+) -> int:
+    """Re-alcancea las claves ACTIVAS del usuario a ``models`` (spec 044).
+
+    Una clave se emite con los modelos aprobados DEL MOMENTO (issue_key); si
+    la política luego retira un modelo, la clave vieja lo sigue aceptando en
+    el gateway. Se llama desde el sync del bundle para que cada dispositivo
+    converja su clave a la política que acaba de recibir.
+
+    ``models`` vacío = denegar todo. LiteLLM lee ``[]`` como "todos los
+    modelos" y ``null`` como "limpiar", así que ninguno de los dos se envía
+    jamás: la clave queda fijada a ``NO_MODELS_SENTINEL``, un nombre que ningún
+    deployment sirve (verificado contra el gateway real: todo modelo → 403, y
+    el siguiente re-alcanceo no vacío la restaura). La base guarda ``[]`` —
+    la verdad de la política — para que el próximo sync compare contra eso.
+    Antes, ``[]`` era un no-op y la clave conservaba su alcance anterior.
+    """
+    litellm = litellm or get_litellm()
+    gateway_models = list(models) if models else [NO_MODELS_SENTINEL]
+    rows = conn.execute(
+        text(
+            "SELECT id, alias, litellm_key_hash, allowed_models FROM api_keys "
+            "WHERE tenant_id = CAST(:t AS uuid) AND user_id = CAST(:u AS uuid) "
+            "AND status = 'active'"
+        ),
+        {"t": principal.tenant_id, "u": user_id},
+    ).mappings().all()
+    rescoped = 0
+    for row in rows:
+        current = list(row["allowed_models"] or [])
+        if sorted(set(current)) == sorted(set(models)):
+            continue
+        litellm.update_key_models(row["litellm_key_hash"], gateway_models)
+        conn.execute(
+            text(
+                "UPDATE api_keys SET allowed_models = CAST(:m AS jsonb), "
+                "updated_at = now() WHERE id = :id"
+            ),
+            {"m": json.dumps(models), "id": row["id"]},
+        )
+        audit.emit(
+            conn, tenant_id=principal.tenant_id,
+            actor_role=principal.role_keys[0] if principal.role_keys else "user",
+            action="model.key_rescoped", actor_id=principal.user_id,
+            target_type="user", target_id=user_id,
+            payload={"alias": row["alias"], "allowed_models": models,
+                     "previous": current},
+        )
+        rescoped += 1
+    return rescoped

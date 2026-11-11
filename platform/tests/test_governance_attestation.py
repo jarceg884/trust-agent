@@ -432,6 +432,42 @@ def test_ac_goh_017_veto_counts_in_next_attestation(
     assert "attestation_sent" in log
 
 
+def test_attestation_skips_expired_device_token_not_revoked(
+    tag, tmp_path, monkeypatch, pinned_pubkey_file
+):
+    """Spec 022 v1.2.0: un token EXPIRADO no se envía (el server diría 401 y
+    eso se trataría como revocación: borraría el bundle firmado y marcaría
+    revoked a un escritorio que solo estuvo cerrado más que el TTL)."""
+    import time as _time
+
+    import jwt as _jwt
+
+    trust = _plugin_env(monkeypatch, tmp_path, "http://controlplane.invalid",
+                        pinned_pubkey_file)
+    now = int(_time.time())
+    expired = _jwt.encode(
+        {"device_id": DEVICE_ALICE, "user_id": "u", "tenant_id": "t",
+         "jti": "x", "iat": now - 4500, "exp": now - 3600},
+        "test-device-secret", algorithm="HS256",
+    )
+    (trust / "device-token.json").write_text(
+        json.dumps({"device_id": DEVICE_ALICE, "token": expired}), encoding="utf-8"
+    )
+    (trust / "governance-bundle.jws").write_text("cached-bundle", encoding="utf-8")
+    tag.state.reset_state()
+    calls = []
+    monkeypatch.setattr(tag.attestation, "post_attestation",
+                        lambda *a, **k: calls.append(1) or {})
+
+    assert tag.attestation.send_attestation(trigger="startup") is None
+    assert calls == [], "no se envía con un token expirado"
+    assert tag.state.get_state().snapshot().get("reason") != "revoked"
+    assert (trust / "governance-bundle.jws").exists()
+    log = (trust / "plugin.log").read_text(encoding="utf-8")
+    assert "device token expired" in log
+    assert "device_unauthorized" not in log
+
+
 def test_attestation_registers_on_session_start_hook(tag):
     """register(ctx) cablea on_session_start (API pública) y el callback no
     bloquea (envío en hilo daemon — el hook es timeout-bounded en el core)."""
