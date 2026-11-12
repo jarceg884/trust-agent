@@ -75,6 +75,15 @@ x-api-env: &api-env
   # cliente aporte en topología BYOK) desde el .env. Vacío ⇒ fail-closed.
   TRUST_LITELLM_BASE_URL: ${TRUST_LITELLM_BASE_URL:-http://127.0.0.1:39989}
   TRUST_LITELLM_MASTER_KEY: ${TRUST_LITELLM_MASTER_KEY:-sk-master-test}
+  # Origen público que reciben empleados y desktops (edge de la consola, p.ej.
+  # http://<ip-pública>:3100, o un dominio TLS): api_base de desktop-config,
+  # link de descarga del admin, instalador CLI y URL de actualización.
+  # Vacío ⇒ el origen del propio request (acceso directo, comportamiento previo).
+  TRUST_PUBLIC_API_BASE_URL: ${TRUST_PUBLIC_API_BASE_URL:-}
+  # Gateway de modelos que reciben los desktops: con el edge, {origen}/llm (la
+  # consola reenvía SOLO la inferencia OpenAI-compatible, nunca admin/UI).
+  # Vacío ⇒ TRUST_LITELLM_BASE_URL o el host del request en :4000.
+  TRUST_LITELLM_PUBLIC_BASE_URL: ${TRUST_LITELLM_PUBLIC_BASE_URL:-}
   # Upstream MaaS vivo (spec 018 §5, D-018-07): el refresh central reconcilia
   # el catálogo contra GET {endpoint}/models con la key del proveedor (en
   # memoria, por uso; jamás en respuestas/logs/audit). Vacío ⇒ el refresh
@@ -271,6 +280,11 @@ services:
       TRUST_DOWNLOAD_BASE_URL: ${TRUST_DOWNLOAD_BASE_URL:-http://127.0.0.1:8000}
       # Puerto de arranque (lo lee el CMD del Dockerfile y el healthcheck).
       TRUST_CONSOLE_PORT: ${TRUST_CONSOLE_PORT:-3100}
+      # Edge público (src/app/{download,api/devices,api/me,llm}): LiteLLM tal como
+      # lo alcanza la consola (host network) — solo se reenvía su inferencia.
+      TRUST_LITELLM_INTERNAL_URL: http://127.0.0.1:${TRUST_LITELLM_PORT:-4000}
+      # Proxies inversos delante de la consola (vacío: la consola ES el edge).
+      TRUST_EDGE_TRUSTED_PROXIES: ${TRUST_EDGE_TRUSTED_PROXIES:-}
     depends_on:
       api:
         condition: service_healthy

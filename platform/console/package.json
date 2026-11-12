@@ -6,7 +6,8 @@
     "dev": "next dev --port 3100",
     "build": "next build",
     "start": "next start --port 3100",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:edge": "node --experimental-strip-types --no-warnings --test scripts/edge-routes.test.mjs"
   },
   "dependencies": {
     "lucide-react": "^1.61.0",

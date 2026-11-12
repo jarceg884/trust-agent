@@ -263,3 +263,51 @@ def test_download_link_permission_gates(client, idp):
     assert r.status_code == 403
     # Y sin sesión no hay gestión (el router exige MFA).
     assert client.get("/api/download-link").status_code == 401
+
+
+# --- Public edge (console :3100, 2026-11-12) ----------------------------------
+# The control plane is published through the console's public port, which forwards
+# /download/**, the device API and /llm/** to the API and LiteLLM on loopback. A request
+# that crossed that edge reaches the API as http://127.0.0.1:8000: whatever the API tells an
+# employee (api_base, the CLI installer URL, the admin's link, the model gateway) must be
+# the public origin, never the edge's loopback upstream.
+EDGE = "http://203.0.113.10:3100"
+
+
+@pytest.fixture
+def public_edge(monkeypatch):
+    from app.config import get_settings
+
+    monkeypatch.setenv("TRUST_PUBLIC_API_BASE_URL", EDGE + "/")
+    monkeypatch.setenv("TRUST_LITELLM_PUBLIC_BASE_URL", EDGE + "/llm")
+    get_settings.cache_clear()
+    yield EDGE
+    monkeypatch.delenv("TRUST_PUBLIC_API_BASE_URL")
+    monkeypatch.delenv("TRUST_LITELLM_PUBLIC_BASE_URL")
+    get_settings.cache_clear()
+
+
+def test_desktop_config_keeps_the_request_origin_by_default(client):
+    c = _ip_client(client, "198.51.100.120")
+    r = c.get("/download/tenant-a/desktop-config")
+    assert r.status_code == 200, r.text
+    assert r.json()["api_base"] == str(c.base_url).rstrip("/")
+
+
+def test_public_edge_is_what_employees_are_told(client, idp, public_edge):
+    c = _ip_client(client, "198.51.100.121")
+
+    config = c.get("/download/tenant-a/desktop-config")
+    assert config.status_code == 200, config.text
+    assert config.json()["api_base"] == public_edge          # trailing "/" normalized
+    assert config.json()["litellm_base"] == public_edge + "/llm"
+
+    page = c.get("/download/tenant-a")
+    assert page.status_code == 200
+    assert f"{public_edge}/download/tenant-a/cli" in page.text
+    assert str(c.base_url) not in page.text.replace(public_edge, "")
+
+    alice = mint(client, idp, "alice")
+    link = client.get("/api/download-link", headers=bearer_headers(alice))
+    assert link.status_code == 200, link.text
+    assert link.json()["url"] == f"{public_edge}/download/tenant-a"

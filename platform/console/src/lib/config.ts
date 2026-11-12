@@ -40,6 +40,11 @@ export const config = {
    */
   downloadBaseUrl:
     process.env.TRUST_DOWNLOAD_BASE_URL ?? process.env.TRUST_API_BASE_URL ?? "http://127.0.0.1:8000",
+  /**
+   * LiteLLM as the console reaches it (host networking ⇒ loopback). The public edge
+   * forwards its inference routes under /llm/** (src/app/llm) — never its admin API/UI.
+   */
+  litellmInternalUrl: process.env.TRUST_LITELLM_INTERNAL_URL ?? "http://127.0.0.1:4000",
 } as const;
 
 /** Slug válido de organización (realm Keycloak / tenants.slug). */

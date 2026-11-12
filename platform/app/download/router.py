@@ -38,6 +38,7 @@ from ..config import get_settings
 from ..db import get_engine, get_migrator_engine, set_tenant
 from ..errors import ApiError, not_found, permission_denied, tenant_suspended
 from ..org import branding as branding_service
+from ..public_urls import public_api_base
 from . import bundle as bundle_builder
 from . import cli as cli_builder
 from . import installers as installers_service
@@ -196,7 +197,7 @@ def download_page(slug: str, request: Request):
             branding=branding,
             logo_data_uri=logo_uri,
             enabled=bool(tenant["download_enabled"]),
-            api_base=str(request.base_url).rstrip("/"),
+            api_base=public_api_base(request),
             installers=installers_service.available_installers(
                 tenant["slug"]
             ),
@@ -243,7 +244,7 @@ def desktop_config(slug: str, request: Request):
             "product_name": branding.get("product_name") or "Trust Agent",
             "tagline": branding.get("tagline") or "",
             "accent_color": branding.get("accent_color") or "#4F46E5",
-            "api_base": str(request.base_url).rstrip("/"),
+            "api_base": public_api_base(request),
             "litellm_base": _public_litellm_base(request),
             "model": _tenant_default_model(str(tenant["id"])),
             "skin": f"trust-{tenant['slug']}",
@@ -278,9 +279,9 @@ def download_bundle(slug: str, request: Request):
     if not tenant["download_enabled"]:
         raise _link_disabled()
 
-    # api_base: el origen desde el que el empleado descargó (request.base_url
-    # — el mismo que usa el admin para el link estable, D-023-01/06).
-    api_base = str(request.base_url).rstrip("/")
+    # api_base: el origen público que el empleado alcanza (D-023-01/06) —
+    # TRUST_PUBLIC_API_BASE_URL o el origen del request.
+    api_base = public_api_base(request)
     branding, _ = _tenant_branding(str(tenant["id"]))
     payload, sha256, filename = bundle_builder.build_bundle(
         slug=tenant["slug"],
@@ -355,7 +356,7 @@ def download_cli_installer(slug: str, request: Request):
 
     # api_base: el origen desde el que el empleado descargó (D-023-01/06) —
     # el instalador apunta el binding y la descarga del bundle a ESTE origen.
-    api_base = str(request.base_url).rstrip("/")
+    api_base = public_api_base(request)
     branding, _ = _tenant_branding(str(tenant["id"]))
     script = cli_builder.build_cli_installer(
         slug=tenant["slug"],
@@ -564,7 +565,7 @@ def _link_state(conn: Connection, request: Request) -> dict:
     ).mappings().first()
     if row is None:
         raise not_found("Tenant not found in scope.")
-    base = str(request.base_url).rstrip("/")
+    base = public_api_base(request)
     return {
         "url": f"{base}/download/{row['slug']}",
         "enabled": bool(row["download_enabled"]),

@@ -18,6 +18,10 @@ COPY . .
 RUN npm run build
 
 ENV NODE_ENV=production
+# Edge público (2026-11-12): la IP del cliente es el peer TCP, nunca un
+# X-Forwarded-For que él mismo envíe (edge-client-address.cjs). Detrás de un
+# proxy inverso: TRUST_EDGE_TRUSTED_PROXIES. Solo runtime (después del build).
+ENV NODE_OPTIONS=--require=/app/edge-client-address.cjs
 EXPOSE 3100
 # Puerto desde el entorno (t_b62edff2): default dev 3100; el .env lo cambia
 # sin rebuild (TRUST_CONSOLE_PORT). Next arranca en 0.0.0.0.

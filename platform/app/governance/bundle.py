@@ -54,6 +54,7 @@ from ..errors import ApiError, device_not_authorized, invalid_token
 from ..models import access as model_access
 from . import budgets as budgets_service
 from ..models import keys as keys_service
+from ..public_urls import public_api_base
 from . import jws_keys
 from .service import effective_policy
 
@@ -616,7 +617,7 @@ def update_check(
         published_git_rev and info
         and published_git_rev != (current_git_rev or None)
     )
-    url_base = str(request.base_url).rstrip("/")
+    url_base = public_api_base(request)
     return {
         **base,
         "update_available": update_available,
