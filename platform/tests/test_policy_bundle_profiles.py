@@ -1,41 +1,46 @@
-"""Spec 044 — perfiles de la política: validación, roundtrip y bundle.
+"""Spec 045 (D-045-04) — perfiles de la política: vienen del marketplace.
 
-Incidente (pilot e2e-lab, 2026-11-10): el admin activó el switch Profiles y el
-escritorio mostró el rail, pero la política tenía la lista de perfiles VACÍA —
-el editor de la consola mandaba ``profiles: []`` en cada PUT y el servidor
-escribe lo que recibe, así que editar la política borraba los perfiles. El
-empleado además podía tocar perfiles locales que el gateway no sirve
-(``profile_mismatch``).
-
-Contrato probado aquí (la mitad servidor):
-  1. un perfil es ``{name, model}`` con nombre y modelo, sin duplicados;
-  2. el modelo del perfil debe estar entre los ``models`` de la política
-     (un perfil no puede abrir la puerta a un modelo no concedido);
-  3. create y update persisten la lista tal cual (el editor la carga y la
-     manda; el servidor ya no recibe ``[]`` por accidente);
-  4. el bundle firmado que baja el dispositivo lleva ``policy_profiles``.
+Antes (spec 044) un perfil era ``{name, model}``; desde spec 045 la política elige perfiles del
+marketplace — ``[{profile_id, model}]`` — y marca ``default_profile_id``. Contrato probado aquí
+(la mitad servidor):
+  1. cada perfil existe y está activo en el marketplace del tenant, sin duplicados;
+  2. el modelo del perfil debe estar entre los ``models`` de la política (regla de spec 044:
+     un perfil no puede abrir la puerta a un modelo no concedido);
+  3. con perfiles, el default es obligatorio y debe ser uno de ellos;
+  4. create y update persisten la lista normalizada y el default (regresión del wipe de
+     spec 044: el editor la carga y la manda; el servidor no recibe ``[]`` por accidente);
+  5. el bundle firmado que baja el dispositivo lleva ``policy_profiles``.
 """
+import uuid
+
 import jwt as pyjwt
+import pytest
 
-from conftest import DEPT_A1, USER_ALICE, bearer_headers, mint
-
-PROFILES = [{"name": "Operaciones", "model": "glm-5.2"}]
+from conftest import DEPT_A1, bearer_headers, mint
 
 
 def _admin(client, idp):
     return bearer_headers(mint(client, idp, "alice"))
 
 
-def _body(**overrides):
+@pytest.fixture
+def factory_ids(client, idp):
+    resp = client.get("/api/marketplace/profiles", headers=_admin(client, idp))
+    assert resp.status_code == 200, resp.text
+    return {p["factory_key"]: p["id"] for p in resp.json()["profiles"] if p["source"] == "factory"}
+
+
+def _body(profiles, default, **overrides):
     body = {
-        "name": "perfiles-check",
+        "name": f"perfiles-check-{uuid.uuid4().hex[:6]}",
         "description": "",
         "desktop": {"profiles": True},
         "credentials": {},
         "global_prompt": "",
-        "profiles": PROFILES,
+        "profiles": profiles,
+        "default_profile_id": default,
         "contracts": [],
-        "models": ["glm-5.2"],
+        "models": ["glm-5.2", "glm-5.3"],
         "default_model": "glm-5.2",
         "agents": [],
         "department_id": DEPT_A1,
@@ -45,81 +50,91 @@ def _body(**overrides):
     return body
 
 
-def test_profiles_roundtrip_and_update_keeps_them(client, idp):
+def test_profiles_roundtrip_and_update_keeps_them(client, idp, factory_ids):
     admin = _admin(client, idp)
-    created = client.post("/api/policy-bundles", json=_body(), headers=admin)
+    analyst, coder = factory_ids["analyst"], factory_ids["coder"]
+    profiles = [
+        {"profile_id": analyst, "model": "glm-5.2", "ignored": "dropped by the server"},
+        {"profile_id": coder, "model": "glm-5.3"},
+    ]
+    created = client.post("/api/policy-bundles", json=_body(profiles, coder), headers=admin)
     assert created.status_code == 201, created.text
     bundle_id = created.json()["id"]
+    expected = [{"profile_id": analyst, "model": "glm-5.2"}, {"profile_id": coder, "model": "glm-5.3"}]
     try:
-        assert created.json()["profiles"] == PROFILES
-
-        # PUT con la lista en el body: persiste (regresión del wipe — el
-        # editor de la consola antes mandaba [] y borraba los perfiles).
+        assert created.json()["profiles"] == expected
+        assert created.json()["default_profile_id"] == coder
         updated = client.put(
             f"/api/policy-bundles/{bundle_id}",
-            json=_body(name="perfiles-check-2"),
+            json=_body(profiles, analyst, name=created.json()["name"]),
             headers=admin,
         )
         assert updated.status_code == 200, updated.text
-        assert updated.json()["profiles"] == PROFILES
+        assert updated.json()["profiles"] == expected
+        assert updated.json()["default_profile_id"] == analyst
     finally:
         client.delete(f"/api/policy-bundles/{bundle_id}", headers=admin)
 
 
-def test_profile_model_must_be_in_the_policy_models(client, idp):
+def test_profile_model_must_be_in_the_policy_models(client, idp, factory_ids):
     admin = _admin(client, idp)
-    # El perfil nombra un modelo que la política NO concede.
+    ops = factory_ids["ops"]
     resp = client.post(
         "/api/policy-bundles",
-        json=_body(profiles=[{"name": "Hueco", "model": "glm-5.3"}]),
+        json=_body([{"profile_id": ops, "model": "glm-9"}], ops),
         headers=admin,
     )
     assert resp.status_code == 422, resp.text
     assert "no está entre los modelos" in resp.json()["error"]["message"]
 
-    # Lo mismo en UPDATE: la validación no se salta por la vía de edición.
-    created = client.post("/api/policy-bundles", json=_body(), headers=admin)
-    assert created.status_code == 201, created.text
-    bundle_id = created.json()["id"]
-    try:
-        resp = client.put(
-            f"/api/policy-bundles/{bundle_id}",
-            json=_body(profiles=[{"name": "Hueco", "model": "glm-5.3"}]),
-            headers=admin,
-        )
-        assert resp.status_code == 422, resp.text
-    finally:
-        client.delete(f"/api/policy-bundles/{bundle_id}", headers=admin)
 
-
-def test_profile_entries_validated(client, idp):
+def test_profile_entries_validated(client, idp, factory_ids):
     admin = _admin(client, idp)
-    for bad, why in (
-        ([{"name": "", "model": "glm-5.2"}], "sin nombre"),
-        ([{"name": "X"}], "sin modelo"),
-        (["no-dict"], "no es objeto"),
-        ([{"name": "A", "model": "glm-5.2"}, {"name": "a", "model": "glm-5.2"}], "duplicado"),
+    ops, coder = factory_ids["ops"], factory_ids["coder"]
+    unknown = str(uuid.uuid4())
+    for profiles, default, why in (
+        ([{"name": "Operaciones", "model": "glm-5.2"}], None, "forma vieja {name, model}"),
+        ([{"profile_id": ops}], ops, "sin modelo"),
+        (["no-dict"], None, "no es objeto"),
+        ([{"profile_id": ops, "model": "glm-5.2"}, {"profile_id": ops, "model": "glm-5.3"}], ops, "duplicado"),
+        ([{"profile_id": unknown, "model": "glm-5.2"}], unknown, "no existe en el marketplace"),
+        ([{"profile_id": "not-a-uuid", "model": "glm-5.2"}], None, "uuid inválido"),
+        ([{"profile_id": ops, "model": "glm-5.2"}], None, "sin default"),
+        ([{"profile_id": ops, "model": "glm-5.2"}], coder, "default fuera de la lista"),
+        ([], ops, "default sin perfiles"),
     ):
-        resp = client.post("/api/policy-bundles", json=_body(profiles=bad), headers=admin)
+        resp = client.post("/api/policy-bundles", json=_body(profiles, default), headers=admin)
         assert resp.status_code == 422, f"{why}: {resp.text}"
 
 
-def test_bundle_ships_policy_profiles(client, idp):
-    """El dispositivo recibe la lista en el bundle firmado (``policy_profiles``):
-    es lo que el escritorio gobernado ofrece — nada de perfiles locales."""
+def test_policy_without_profiles_is_still_valid(client, idp):
+    admin = _admin(client, idp)
+    created = client.post("/api/policy-bundles", json=_body([], None), headers=admin)
+    assert created.status_code == 201, created.text
+    try:
+        assert created.json()["profiles"] == [] and created.json()["default_profile_id"] is None
+    finally:
+        client.delete(f"/api/policy-bundles/{created.json()['id']}", headers=admin)
+
+
+def test_bundle_ships_policy_profiles(client, idp, factory_ids):
+    """El dispositivo recibe la lista en el bundle firmado (``policy_profiles``)."""
     from test_governance_bundle import _get_bundle
 
     admin = _admin(client, idp)
-    created = client.post("/api/policy-bundles", json=_body(), headers=admin)
+    ops = factory_ids["ops"]
+    created = client.post(
+        "/api/policy-bundles",
+        json=_body([{"profile_id": ops, "model": "glm-5.2"}], ops),
+        headers=admin,
+    )
     assert created.status_code == 201, created.text
     bundle_id = created.json()["id"]
     try:
         got = _get_bundle(client, idp)
         assert got.status_code == 200, got.text
         claims = pyjwt.decode(got.json()["bundle"], options={"verify_signature": False})
-        assert claims["policy_profiles"] == PROFILES
-        # El usuario de la política es quien la hereda; alice (org_admin del
-        # mismo depto) la ve compilada.
+        assert [p["profile_id"] for p in claims["policy_profiles"]] == [ops]
         assert claims["policy_version"] >= 1
     finally:
         client.delete(f"/api/policy-bundles/{bundle_id}", headers=admin)

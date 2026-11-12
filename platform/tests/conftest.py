@@ -14,6 +14,7 @@ import base64
 import json
 import os
 import subprocess
+import tempfile
 import threading
 import time
 import uuid
@@ -245,6 +246,8 @@ def env(idp, litellm_fake):
         PLATFORM_DIR, "hermes", "plugins",
         "trust-agent-governance",
     )
+    # Spec 045: marketplace packages go to a throw-away dir (never /opt on the host).
+    os.environ["TRUST_AGENT_PROFILES_DIR"] = tempfile.mkdtemp(prefix="trust-agent-profiles-")
     # Governance bundle signing key (spec 019 lane, t_f99e12ab): consolidated
     # with the minimal unblock fix from t_0ed22c94 — the env fixture now sets
     # the MODULE-level per-session keypair so tests can also verify bundle

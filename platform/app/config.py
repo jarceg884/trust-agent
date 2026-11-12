@@ -117,6 +117,8 @@ class Settings(BaseSettings):
     # TLS domain. Download page, desktop-config, CLI installer and the admin's download link
     # advertise it as ``api_base``. Empty => the origin of the request itself.
     public_api_base_url: str = ""
+    # Spec 045: sanitized marketplace profile packages, content-addressed (<sha256>.tar.gz).
+    agent_profiles_dir: str = "/opt/trust-agent/agent-profiles"
     # LITELLM_MASTER_KEY: required for /key/* and /spend/* admin routes.
     litellm_master_key: str = ""
     # Spec 032: periodic model-catalog refresh window (hours) for tenants

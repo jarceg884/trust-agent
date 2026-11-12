@@ -138,6 +138,57 @@ export function proxyUrl(apiPath: string): string {
   return `/api/proxy${apiPath}`;
 }
 
+/** Sube un archivo tal cual como cuerpo (spec 045: POST
+ *  /api/marketplace/profiles/import con el .tar.gz de `hermes profile export`).
+ *  Sin multipart: el control plane lee el stream con un tope duro antes de
+ *  tocar la base. Errores con el envelope completo en `payload` (spec 041). */
+export async function apiUploadFile<T = unknown>(
+  path: string,
+  file: Blob,
+  contentType = "application/gzip",
+): Promise<T> {
+  const headers: Record<string, string> = { "Content-Type": contentType };
+  const csrf = csrfFromCookie();
+  if (csrf) headers["X-CSRF-Token"] = csrf;
+
+  let res: Response;
+  try {
+    res = await fetch(`/api/proxy${path}`, {
+      method: "POST",
+      headers,
+      body: file,
+      cache: "no-store",
+    });
+  } catch (cause) {
+    if (cause instanceof DOMException && cause.name === "AbortError") throw cause;
+    throw new ApiError(
+      503,
+      "unreachable",
+      "The Admin Console server is unreachable. Check your connection and try again.",
+      null,
+    );
+  }
+
+  let payload: unknown = null;
+  try {
+    payload = await res.json();
+  } catch {
+    // respuesta no-JSON
+  }
+  if (!res.ok) {
+    const env = (payload ?? {}) as ErrorEnvelope;
+    const err = env.error ?? {};
+    throw new ApiError(
+      res.status,
+      err.reason ?? "error",
+      err.message ?? `Upload failed (HTTP ${res.status}).`,
+      err.request_id ?? null,
+      (payload ?? null) as Record<string, unknown> | null,
+    );
+  }
+  return payload as T;
+}
+
 /** Upload multipart (spec 028: POST /api/branding/assets) vía el proxy BFF.
  *  El navegador fija el Content-Type multipart con el boundary; el proxy
  *  reenvía el cuerpo y el header tal cual. CSRF igual que api(). */

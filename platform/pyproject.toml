@@ -18,6 +18,8 @@ dependencies = [
     "python-multipart>=0.0.20",
     # argon2id password hashing (spec 025 D-PS-02, provider operator auth).
     "argon2-cffi>=23.1",
+    # Spec 045: config.yaml / distribution.yaml de los perfiles de Hermes importados.
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]

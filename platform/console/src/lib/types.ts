@@ -904,3 +904,95 @@ export interface UsageRequestsPage {
   offset: number;
   requests: UsageRequestRow[];
 }
+
+// --- Spec 045: marketplace de perfiles de Hermes -------------------------------------------
+//   GET  /api/marketplace/profiles[?include_archived=true]   (org_admin / dept_admin)
+//   GET  /api/marketplace/profiles/{id}                       (ficha + versiones)
+//   POST /api/marketplace/profiles/import[?slug=]             (org_admin, cuerpo = .tar.gz)
+//   PUT  /api/marketplace/profiles/{id}                       (org_admin, nombre/descripción)
+//   POST /api/marketplace/profiles/{id}/archive | /restore    (org_admin)
+//   GET  /api/marketplace/profiles/{id}/package[?version=]    (org_admin, paquete saneado)
+
+export interface MarketplaceSkill {
+  path: string;
+  name: string;
+  description: string;
+  has_scripts: boolean;
+}
+
+/** Lo que el saneamiento dejó y quitó (manifest del paquete, sin secretos). */
+export interface MarketplaceSummary {
+  format: "hermes-export" | "hermes-distribution";
+  has_soul: boolean;
+  soul_excerpt: string;
+  skills: MarketplaceSkill[];
+  has_scripts: boolean;
+  mcp_servers: string[];
+  cron_jobs: { name: string; schedule: string }[];
+  env_requires: string[];
+  redactions: number;
+  stripped: Record<string, number>;
+  file_count: number;
+  total_size: number;
+  distribution: { name: string; version: string; description: string; author: string; license: string } | null;
+  config_removed_keys: string[];
+  profile_meta: { display_name?: string; description?: string } | null;
+}
+
+export interface MarketplacePolicyRef {
+  id: string;
+  name: string;
+  /** true si la política lo marca como perfil por defecto. */
+  default: boolean;
+}
+
+export interface MarketplaceProfile {
+  id: string;
+  slug: string;
+  name: string;
+  description: string;
+  source: "factory" | "imported";
+  factory_key: string | null;
+  status: "active" | "archived";
+  created_at: string | null;
+  updated_at: string | null;
+  latest: {
+    version: number;
+    sha256: string;
+    size: number;
+    imported_at: string | null;
+    imported_by: string | null;
+    summary: MarketplaceSummary;
+    manifest?: { files?: { path: string; size: number }[] } & Record<string, unknown>;
+  };
+  policies: MarketplacePolicyRef[];
+}
+
+export interface MarketplaceVersion {
+  version: number;
+  sha256: string;
+  size: number;
+  imported_at: string | null;
+  imported_by: string | null;
+}
+
+export interface MarketplaceProfileDetail extends MarketplaceProfile {
+  versions: MarketplaceVersion[];
+}
+
+export interface MarketplaceList {
+  profiles: MarketplaceProfile[];
+}
+
+export interface MarketplaceImportResult {
+  profile: MarketplaceProfileDetail;
+  created: boolean;
+  version_added: boolean;
+  unchanged: boolean;
+}
+
+/** Perfil asignado en una política (spec 045 D-045-04). */
+export interface PolicyProfileEntry {
+  profile_id: string;
+  model: string;
+}

@@ -6,15 +6,19 @@
  * Una política se asigna a UN departamento o a UNA persona. Dentro de la
  * política el admin configura: réplica de Settings del Desktop (qué puede usar
  * el usuario), prompt organizacional, modelos permitidos + modelo por defecto,
- * agentes compartidos y acceso al vault. No existen políticas personales ni
+ * agentes (perfiles del marketplace con su modelo y un perfil por defecto,
+ * spec 045) y acceso al vault. No existen políticas personales ni
  * "organization policies": la asignación es siempre explícita.
  */
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { api, ApiError } from "@/lib/api-client";
 import { useApi } from "@/hooks/use-api";
-import type { AccessOverview } from "@/lib/types";
+import type { AccessOverview, MarketplaceList, PolicyProfileEntry } from "@/lib/types";
+import { IconStar } from "@/components/icons";
+import { ProfileChips } from "../agents/profile-chips";
 import {
+  Badge,
   Button,
   Card,
   CardBody,
@@ -31,7 +35,9 @@ interface Policy {
   desktop: Record<string, boolean>;
   credentials: Record<string, boolean>;
   global_prompt: string;
-  profiles: { name?: string; model?: string }[];
+  /** Spec 045: perfiles del marketplace. `name` solo existe en filas de la spec 044. */
+  profiles: { profile_id?: string; model?: string; name?: string }[];
+  default_profile_id?: string | null;
   contracts?: { name?: string; text?: string }[];
   models: string[];
   default_model: string | null;
@@ -44,7 +50,6 @@ interface PolicyList { bundles: Policy[] }
 interface DepartmentsList { departments: { department_id: string; name: string }[] }
 interface DirectoryList { users: { user_id: string; email: string; display_name: string | null }[] }
 interface ModelList { models: { model_name: string; display_name: string; provider: string; source: string }[] }
-interface AgentList { agents: { id: string; name: string; description: string | null }[] }
 interface VaultSecret { id: string; name: string; credential_type: string }
 interface VaultList { credentials: VaultSecret[] }
 
@@ -88,8 +93,8 @@ const DESKTOP_GROUPS: { group: string; hint: string; options: { key: string; lab
       { key: "messaging", label: "Messaging", hint: "Canales de mensajería (/handoff)", def: false },
       { key: "artifacts", label: "Artifacts", hint: "Artefactos generados", def: false },
       { key: "cron", label: "Scheduled jobs", hint: "Tareas programadas (/goal, /loop, /heartbeat)", def: false },
-      { key: "agents", label: "Agents", hint: "Agentes compartidos y subagentes (/agents, /review, /bg) y sus límites de iteraciones y concurrencia", def: false },
-      { key: "profiles", label: "Profiles", hint: "Rail de perfiles del escritorio. Los perfiles se definen en Modelos → Perfiles del agente; con la lista vacía los usuarios solo ven el default", def: false },
+      { key: "agents", label: "Agents", hint: "Subagentes (/agents, /review, /bg) y sus límites de iteraciones y concurrencia", def: false },
+      { key: "profiles", label: "Profiles", hint: "El empleado puede crear sus propios perfiles en el escritorio, bajo la gobernanza. Los perfiles de la organización (sección Agentes) se muestran siempre", def: false },
     ],
   },
   {
@@ -116,7 +121,8 @@ const SECTION = [
   { key: "desktop", label: "Desktop restrictions", hint: "Réplica de Settings" },
   { key: "prompt", label: "Contrato organizacional", hint: "Cómo debe interactuar el agente" },
   { key: "models", label: "Modelos", hint: "Acceso y modelo por defecto" },
-  { key: "access", label: "Accesos y agentes", hint: "Vault y agentes" },
+  { key: "agents", label: "Agentes", hint: "Perfiles del marketplace y el default" },
+  { key: "access", label: "Accesos", hint: "Secretos del vault" },
 ] as const;
 
 type SectionKey = (typeof SECTION)[number]["key"];
@@ -139,7 +145,12 @@ function defaults() {
     ] as { name: string; text: string }[],
     models: [] as string[],
     defaultModel: "",
-    profiles: [] as { name: string; model: string }[],
+    profiles: [] as PolicyProfileEntry[],
+    defaultProfileId: "",
+    /** Perfiles {name, model} de la spec 044 (sin marketplace): se descartan al guardar. */
+    legacyProfiles: 0,
+    // Agentes compartidos (spec 037) en desuso desde la spec 045: se conserva el
+    // valor guardado, sin UI, para no cambiar nada en silencio.
     agents: [] as string[],
     vaultSecretIds: [] as string[],
   };
@@ -165,7 +176,12 @@ export function PolicyManagerPage() {
   );
   const users = useApi<DirectoryList>("/api/users");
   const models = useApi<ModelList>("/api/models");
-  const agents = useApi<AgentList>("/api/agents");
+  // Spec 045: archivados incluidos para poder mostrar (y quitar) uno ya asignado.
+  const marketplace = useApi<MarketplaceList>("/api/marketplace/profiles?include_archived=true");
+  const profileById = useMemo(
+    () => new Map((marketplace.data?.profiles ?? []).map((p) => [p.id, p])),
+    [marketplace.data]
+  );
   const vault = useApi<VaultList>("/api/vault/credentials");
 
   const [open, setOpen] = useState(false);
@@ -212,8 +228,10 @@ export function PolicyManagerPage() {
       // mandaba vacío en cada PUT y el servidor (que escribe lo que recibe)
       // BORRABA la lista con solo editar la política.
       profiles: (policy.profiles ?? [])
-        .map((p) => ({ name: p?.name ?? "", model: p?.model ?? "" }))
-        .filter((p) => p.name),
+        .filter((p) => p?.profile_id)
+        .map((p) => ({ profile_id: p.profile_id as string, model: p.model ?? "" })),
+      defaultProfileId: policy.default_profile_id ?? "",
+      legacyProfiles: (policy.profiles ?? []).filter((p) => p && !p.profile_id).length,
       agents: policy.agents ?? [],
       vaultSecretIds: Array.isArray((policy.credentials as { vault_secret_ids?: string[] })?.vault_secret_ids)
         ? ((policy.credentials as { vault_secret_ids?: string[] }).vault_secret_ids as string[])
@@ -237,17 +255,22 @@ export function PolicyManagerPage() {
       return;
     }
     for (const p of form.profiles) {
-      if (!p.name.trim() || !p.model) {
-        push("error", "Cada perfil necesita nombre y modelo.");
+      const label = profileById.get(p.profile_id)?.name ?? "un perfil";
+      if (!p.model) {
+        push("error", `Elige el modelo de ${label} (sección Agentes).`);
         return;
       }
       if (form.models.length > 0 && !form.models.includes(p.model)) {
-        push("error", `El perfil "${p.name}" usa un modelo que no está marcado en la política.`);
+        push("error", `${label} usa un modelo que no está marcado en la política.`);
+        return;
+      }
+      if (profileById.get(p.profile_id)?.status === "archived") {
+        push("error", `${label} está archivado en el marketplace: quítalo o restáuralo.`);
         return;
       }
     }
-    if (new Set(form.profiles.map((p) => p.name.trim().toLowerCase())).size !== form.profiles.length) {
-      push("error", "Los perfiles deben tener nombres distintos.");
+    if (form.profiles.length > 0 && !form.profiles.some((p) => p.profile_id === form.defaultProfileId)) {
+      push("error", "Marca el perfil por defecto de la política (sección Agentes).");
       return;
     }
     setSaving(true);
@@ -260,6 +283,7 @@ export function PolicyManagerPage() {
         contracts: form.contracts,
         global_prompt: form.contracts.map((c) => `[${c.name}]\n${c.text}`).join("\n\n"),
         profiles: form.profiles,
+        default_profile_id: form.profiles.length > 0 ? form.defaultProfileId : null,
         models: form.models,
         default_model: form.defaultModel || null,
         agents: form.agents,
@@ -291,6 +315,33 @@ export function PolicyManagerPage() {
     } catch (cause) {
       push("error", cause instanceof ApiError ? cause.message : "No se pudo eliminar.");
     }
+  }
+
+  // Spec 045 — sección Agentes: perfiles activos del marketplace, más los archivados
+  // que la política aún asigna (para poder verlos y quitarlos).
+  const agentChoices = useMemo(
+    () =>
+      (marketplace.data?.profiles ?? []).filter(
+        (p) => p.status === "active" || form.profiles.some((e) => e.profile_id === p.id)
+      ),
+    [marketplace.data, form.profiles]
+  );
+
+  function toggleProfile(id: string) {
+    if (form.profiles.some((p) => p.profile_id === id)) {
+      const profiles = form.profiles.filter((p) => p.profile_id !== id);
+      const keepDefault = profiles.some((p) => p.profile_id === form.defaultProfileId);
+      setForm({ ...form, profiles, defaultProfileId: keepDefault ? form.defaultProfileId : profiles[0]?.profile_id ?? "" });
+      return;
+    }
+    const model = form.defaultModel && form.models.includes(form.defaultModel) ? form.defaultModel : form.models[0] ?? "";
+    const profiles = [...form.profiles, { profile_id: id, model }];
+    const hasDefault = form.profiles.some((p) => p.profile_id === form.defaultProfileId);
+    setForm({ ...form, profiles, defaultProfileId: hasDefault ? form.defaultProfileId : id });
+  }
+
+  function setProfileModel(id: string, model: string) {
+    setForm({ ...form, profiles: form.profiles.map((p) => (p.profile_id === id ? { ...p, model } : p)) });
   }
 
   function assignmentLabel(policy: Policy): string {
@@ -341,7 +392,14 @@ export function PolicyManagerPage() {
                 </div>
                 <div className="mt-3 flex flex-wrap gap-1.5 text-[10px] text-muted">
                   <span className="rounded bg-surface px-1.5 py-0.5">{policy.models.length} modelos</span>
-                  <span className="rounded bg-surface px-1.5 py-0.5">{policy.agents.length} agentes</span>
+                  <span className="rounded bg-surface px-1.5 py-0.5">
+                    {policy.profiles.filter((p) => p?.profile_id).length} agentes
+                  </span>
+                  {policy.default_profile_id ? (
+                    <span className="rounded bg-surface px-1.5 py-0.5">
+                      agente por defecto: {profileById.get(policy.default_profile_id)?.name ?? "…"}
+                    </span>
+                  ) : null}
                   {policy.default_model ? <span className="rounded bg-surface px-1.5 py-0.5">default: {policy.default_model}</span> : null}
                   <span className="rounded bg-surface px-1.5 py-0.5">
                     {Object.values(policy.desktop).filter(Boolean).length} opciones desktop
@@ -598,63 +656,149 @@ export function PolicyManagerPage() {
                         {form.models.map((m) => <option key={m} value={m}>{m}</option>)}
                       </Select>
                     </div>
-                    <div className="space-y-2">
-                      <label className="text-xs font-medium">Perfiles del agente</label>
-                      <p className="text-[11px] text-muted">
-                        Perfiles que esta política ofrece en el escritorio además del default. El
-                        escritorio gobernado muestra SOLO estos (con el switch Profiles activado en
-                        Características); el modelo debe estar marcado arriba.
+                    <p className="text-[11px] text-muted">
+                      Los agentes (perfiles del marketplace) se asignan en la sección{" "}
+                      <button type="button" className="underline" onClick={() => setSection("agents")}>
+                        Agentes
+                      </button>
+                      , cada uno con uno de estos modelos.
+                    </p>
+                  </div>
+                ) : null}
+
+                {section === "agents" ? (
+                  <div className="space-y-4">
+                    <div>
+                      <p className="text-xs font-medium">Agentes de la política</p>
+                      <p className="mt-1 text-[11px] text-muted">
+                        Elige los perfiles del{" "}
+                        <Link className="underline" href="/agents">
+                          marketplace
+                        </Link>{" "}
+                        que entrega esta política. En el escritorio, el agente del empleado es ese perfil de
+                        Hermes, con el modelo que elijas aquí; la app arranca en el perfil por defecto.
                       </p>
-                      {form.desktop.profiles && form.profiles.length === 0 ? (
-                        <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-2.5 text-xs text-amber-300">
-                          <span className="font-semibold">Ojo:</span> el switch Profiles está activado pero la
-                          lista está vacía — los usuarios solo verán el perfil <span className="font-mono">default</span>.
-                        </div>
-                      ) : null}
-                      {form.profiles.map((profile, index) => (
-                        <div key={index} className="flex items-center gap-2">
-                          <Input
-                            value={profile.name}
-                            onChange={(e) => {
-                              const next = [...form.profiles];
-                              next[index] = { ...next[index], name: e.target.value };
-                              setForm({ ...form, profiles: next });
-                            }}
-                            placeholder="Nombre (p.ej. Operaciones)"
-                          />
-                          <Select
-                            value={profile.model}
-                            onChange={(e) => {
-                              const next = [...form.profiles];
-                              next[index] = { ...next[index], model: e.target.value };
-                              setForm({ ...form, profiles: next });
-                            }}
-                            className="w-44"
-                          >
-                            <option value="">Modelo…</option>
-                            {form.models.map((m) => <option key={m} value={m}>{m}</option>)}
-                          </Select>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => setForm({ ...form, profiles: form.profiles.filter((_, i) => i !== index) })}
-                          >
-                            Eliminar
-                          </Button>
-                        </div>
-                      ))}
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        disabled={form.models.length === 0}
-                        onClick={() => setForm({ ...form, profiles: [...form.profiles, { name: "", model: "" }] })}
-                      >
-                        + Agregar perfil
-                      </Button>
-                      {form.models.length === 0 ? (
-                        <p className="text-[11px] text-faint">Marca modelos en la política para poder definir perfiles.</p>
-                      ) : null}
                     </div>
+                    {form.legacyProfiles > 0 ? (
+                      <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-2.5 text-xs text-amber-300">
+                        <span className="font-semibold">Ojo:</span> esta política tenía {form.legacyProfiles}{" "}
+                        {form.legacyProfiles === 1 ? "perfil" : "perfiles"} del formato anterior (solo nombre y
+                        modelo). Ya no aplican: al guardar se reemplazan por los agentes elegidos aquí.
+                      </div>
+                    ) : null}
+                    {form.models.length === 0 ? (
+                      <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-2.5 text-xs text-amber-300">
+                        Marca modelos en la sección{" "}
+                        <button type="button" className="underline" onClick={() => setSection("models")}>
+                          Modelos
+                        </button>
+                        : cada agente usa uno de ellos.
+                      </div>
+                    ) : null}
+                    {marketplace.loading ? (
+                      <p className="text-xs text-muted">Cargando el marketplace…</p>
+                    ) : marketplace.error ? (
+                      <p className="text-xs text-danger">No se pudo cargar el marketplace: {marketplace.error.message}</p>
+                    ) : agentChoices.length === 0 ? (
+                      <p className="text-xs text-muted">
+                        El marketplace está vacío. Importa perfiles en{" "}
+                        <Link className="underline" href="/agents">
+                          Agents
+                        </Link>
+                        .
+                      </p>
+                    ) : (
+                      <div className="space-y-2">
+                        {agentChoices.map((profile) => {
+                          const entry = form.profiles.find((p) => p.profile_id === profile.id);
+                          const isDefault = Boolean(entry) && form.defaultProfileId === profile.id;
+                          const modelGone = Boolean(entry?.model) && form.models.length > 0 && !form.models.includes(entry?.model ?? "");
+                          return (
+                            <div
+                              key={profile.id}
+                              className={`rounded-lg border p-3 ${entry ? "border-accent-border bg-accent-soft" : "border-border-subtle"}`}
+                            >
+                              <div className="flex flex-wrap items-start gap-3">
+                                <label className="flex min-w-0 flex-1 cursor-pointer items-start gap-2">
+                                  <input
+                                    type="checkbox"
+                                    className="mt-0.5"
+                                    checked={Boolean(entry)}
+                                    disabled={!entry && (profile.status === "archived" || form.models.length === 0)}
+                                    onChange={() => toggleProfile(profile.id)}
+                                  />
+                                  <span className="min-w-0">
+                                    <span className="flex flex-wrap items-center gap-1.5">
+                                      <span className="text-xs font-semibold">{profile.name}</span>
+                                      <span className="font-mono text-[10px] text-faint">
+                                        {profile.slug} · v{profile.latest.version}
+                                      </span>
+                                      {profile.source === "factory" ? <Badge tone="accent">De fábrica</Badge> : null}
+                                      {profile.status === "archived" ? <Badge tone="warning">Archivado</Badge> : null}
+                                    </span>
+                                    {profile.description ? (
+                                      <span className="mt-0.5 line-clamp-2 block text-[11px] text-muted">
+                                        {profile.description}
+                                      </span>
+                                    ) : null}
+                                  </span>
+                                </label>
+                                {entry ? (
+                                  <div className="flex items-center gap-3">
+                                    <Select
+                                      value={entry.model}
+                                      onChange={(e) => setProfileModel(profile.id, e.target.value)}
+                                      className="w-44"
+                                      aria-label={`Modelo de ${profile.name}`}
+                                    >
+                                      <option value="">Modelo…</option>
+                                      {form.models.map((m) => (
+                                        <option key={m} value={m}>
+                                          {m}
+                                        </option>
+                                      ))}
+                                    </Select>
+                                    <label className="flex cursor-pointer items-center gap-1 text-[11px] text-muted">
+                                      <input
+                                        type="radio"
+                                        name="default-profile"
+                                        checked={isDefault}
+                                        onChange={() => setForm({ ...form, defaultProfileId: profile.id })}
+                                      />
+                                      Por defecto
+                                    </label>
+                                  </div>
+                                ) : null}
+                              </div>
+                              <div className="mt-2 pl-6">
+                                <ProfileChips summary={profile.latest.summary} />
+                              </div>
+                              {isDefault ? (
+                                <p className="mt-1.5 pl-6 text-[11px] text-accent">
+                                  <IconStar size={11} className="-mt-0.5 inline" /> La app arranca en este agente.
+                                </p>
+                              ) : null}
+                              {modelGone ? (
+                                <p className="mt-1.5 pl-6 text-[11px] text-amber-300">
+                                  El modelo {entry?.model} ya no está marcado en la política: elige otro.
+                                </p>
+                              ) : null}
+                              {entry && profile.status === "archived" ? (
+                                <p className="mt-1.5 pl-6 text-[11px] text-amber-300">
+                                  Archivado en el marketplace: quítalo de la política o restáuralo en Agents.
+                                </p>
+                              ) : null}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                    {form.profiles.length === 0 ? (
+                      <p className="text-[11px] text-faint">
+                        Sin agentes asignados, el escritorio usa el perfil principal de Hermes con el contrato y los
+                        modelos de esta política.
+                      </p>
+                    ) : null}
                   </div>
                 ) : null}
 
@@ -691,27 +835,6 @@ export function PolicyManagerPage() {
                             );
                           })
                         )}
-                      </div>
-                    </div>
-                    <div>
-                      <p className="mb-2 text-xs font-medium">Agentes incluidos en esta política</p>
-                      <div className="max-h-72 space-y-1 overflow-y-auto rounded-lg border border-border-subtle p-2">
-                        {(agents.data?.agents ?? []).map((agent) => {
-                          const checked = form.agents.includes(agent.id);
-                          return (
-                            <label key={agent.id} className="flex items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-surface">
-                              <input
-                                type="checkbox"
-                                checked={checked}
-                                onChange={() =>
-                                  setForm({ ...form, agents: checked ? form.agents.filter((a) => a !== agent.id) : [...form.agents, agent.id] })
-                                }
-                              />
-                              <span className="font-medium">{agent.name}</span>
-                              <span className="truncate text-faint">{agent.description}</span>
-                            </label>
-                          );
-                        })}
                       </div>
                     </div>
                   </div>

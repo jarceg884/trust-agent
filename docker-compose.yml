@@ -195,6 +195,10 @@ services:
       # by the public endpoints /download/{slug}/installer/{platform}.
       # Built by scripts/build_desktop_installers.py on the HOST.
       - ${TRUST_INSTALLER_ARTIFACTS_DIR:-./installer-artifacts}:/opt/trust-agent/installer-artifacts:ro
+      # Spec 045: paquetes saneados del marketplace de perfiles (<sha256>.tar.gz,
+      # escritos una vez por el API). Volumen con nombre: nace con el dueño del
+      # contenedor; incluirlo en los backups junto a trust_db_data.
+      - agent_profiles:/opt/trust-agent/agent-profiles
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -386,3 +390,4 @@ volumes:
   trust_db_data:
   kc_data:
   litellm_db_data:
+  agent_profiles:
