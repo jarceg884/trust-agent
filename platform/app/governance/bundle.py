@@ -29,6 +29,7 @@ La attestation auditable llega con el incremento 3 (REQ-GOH-012).
 from __future__ import annotations
 
 import logging
+import re
 
 import uuid
 from dataclasses import dataclass
@@ -37,6 +38,7 @@ from typing import Any
 
 import jwt
 from fastapi import APIRouter, Request
+from fastapi.responses import FileResponse
 from sqlalchemy import text
 
 from ..auth.service import (
@@ -50,7 +52,7 @@ from ..config import get_settings
 from ..db import get_engine, set_tenant
 from ..devices.gate import check_device_access
 from ..devices.tokens import verify_device_token
-from ..errors import ApiError, device_not_authorized, invalid_token
+from ..errors import ApiError, device_not_authorized, invalid_token, not_found
 from ..models import access as model_access
 from . import budgets as budgets_service
 from ..models import keys as keys_service
@@ -478,7 +480,11 @@ def compile_bundle_payload(
     payload["product_name"] = str(_branding.get("product_name") or "Trust Agent")
     payload["tenant_name"] = principal.tenant_name or principal.tenant_slug
     payload["policy_credentials"] = (studio_bundle or {}).get("credentials") or {}
-    payload["policy_profiles"] = (studio_bundle or {}).get("profiles") or []
+    # Spec 045 (D-045-05): marketplace profiles resolved to what the device installs — active
+    # ones at their current version with the sha256 the package must match; one is the default.
+    from ..profile_marketplace.service import delivered_profiles
+
+    payload["policy_profiles"] = delivered_profiles(conn, studio_bundle)
     payload["policy_models"] = (studio_bundle or {}).get("models") or []
     payload["policy_default_model"] = (studio_bundle or {}).get("default_model")
     payload["policy_agents"] = (studio_bundle or {}).get("agents") or []
@@ -560,6 +566,46 @@ def governance_bundle(request: Request):
         "offline_grace_minutes": payload["offline_grace_minutes"],
         "synced_at": datetime.now(timezone.utc).isoformat(),
     }
+
+
+# --- Spec 045: paquete de un perfil del marketplace para ESTE dispositivo -----------------------
+
+_UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
+
+@bundle_router.get("/agent-profiles/{profile_id}/package")
+def agent_profile_package(profile_id: str, request: Request):
+    """GET /api/me/agent-profiles/{id}/package (spec 045 §5, D-045-05).
+
+    Same auth as the bundle (device token). Serves ONLY a profile that this device's current
+    delivery contains, at the version the bundle names — another tenant's id, an unassigned or
+    archived profile and a malformed id all look the same (404, no oracle). The device checks
+    the bytes against the sha256 of the SIGNED bundle, so the edge's plain HTTP cannot swap them.
+    """
+    from ..policy_bundles.router import effective_bundle_for_user
+    from ..profile_marketplace import storage as profile_storage
+    from ..profile_marketplace.service import delivered_profiles
+
+    auth = require_bundle_auth(request)
+    wanted = profile_id.lower() if _UUID_RE.match(profile_id or "") else None
+    entry = None
+    with get_engine().begin() as conn:
+        set_tenant(conn, auth.principal.tenant_id)
+        check_device_access(conn, auth.device_id, auth.principal)
+        if wanted is not None:
+            studio = effective_bundle_for_user(conn, auth.principal.user_id)
+            entry = next((p for p in delivered_profiles(conn, studio) if p["profile_id"] == wanted), None)
+    if entry is None:
+        raise not_found("Agent profile not found.")
+    path = profile_storage.path_for(entry["sha256"])
+    if not path.is_file():
+        raise not_found("Agent profile not found.")
+    return FileResponse(
+        path,
+        media_type="application/gzip",
+        filename=f"{entry['slug']}-v{entry['version']}.tar.gz",
+        headers={"ETag": f'"{entry["sha256"]}"', "Cache-Control": "no-store"},
+    )
 
 
 # --- Update gate (mandato Miller): el agente SOLO se actualiza por lo que

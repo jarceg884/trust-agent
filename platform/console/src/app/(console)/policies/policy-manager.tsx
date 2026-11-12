@@ -680,14 +680,14 @@ export function PolicyManagerPage() {
                       </p>
                     </div>
                     {form.legacyProfiles > 0 ? (
-                      <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-2.5 text-xs text-amber-300">
+                      <div className="rounded-lg border border-warning/30 bg-warning-soft p-2.5 text-xs text-warning">
                         <span className="font-semibold">Ojo:</span> esta política tenía {form.legacyProfiles}{" "}
                         {form.legacyProfiles === 1 ? "perfil" : "perfiles"} del formato anterior (solo nombre y
                         modelo). Ya no aplican: al guardar se reemplazan por los agentes elegidos aquí.
                       </div>
                     ) : null}
                     {form.models.length === 0 ? (
-                      <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-2.5 text-xs text-amber-300">
+                      <div className="rounded-lg border border-warning/30 bg-warning-soft p-2.5 text-xs text-warning">
                         Marca modelos en la sección{" "}
                         <button type="button" className="underline" onClick={() => setSection("models")}>
                           Modelos
@@ -758,7 +758,7 @@ export function PolicyManagerPage() {
                                         </option>
                                       ))}
                                     </Select>
-                                    <label className="flex cursor-pointer items-center gap-1 text-[11px] text-muted">
+                                    <label className="flex cursor-pointer items-center gap-1 whitespace-nowrap text-[11px] text-muted">
                                       <input
                                         type="radio"
                                         name="default-profile"
@@ -779,12 +779,12 @@ export function PolicyManagerPage() {
                                 </p>
                               ) : null}
                               {modelGone ? (
-                                <p className="mt-1.5 pl-6 text-[11px] text-amber-300">
+                                <p className="mt-1.5 pl-6 text-[11px] text-warning">
                                   El modelo {entry?.model} ya no está marcado en la política: elige otro.
                                 </p>
                               ) : null}
                               {entry && profile.status === "archived" ? (
-                                <p className="mt-1.5 pl-6 text-[11px] text-amber-300">
+                                <p className="mt-1.5 pl-6 text-[11px] text-warning">
                                   Archivado en el marketplace: quítalo de la política o restáuralo en Agents.
                                 </p>
                               ) : null}

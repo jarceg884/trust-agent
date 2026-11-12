@@ -53,6 +53,7 @@ describe("device API routes", () => {
       ["GET", "/api/me/governance-bundle"],
       ["POST", "/api/me/device-heartbeat"],
       ["GET", "/api/me/update-check"],
+      ["GET", `/api/me/agent-profiles/${DEVICE}/package`],
     ]) {
       assert.equal(isDeviceApiRoute(method, path), true, `${method} ${path}`);
     }
@@ -74,6 +75,13 @@ describe("device API routes", () => {
       ["GET", "/api/me"],
       ["GET", "/api/me/sessions"],
       ["POST", "/api/me/governance-bundle"],
+      ["GET", "/api/me/agent-profiles"],
+      ["GET", "/api/me/agent-profiles/not-a-uuid/package"],
+      ["POST", `/api/me/agent-profiles/${DEVICE}/package`],
+      ["GET", `/api/me/agent-profiles/${DEVICE}/package/../../governance-bundle`],
+      ["GET", "/api/marketplace/profiles"],
+      ["GET", `/api/marketplace/profiles/${DEVICE}/package`],
+      ["POST", "/api/marketplace/profiles/import"],
     ]) {
       assert.equal(isDeviceApiRoute(method, path), false, `${method} ${path}`);
     }

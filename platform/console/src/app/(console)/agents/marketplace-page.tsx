@@ -420,7 +420,7 @@ function ProfileDetailDialog({
           ) : null}
 
           {archiveBlockers ? (
-            <div className="space-y-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-300">
+            <div className="space-y-2 rounded-lg border border-warning/30 bg-warning-soft p-3 text-xs text-warning">
               <p>
                 <span className="font-semibold">Este perfil está asignado.</span> Al archivarlo, los equipos de{" "}
                 {archiveBlockers.length === 1 ? "esta política" : "estas políticas"} lo archivarán en su próxima

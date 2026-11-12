@@ -12,11 +12,12 @@ import tarfile
 import uuid
 from pathlib import Path
 
+import jwt as pyjwt
 import pytest
 import yaml
 from sqlalchemy import text
 
-from conftest import TENANT_A, TENANT_B, bearer_headers, mint
+from conftest import DEVICE_ALICE, TENANT_A, TENANT_B, USER_ALICE, USER_DAVE, bearer_headers, mint
 from app.profile_marketplace.sanitize import (
     FIXED_MTIME,
     ArchiveRejected,
@@ -447,3 +448,119 @@ def test_new_version_bumps_the_tenant_policy_revision(client, idp):
     _import(client, admin, dirty_export(root, soul="v2\n"))
     after = _db_rows("SELECT revision FROM policy_revisions")[0]["revision"]
     assert after > before
+
+
+# --- device delivery (D-045-05) ------------------------------------------------------------------
+def _device_headers(device_id=DEVICE_ALICE, user_id=USER_ALICE, tenant_id=TENANT_A) -> dict:
+    """The plugin's path: the device token is both the Bearer and X-Device-Token."""
+    from app.config import get_settings
+    from app.devices.tokens import issue_device_token
+
+    token = issue_device_token(get_settings(), device_id=device_id, user_id=user_id, tenant_id=tenant_id)
+    return {"Authorization": f"Bearer {token}", "X-Device-Token": token}
+
+
+def _bundle_claims(client, headers) -> dict:
+    resp = client.get("/api/me/governance-bundle", headers=headers)
+    assert resp.status_code == 200, resp.text
+    return pyjwt.decode(resp.json()["bundle"], options={"verify_signature": False})
+
+
+@pytest.fixture
+def alice_policy(client, idp):
+    """A PERSONAL policy for alice: it wins over any department policy, so the test is exact."""
+    admin = _h(client, idp)
+    created: list[str] = []
+
+    def make(profiles: list[dict], default: str | None) -> dict:
+        resp = client.post("/api/policy-bundles", headers=admin, json={
+            "name": f"delivery-{uuid.uuid4().hex[:6]}", "description": "", "desktop": {"profiles": True},
+            "credentials": {}, "global_prompt": "", "contracts": [], "models": ["glm-5.2"],
+            "default_model": "glm-5.2", "agents": [], "department_id": None, "user_id": USER_ALICE,
+            "profiles": profiles, "default_profile_id": default,
+        })
+        assert resp.status_code == 201, resp.text
+        created.append(resp.json()["id"])
+        return resp.json()
+
+    yield make
+    for policy_id in created:
+        client.delete(f"/api/policy-bundles/{policy_id}", headers=admin)
+
+
+def test_bundle_delivers_profiles_and_their_packages(client, idp, alice_policy):
+    admin = _h(client, idp)
+    root = _unique_root()
+    prof = _import(client, admin, dirty_export(root)).json()["profile"]
+    other = _import(client, admin, dirty_export(_unique_root())).json()["profile"]
+    factory = {
+        p["factory_key"]: p for p in client.get("/api/marketplace/profiles", headers=admin).json()["profiles"]
+        if p["source"] == "factory"
+    }
+    alice_policy([
+        {"profile_id": factory["analyst"]["id"], "model": "glm-5.2"},
+        {"profile_id": prof["id"], "model": "glm-5.2"},
+    ], prof["id"])
+    device = _device_headers()
+
+    delivered = _bundle_claims(client, device)["policy_profiles"]
+    assert [p["slug"] for p in delivered] == ["analyst", root]          # policy order
+    assert [p["default"] for p in delivered] == [False, True]
+    entry = delivered[1]
+    assert (entry["version"], entry["sha256"], entry["model"]) == (1, prof["latest"]["sha256"], "glm-5.2")
+    assert entry["package_path"] == f"/api/me/agent-profiles/{prof['id']}/package"
+    assert entry["name"] == "Sales Bot" and entry["size"] == prof["latest"]["size"]
+
+    pkg = client.get(entry["package_path"], headers=device)
+    assert pkg.status_code == 200, pkg.text
+    assert hashlib.sha256(pkg.content).hexdigest() == entry["sha256"]
+    assert pkg.headers["etag"] == f'"{entry["sha256"]}"'
+    assert pkg.headers["content-type"] == "application/gzip"
+
+    # Anything this device's delivery does not contain looks the same: 404, no oracle.
+    for path in (
+        f"/api/me/agent-profiles/{other['id']}/package",           # imported, not assigned
+        f"/api/me/agent-profiles/{uuid.uuid4()}/package",          # unknown
+        "/api/me/agent-profiles/not-a-uuid/package",               # malformed
+    ):
+        assert client.get(path, headers=device).status_code == 404, path
+    assert client.get(entry["package_path"]).status_code == 401      # no device token
+    # An admin session is not a device: the package route needs X-Device-Token.
+    assert client.get(entry["package_path"], headers=admin).status_code == 401
+
+    # Re-import = v2: the bundle names it and the package follows (D-045-E).
+    _import(client, admin, dirty_export(root, soul="You are the v2 sales assistant.\n"))
+    entry2 = next(p for p in _bundle_claims(client, device)["policy_profiles"] if p["profile_id"] == prof["id"])
+    assert entry2["version"] == 2 and entry2["sha256"] != entry["sha256"]
+    body = client.get(entry2["package_path"], headers=device).content
+    assert hashlib.sha256(body).hexdigest() == entry2["sha256"]
+    assert "v2 sales assistant" in _read(body, f"{root}/SOUL.md")
+
+    # Archived in the marketplace: gone from the bundle (the device archives it), package 404,
+    # and the default falls back to the first delivered profile.
+    resp = client.post(f"/api/marketplace/profiles/{prof['id']}/archive", headers=admin, json={"confirm": True})
+    assert resp.status_code == 200, resp.text
+    after = _bundle_claims(client, device)["policy_profiles"]
+    assert [(p["slug"], p["default"]) for p in after] == [("analyst", True)]
+    assert client.get(entry2["package_path"], headers=device).status_code == 404
+
+
+def test_package_never_crosses_tenants(client, idp, alice_policy, admin_conn):
+    admin = _h(client, idp)
+    prof = _import(client, admin, dirty_export(_unique_root())).json()["profile"]
+    alice_policy([{"profile_id": prof["id"], "model": "glm-5.2"}], prof["id"])
+    path = f"/api/me/agent-profiles/{prof['id']}/package"
+    assert client.get(path, headers=_device_headers()).status_code == 200
+
+    dave_device = str(uuid.uuid4())
+    admin_conn.execute(
+        "INSERT INTO devices (id, tenant_id, user_id, fingerprint, status) VALUES (%s, %s, %s, %s, 'active')",
+        (dave_device, TENANT_B, USER_DAVE, f"fp-dave-{dave_device[:8]}"),
+    )
+    try:
+        dave = _device_headers(device_id=dave_device, user_id=USER_DAVE, tenant_id=TENANT_B)
+        assert _bundle_claims(client, dave)["policy_profiles"] == []
+        assert client.get(path, headers=dave).status_code == 404
+    finally:
+        admin_conn.execute("DELETE FROM devices WHERE id = %s", (dave_device,))
+

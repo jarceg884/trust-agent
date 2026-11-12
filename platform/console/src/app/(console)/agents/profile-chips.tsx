@@ -38,7 +38,8 @@ export function formatBytes(n: number | null | undefined): string {
 }
 
 const CHIP = "rounded-full bg-surface-alt px-2 py-0.5 text-[10px] text-muted";
-const CHIP_WARN = "rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-300";
+// Tokens del tema (no amber-300 fijo): legible en claro y en oscuro, igual que Badge "warning".
+const CHIP_WARN = "rounded-full border border-warning/20 bg-warning-soft px-2 py-0.5 text-[10px] text-warning";
 
 /** Lo que trae el perfil, en una línea: skills, MCP, tareas programadas, scripts. */
 export function ProfileChips({ summary }: { summary: MarketplaceSummary }) {

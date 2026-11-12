@@ -414,6 +414,58 @@ def restore_profile(conn: Connection, principal: Principal, profile_id: str) -> 
 
 
 # --- Policy assignment (D-045-04) ----------------------------------------------------------------
+def delivered_profiles(conn: Connection, studio_bundle: dict | None) -> list[dict]:
+    """Spec 045 §5 (D-045-05): what a device of this policy receives.
+
+    Active marketplace profiles of the policy at their CURRENT version, in policy order. An
+    archived (or vanished) profile is simply absent: that absence is the device's signal to
+    archive it (D-045-D). Exactly one entry carries ``default: True`` — the policy's default,
+    or the first delivered profile when the default is not deliverable (archived), so a device
+    never lands without a starting agent. Legacy spec 044 ``{name, model}`` rows are skipped.
+    """
+    entries = [
+        e for e in ((studio_bundle or {}).get("profiles") or [])
+        if isinstance(e, dict) and e.get("profile_id")
+    ]
+    if not entries:
+        return []
+    rows = {
+        str(r["id"]): r
+        for r in conn.execute(
+            text(
+                "SELECT p.id, p.slug, p.name, p.description, p.status, v.version, v.sha256, v.size"
+                " FROM agent_profiles p"
+                " JOIN LATERAL (SELECT version, sha256, size FROM agent_profile_versions"
+                "   WHERE profile_id = p.id ORDER BY version DESC LIMIT 1) v ON true"
+                " WHERE p.id = ANY(CAST(:ids AS uuid[]))"
+            ),
+            {"ids": [str(e["profile_id"]) for e in entries]},
+        ).mappings()
+    }
+    delivered: list[dict] = []
+    for entry in entries:
+        row = rows.get(str(entry["profile_id"]))
+        if row is None or row["status"] != "active":
+            continue
+        delivered.append({
+            "profile_id": str(row["id"]),
+            "slug": row["slug"],
+            "name": row["name"],
+            "description": (row["description"] or "")[:280],
+            "version": row["version"],
+            "sha256": row["sha256"],
+            "size": row["size"],
+            "model": str(entry.get("model") or ""),
+            "default": False,
+            "package_path": f"/api/me/agent-profiles/{row['id']}/package",
+        })
+    wanted = str((studio_bundle or {}).get("default_profile_id") or "")
+    chosen = next((p for p in delivered if p["profile_id"] == wanted), delivered[0] if delivered else None)
+    if chosen is not None:
+        chosen["default"] = True
+    return delivered
+
+
 def validate_policy_profiles(
     conn: Connection, profiles: list, default_profile_id: str | None, models: list[str]
 ) -> tuple[list[dict], str | None]:

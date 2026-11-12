@@ -25,8 +25,9 @@ export function isDownloadRoute(method: string, pathname: string): boolean {
 
 /**
  * Device API of a governed desktop: activation (Electron), enrollment recovery, token
- * refresh, bundle sync, heartbeat and attestation (trust-agent-governance plugin) and the
- * governed update check (Electron updater). Device ids are UUIDs (app/devices/service.py).
+ * refresh, bundle sync, heartbeat and attestation (trust-agent-governance plugin), the
+ * governed update check (Electron updater) and the marketplace profile packages the signed
+ * bundle names (spec 045). Device and profile ids are UUIDs.
  */
 const UUID = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
 const DEVICE_API: ReadonlyArray<readonly [string, RegExp]> = [
@@ -37,6 +38,7 @@ const DEVICE_API: ReadonlyArray<readonly [string, RegExp]> = [
   ["GET", /^\/api\/me\/governance-bundle$/],
   ["POST", /^\/api\/me\/device-heartbeat$/],
   ["GET", /^\/api\/me\/update-check$/],
+  ["GET", new RegExp(`^/api/me/agent-profiles/${UUID}/package$`)],
 ];
 
 export function isDeviceApiRoute(method: string, pathname: string): boolean {
