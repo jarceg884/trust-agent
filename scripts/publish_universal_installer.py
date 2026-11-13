@@ -15,6 +15,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
+import zipfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -26,6 +28,20 @@ def sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def build_commit(msix: Path) -> str:
+    """The commit the MSIX was built from (``app/resources/install-stamp.json``, written by the
+    desktop build) — the identity ``/api/me/update-check`` compares with the device's stamp."""
+    try:
+        with zipfile.ZipFile(msix) as archive:
+            stamp = json.loads(archive.read("app/resources/install-stamp.json"))
+    except (KeyError, OSError, ValueError, zipfile.BadZipFile) as exc:
+        raise SystemExit(f"MSIX without a readable install stamp: {exc}") from exc
+    commit = str(stamp.get("commit") or "").lower()
+    if not re.fullmatch(r"[0-9a-f]{40}", commit) or set(commit) == {"0"}:
+        raise SystemExit("MSIX install stamp has no real build commit; refusing to publish it.")
+    return commit
 
 
 def main() -> None:
@@ -50,6 +66,8 @@ def main() -> None:
     manifest = {
         "slug": "_universal",
         "plugin_version": args.version,
+        # Build identity for the governed updater (devices compare it with their install stamp).
+        "git_rev": build_commit(dest),
         "built_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
         "desktop_app": "Trust Agent universal MSIX — one governed desktop for every organization; tenant binding happens at activation.",
         "platforms": {

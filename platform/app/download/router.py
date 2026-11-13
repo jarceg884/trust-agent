@@ -113,6 +113,32 @@ def _tenant_branding(tenant_id: str) -> tuple[dict, str | None]:
     return branding, data_uri
 
 
+
+LOGO_VARIANTS = ("light", "dark")
+
+
+def _tenant_logo_assets(tenant_id: str, *, with_content: bool = False) -> tuple[dict, dict[str, dict]]:
+    """Published branding + its logo assets by variant (``light``/``dark``), read within the
+    tenant's scope (RLS). Public data — the same logo the public download page embeds — for the
+    governed desktop's own UI; the authenticated asset endpoint stays private (D-023-11)."""
+    with get_engine().begin() as conn:
+        set_tenant(conn, tenant_id)
+        branding = branding_service.get_branding(conn)
+        logos: dict[str, dict] = {}
+        for variant in LOGO_VARIANTS:
+            url = branding.get(f"logo_{variant}_url") or ""
+            if not url.startswith("/api/branding/assets/"):
+                continue
+            try:
+                asset = branding_service.get_asset(conn, url.rsplit("/", 1)[-1])
+            except Exception:  # a dangling asset id is "no logo", never a broken config
+                continue
+            logos[variant] = {"mime": asset["mime"], "sha256": asset["sha256"]}
+            if with_content:
+                logos[variant]["content"] = bytes(asset["content"])
+    return branding, logos
+
+
 def _tenant_default_model(tenant_id: str) -> str:
     """Default model of the tenant's current policy bundle.
 
@@ -208,6 +234,34 @@ def download_page(slug: str, request: Request):
     )
 
 
+@public_router.get("/download/{slug}/branding/logo/{variant}")
+def branding_logo(slug: str, variant: str, request: Request):
+    """The organization's published logo (``light``|``dark``) for the governed desktop's UI — the
+    same public data the download page embeds. ETag = sha256 (the desktop also checks it against
+    desktop-config); 404 when that variant is not published."""
+    if variant not in LOGO_VARIANTS:
+        raise not_found("Unknown logo variant.")
+    _page_throttle(request, slug)
+    tenant = _public_tenant(slug)
+    if tenant is None or tenant["status"] != "active" or not tenant["download_enabled"]:
+        raise not_found("Unknown organization code.")
+    _, logos = _tenant_logo_assets(str(tenant["id"]), with_content=True)
+    logo = logos.get(variant)
+    if logo is None:
+        raise not_found("No logo published for this variant.")
+    etag = f'"{logo["sha256"]}"'
+    headers = {
+        "ETag": etag,
+        "Cache-Control": "public, max-age=300",
+        "X-Content-Type-Options": "nosniff",
+        # Sanitized at upload (SVG without active content); still never a document here.
+        "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+    }
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers=headers)
+    return Response(content=logo["content"], media_type=logo["mime"], headers=headers)
+
+
 @public_router.get("/download/{slug}/desktop-config")
 def desktop_config(slug: str, request: Request):
     """Public tenant metadata consumed by the generic desktop activation flow.
@@ -236,7 +290,17 @@ def desktop_config(slug: str, request: Request):
         raise _link_disabled()
 
     settings = get_settings()
-    branding, _ = _tenant_branding(str(tenant["id"]))
+    branding, logos = _tenant_logo_assets(str(tenant["id"]))
+    api_base = public_api_base(request)
+    # Spec 045 follow-up: the desktop shows the organization's logo in its own UI. URLs of the
+    # public logo route (same origin as api_base) + sha256 so the device caches and verifies.
+    logo_fields: dict = {}
+    for variant in LOGO_VARIANTS:
+        logo = logos.get(variant)
+        logo_fields[f"logo_{variant}_url"] = (
+            f"{api_base}/download/{tenant['slug']}/branding/logo/{variant}" if logo else None
+        )
+        logo_fields[f"logo_{variant}_sha256"] = logo["sha256"] if logo else None
     return JSONResponse(
         {
             "org_code": tenant["slug"],
@@ -244,7 +308,9 @@ def desktop_config(slug: str, request: Request):
             "product_name": branding.get("product_name") or "Trust Agent",
             "tagline": branding.get("tagline") or "",
             "accent_color": branding.get("accent_color") or "#4F46E5",
-            "api_base": public_api_base(request),
+            "branding_version": branding.get("version"),
+            **logo_fields,
+            "api_base": api_base,
             "litellm_base": _public_litellm_base(request),
             "model": _tenant_default_model(str(tenant["id"])),
             "skin": f"trust-{tenant['slug']}",

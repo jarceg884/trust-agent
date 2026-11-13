@@ -623,3 +623,45 @@ def test_ac_goh_016_no_hermes_cli_patches():
             if stripped.startswith("import hermes_cli") or stripped.startswith("from hermes_cli"):
                 offenders.append(f"{py.name}:{lineno}")
     assert not offenders, f"imports de hermes_cli en el plugin: {offenders}"
+
+
+
+# --- spec 045: the organization's profile skills load under any Studio switches ----------------
+def test_profile_skills_load_even_when_the_studio_leaves_no_tools():
+    from app.governance.bundle import grant_profile_skills
+
+    payload = {"allowed_tools": [], "allowed_skills": "*"}
+    grant_profile_skills(payload, {"cli": False, "capabilities": False}, set(),
+                         base_tools=["terminal"], skills=["meeting-action-items"])
+    assert payload["allowed_tools"] == ["skill_view"]
+    assert payload["allowed_skills"] == ["meeting-action-items"]  # least privilege
+
+
+def test_profile_skills_keep_the_full_catalog_with_capabilities_on():
+    from app.governance.bundle import grant_profile_skills
+
+    payload = {"allowed_tools": ["skills_list", "skill_view"], "allowed_skills": "*"}
+    grant_profile_skills(payload, {"cli": True, "capabilities": True}, set(), base_tools=[], skills=["pdf"])
+    assert payload == {"allowed_tools": ["skills_list", "skill_view"], "allowed_skills": "*"}
+
+
+def test_profile_skills_never_widen_an_explicit_policy():
+    from app.governance.bundle import grant_profile_skills
+
+    payload = {"allowed_tools": ["memory"], "allowed_skills": ["pdf"]}
+    grant_profile_skills(payload, {"capabilities": False}, {"allowed_tools", "allowed_skills"},
+                         base_tools=["memory"], skills=["meeting-action-items"])
+    assert payload == {"allowed_tools": ["memory"], "allowed_skills": ["pdf"]}
+    # An explicit ceiling that does include the loader still lets the profiles' skills load.
+    payload = {"allowed_tools": [], "allowed_skills": "*"}
+    grant_profile_skills(payload, {"capabilities": False}, {"allowed_tools"},
+                         base_tools=["skill_view"], skills=["meeting-action-items"])
+    assert payload["allowed_tools"] == ["skill_view"]
+
+
+def test_no_profile_skills_change_nothing():
+    from app.governance.bundle import grant_profile_skills
+
+    payload = {"allowed_tools": [], "allowed_skills": "*"}
+    grant_profile_skills(payload, {"cli": False}, set(), base_tools=[], skills=[])
+    assert payload == {"allowed_tools": [], "allowed_skills": "*"}

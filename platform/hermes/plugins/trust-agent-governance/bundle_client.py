@@ -383,6 +383,21 @@ def _write_bundle_cache(jws: str) -> None:
     tmp.replace(bundle_cache_path())
 
 
+# Botón «Sincronizar política» del desktop (spec 045, seguimiento): Electron escribe
+# ``trust-agent/sync-request.json`` ({"requested_at": epoch}) y el bucle de sync despierta.
+SYNC_REQUEST_FILE = "sync-request.json"
+_SYNC_REQUEST_POLL_SECONDS = 2.0
+
+
+def sync_requested_at() -> float:
+    """Cuándo pidió el desktop el último sync manual (0 si nunca o si el archivo no es válido)."""
+    try:
+        data = json.loads((trust_dir() / SYNC_REQUEST_FILE).read_text(encoding="utf-8"))
+        return float(data.get("requested_at") or 0)
+    except (OSError, ValueError, TypeError, AttributeError):
+        return 0.0
+
+
 # ---------------------------------------------------------------------------
 # Sync (REQ-GOH-001/004; 401/403 → REQ-GOH-010)
 # ---------------------------------------------------------------------------
@@ -510,6 +525,7 @@ class BundleSyncer:
         self._interval_locked = explicit
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._last_tick_started = 0.0
 
     # -- ciclo ---------------------------------------------------------------
     def start(self) -> None:
@@ -528,13 +544,30 @@ class BundleSyncer:
 
     def _run(self) -> None:
         while not self._stop.is_set():
+            self._last_tick_started = time.time()
             self.tick()
             # Re-sync periódico Y adelantado al vencimiento del bundle en
             # caché (REQ-GOH-004): dormir como mucho hasta el exp.
             st = governance_state.get_state()
             grace = st.grace_remaining_seconds()
             wait = self.interval if grace is None else min(self.interval, max(grace, 1.0))
-            self._stop.wait(wait)
+            self._sleep_until_next(wait)
+
+    def _sleep_until_next(self, wait: float) -> None:
+        """Duerme hasta el próximo ciclo, salvo que el desktop pida «Sincronizar política» (una
+        petición más nueva que el último ciclo): entonces despierta ya. Se revisa cada 2 s y el
+        piso del intervalo sigue espaciando los ciclos (un sync cada 5 s como mucho)."""
+        deadline = time.monotonic() + wait
+        while not self._stop.is_set():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            if (
+                sync_requested_at() > self._last_tick_started
+                and time.time() - self._last_tick_started >= _SYNC_INTERVAL_FLOOR
+            ):
+                return
+            self._stop.wait(min(_SYNC_REQUEST_POLL_SECONDS, remaining))
 
     # -- un ciclo de sync (público para tests y para el arranque) ------------
     def tick(self) -> dict[str, Any]:

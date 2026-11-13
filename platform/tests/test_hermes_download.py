@@ -311,3 +311,20 @@ def test_public_edge_is_what_employees_are_told(client, idp, public_edge):
     link = client.get("/api/download-link", headers=bearer_headers(alice))
     assert link.status_code == 200, link.text
     assert link.json()["url"] == f"{public_edge}/download/tenant-a"
+
+
+
+def test_desktop_config_points_at_the_public_logo_route_only_for_published_logos(client):
+    c = _ip_client(client, "198.51.100.122")
+    config = c.get("/download/tenant-a/desktop-config").json()
+    assert "branding_version" in config
+    for variant in ("light", "dark"):
+        url, sha = config[f"logo_{variant}_url"], config[f"logo_{variant}_sha256"]
+        assert (url is None) == (sha is None)
+        logo = c.get(f"/download/tenant-a/branding/logo/{variant}")
+        if url is None:
+            assert logo.status_code == 404
+        else:
+            assert url.endswith(f"/download/tenant-a/branding/logo/{variant}")
+            assert logo.status_code == 200 and logo.headers["etag"] == f'"{sha}"'
+    assert c.get("/download/tenant-a/branding/logo/purple").status_code == 404

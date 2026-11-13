@@ -111,6 +111,27 @@ En cada sync, el plugin de gobernanza recorre `policy_profiles`.
 
 **Desktop** — `electron/governed-profiles.ts` lee ese archivo (solo perfiles vivos: marcador presente y sin tombstone); IPC `hermes:governance:managed-profiles` (async), `-sync` (primer pintado) y el aviso `-changed` (polling de `fs.watchFile`, el plugin reemplaza el archivo con rename). El perfil de arranque se aplica una vez por `default_seq` con la preferencia de Electron (`desktopProfilePreferences.setDefault`) antes de leer la ruta de inicio; en caliente solo se cambia una ventana que sigue en el raíz oculto (primera instalación): un cambio de default posterior aplica al siguiente arranque y nunca re-ubica una conversación abierta. Renderer: `src/store/governed-profiles.ts` (filtro puro, probado) en el riel, el dropdown, el sidebar y la barra de estado; crear y Manage siguen gateados por el switch Perfiles; en los perfiles de la organización se ocultan renombrar, SOUL, exportar, borrar y remoto, y `hermes:api` responde 403 `profile_managed_by_organization` a renombrar/borrar uno. Con el switch apagado, crear un perfil propio responde 403 `profile_create_denied_by_organization_policy` sea cual sea la puerta (riel, barra de estado, menú de filtros, atajo), y el atajo «perfil por defecto» lleva al default de la política, no al raíz oculto.
 
+### 7.2 Seguimiento 0.7.1 (plugin 0.7.1 + MSIX 0.7.1)
+
+Hallazgos de la verificación de la 0.7.0 sobre la app instalada y pedido del cliente («botón de sincronizar la política»; «los brandings no se están aplicando correctamente»):
+
+- **Branding del tenant en la app.** Antes, la app solo usaba el branding en la activación (nombre y acento en la skin del perfil raíz). Los perfiles de la organización se materializaban sin skin, así que mostraban el look de serie, y el logo no llegaba al equipo.
+  - **Servidor:** `desktop-config` publica `branding_version`, `logo_{light,dark}_url` y `logo_{light,dark}_sha256`. La ruta pública `GET /download/{slug}/branding/logo/{light|dark}` sirve el logo publicado (los mismos datos públicos que la página de descarga) con ETag igual al sha256 y una CSP con `sandbox`. El endpoint autenticado de assets sigue siendo privado (D-023-11).
+  - **Plugin:** `profile_delivery.tenant_skin()` y `apply_tenant_skin()` escriben `display.skin` y `skins/trust-*.yaml` en cada perfil de la organización, tanto al materializarlo como al refrescarlo; el refresco también rellena los perfiles instalados por la 0.7.0. Solo se copia la skin `trust-*` de la organización.
+  - **Desktop:** `electron/tenant-branding.ts` relee `desktop-config` en cada arranque y al pulsar «Sincronizar política». Los logos se aceptan solo del mismo origen que el portal y se verifican por tipo, tamaño (2 MB como máximo) y sha256. Si cambian el nombre o el acento, se re-renderiza la skin de la organización y se copia a cada perfil vivo. El renderer recibe los logos como data URL: `src/store/tenant-branding.ts` los valida y el hero del chat muestra el nombre y el logo publicados. La regla de logo por tema es la de la Admin Console.
+- **Botón «Sincronizar política»** (Ajustes → Gobernanza) y refresco en vivo.
+  - Electron escribe `trust-agent/sync-request.json`. El bucle del `BundleSyncer` lo revisa cada 2 s, despierta y sincroniza en ese momento; el piso de 5 s entre ciclos se mantiene.
+  - La respuesta llega cuando `last_sync_at` supera la petición, o a los 45 s si el equipo está sin red o el plugin no corre.
+  - `main` vigila `governance_status.json` y avisa al renderer con `hermes:governance:status-changed`. Ajustes y los switches (`use-governance-ui`) se releen sin reiniciar la app.
+- **Skills de los perfiles sin `cli`.** Los perfiles de la organización son el agente y sus skills forman parte de él.
+  - `grant_profile_skills` concede el loader de solo lectura `skill_view` aunque el Studio deje al agente sin tools (`cli` OFF) o sin Capabilities. La excepción es un `allowed_tools` explícito que lo excluya: el techo del admin manda (deny-overrides).
+  - Con Capabilities OFF y sin un `allowed_skills` explícito, el catálogo se estrecha a las skills de esos perfiles (mínimo privilegio).
+- **Updater gobernado.**
+  - `update-check` leía el manifiesto solo del directorio del tenant. Ahora usa el mismo build que sirve la descarga (`published_build`: el del tenant y, si no hay, `_universal`).
+  - El manifiesto universal lleva `git_rev`, el commit del `install-stamp.json` del propio MSIX, y el script de publicación se niega a publicar sin él.
+  - La identidad se compara por prefijo de al menos 7 caracteres, porque el desktop envía el commit corto.
+  - La superficie `updates` ya no está denegada por defecto: el updater gobernado solo ofrece el build que publicó el proveedor. Además, la Policy Studio tiene el switch «Actualizaciones» (encendido por defecto) para apagarla.
+
 ## 8. Reemplazo de Agentes compartidos (D-045-08)
 
 - La página **Agentes** pasa a ser el marketplace. La UI de agentes compartidos y grants se retira.

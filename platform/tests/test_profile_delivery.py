@@ -612,3 +612,71 @@ def test_stale_tombstone_never_hides_a_new_org_profile(home, server):
     assert (home / "profiles" / "ventas" / PD.MARKER).is_file()
     assert not (home / "profiles" / ".deleted" / "ventas").exists()
 
+
+
+
+# --- seguimiento 045: branding de los perfiles de la organización y «Sincronizar política» -----
+def _root_with_skin(tmp_path, skin_name="trust-acme", data=b"name: trust-acme\nbranding:\n  agent_name: \"Acme\"\n"):
+    root = tmp_path / ".trust-agent"
+    (root / "skins").mkdir(parents=True)
+    (root / "profiles").mkdir()
+    (root / "config.yaml").write_text(f"display:\n  skin: {skin_name}\n", encoding="utf-8")
+    (root / "skins" / f"{skin_name}.yaml").write_bytes(data)
+    return root, data
+
+
+def test_org_profiles_get_the_tenant_skin(tmp_path, monkeypatch):
+    root, data = _root_with_skin(tmp_path)
+    monkeypatch.setattr(PD, "profiles_root_for_device", lambda: root / "profiles")
+    skin = PD.tenant_skin()
+    assert skin == ("trust-acme", data)
+    profile = root / "profiles" / "ventas"
+    profile.mkdir()
+    cfg = {"model": {"default": "glm-5.3"}, "display": {"personality": "concise"}}
+    PD.apply_tenant_skin(profile, cfg, skin)
+    assert cfg["display"] == {"personality": "concise", "skin": "trust-acme"}
+    assert (profile / "skins" / "trust-acme.yaml").read_bytes() == data
+
+
+def test_only_the_organization_skin_is_ever_copied(tmp_path, monkeypatch):
+    root, _ = _root_with_skin(tmp_path)
+    monkeypatch.setattr(PD, "profiles_root_for_device", lambda: root / "profiles")
+    (root / "config.yaml").write_text("display:\n  skin: ../../evil\n", encoding="utf-8")
+    assert PD.tenant_skin() is None
+    (root / "config.yaml").write_text("display:\n  skin: trust-missing\n", encoding="utf-8")
+    assert PD.tenant_skin() is None  # sin archivo de skin no se apunta a nada
+    profile = root / "profiles" / "ventas"
+    profile.mkdir()
+    cfg: dict = {}
+    PD.apply_tenant_skin(profile, cfg, None)
+    assert cfg == {} and not (profile / "skins").exists()
+
+
+def test_desktop_sync_request_wakes_the_sync_loop(tmp_path, monkeypatch):
+    import json as _json
+    import time as _time
+
+    trust = tmp_path / "trust-agent"
+    trust.mkdir()
+    monkeypatch.setattr(BC, "trust_dir", lambda: trust)
+    syncer = BC.BundleSyncer(interval=300)
+    syncer._last_tick_started = _time.time() - 10
+    (trust / BC.SYNC_REQUEST_FILE).write_text(_json.dumps({"requested_at": _time.time()}))
+    started = _time.monotonic()
+    syncer._sleep_until_next(60)
+    assert _time.monotonic() - started < 5
+
+
+def test_an_already_served_sync_request_does_not_wake_the_loop(tmp_path, monkeypatch):
+    import json as _json
+    import time as _time
+
+    trust = tmp_path / "trust-agent"
+    trust.mkdir()
+    monkeypatch.setattr(BC, "trust_dir", lambda: trust)
+    syncer = BC.BundleSyncer(interval=300)
+    syncer._last_tick_started = _time.time()
+    (trust / BC.SYNC_REQUEST_FILE).write_text(_json.dumps({"requested_at": syncer._last_tick_started - 30}))
+    started = _time.monotonic()
+    syncer._sleep_until_next(2.5)
+    assert _time.monotonic() - started >= 2.4

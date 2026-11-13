@@ -511,3 +511,28 @@ def validate_policy_profiles(
     if default is not None and default not in seen:
         raise validation_failed("El perfil por defecto debe ser uno de los perfiles de la política.")
     return normalized, default
+
+
+def delivered_profile_skills(conn: Connection, delivered: list[dict]) -> list[str]:
+    """Bare skill ids (``manifest.skills[].name``) of the delivered profile versions — what the
+    signed bundle must let the agent load (spec 045). Server-side only: the device gets the
+    skills inside each package, not as a claim."""
+    import json as _json
+
+    names: set[str] = set()
+    for entry in delivered:
+        row = conn.execute(
+            text(
+                "SELECT manifest FROM agent_profile_versions"
+                " WHERE profile_id = CAST(:pid AS uuid) AND version = :version"
+            ),
+            {"pid": entry["profile_id"], "version": entry["version"]},
+        ).first()
+        manifest = row[0] if row else None
+        if isinstance(manifest, str):
+            manifest = _json.loads(manifest)
+        for skill in (manifest or {}).get("skills") or []:
+            name = str((skill or {}).get("name") or "").strip()
+            if name:
+                names.add(name.rsplit("/", 1)[-1])
+    return sorted(names)

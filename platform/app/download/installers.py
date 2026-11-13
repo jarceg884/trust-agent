@@ -88,6 +88,32 @@ def available_installers(slug: str) -> dict[str, dict]:
     return {}
 
 
+def published_build(slug: str, platform: str) -> tuple[dict, dict] | None:
+    """(manifest, platform info) of the build served for (slug, platform), with the precedence of
+    ``installer_path`` (the tenant's own build, else the universal MSIX): the update check reads
+    the SAME manifest whose artifact the download route serves. Manifest ``{}`` if unreadable."""
+    for candidate in (slug, UNIVERSAL_SLUG):
+        directory = current_installer_dir(candidate)
+        info = _available_in_dir(directory).get(platform)
+        if info:
+            try:
+                manifest = json.loads((directory / "installer-manifest.json").read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                manifest = {}
+            return (manifest if isinstance(manifest, dict) else {}), info
+    return None
+
+
+def same_build(published: str, current: str) -> bool:
+    """Build identity by commit: the manifest keeps the full commit and the desktop sends a short
+    one, so two revs are the same build when one is a prefix of the other (at least 7 chars)."""
+    a, b = (published or "").strip().lower(), (current or "").strip().lower()
+    if not a or not b:
+        return False
+    n = min(len(a), len(b))
+    return a == b or (n >= 7 and a[:n] == b[:n])
+
+
 def installer_path(slug: str, platform: str) -> Path | None:
     """Ruta del artefacto servido para (slug, platform) — None si no hay."""
     for candidate in (slug, UNIVERSAL_SLUG):

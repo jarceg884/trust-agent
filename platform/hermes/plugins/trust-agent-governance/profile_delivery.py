@@ -449,6 +449,55 @@ def governed_config(
     return cfg
 
 
+
+_TENANT_SKIN_RE = re.compile(r"^trust-[a-z0-9._-]{1,80}$", re.IGNORECASE)
+
+
+def tenant_skin() -> tuple[str, bytes] | None:
+    """The organization's skin as the desktop writes it into the root profile at activation
+    (``display.skin`` + ``skins/<skin>.yaml``). The app themes each profile with ITS skin: an
+    organization profile without it shows the stock look instead of the tenant's branding."""
+    try:
+        profiles_root = profiles_root_for_device()
+    except Exception:  # noqa: BLE001 - sin perfil raíz resoluble no hay skin que aplicar
+        return None
+    if profiles_root is None:
+        return None
+    root = profiles_root.parent
+    cfg = _load_yaml_file(root / "config.yaml")
+    raw_display = cfg.get("display")
+    display: dict[str, Any] = raw_display if isinstance(raw_display, dict) else {}
+    name = str(display.get("skin") or "").strip()
+    if not _TENANT_SKIN_RE.match(name):
+        return None
+    src = root / "skins" / f"{name}.yaml"
+    if _is_link(src) or not src.is_file():
+        return None
+    try:
+        return name, src.read_bytes()
+    except OSError:
+        return None
+
+
+def apply_tenant_skin(profile_dir: Path, cfg: dict[str, Any], skin: tuple[str, bytes] | None) -> None:
+    """``display.skin`` + the skin file in an organization profile — the branding a clone of
+    the root profile inherits. Only the organization's ``trust-*`` skin is ever written."""
+    if skin is None:
+        return
+    name, data = skin
+    display = cfg.get("display")
+    display = dict(display) if isinstance(display, dict) else {}
+    display["skin"] = name
+    cfg["display"] = display
+    target = profile_dir / "skins" / f"{name}.yaml"
+    try:
+        if _is_link(target) or not target.is_file() or target.read_bytes() != data:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            _atomic_write(target, data)
+    except OSError:
+        pass
+
+
 def _policy(payload: dict[str, Any], key: str) -> Any:
     from . import policy_contract  # deny-by-default (REQ-GOH-023)
 
@@ -763,6 +812,7 @@ def write_payload(
     # 3) config.yaml (de la organización): paquete + P-26 + modelo de la política + MCP/cron.
     package_cfg = _load_yaml_file(staged / "config.yaml") if "config.yaml" in files else {}
     cfg = governed_config(package_cfg, entry, payload, apply_model=True)
+    apply_tenant_skin(profile_dir, cfg, tenant_skin())
     marker: dict[str, Any] = {
         "schema": SCHEMA,
         "profile_id": entry["profile_id"],
@@ -1086,6 +1136,7 @@ def _refresh(current, entry, payload):
     cfg = _load_yaml_file(cfg_path)
     model_changed = (entry.get("model") or "") != (marker.get("model") or "")
     new_cfg = governed_config(cfg, entry, payload, apply_model=model_changed)
+    apply_tenant_skin(path, new_cfg, tenant_skin())  # también rellena perfiles de 0.7.0
     new_cfg, _changes = apply_runtime_policy(path, new_cfg, marker, payload)
     if new_cfg != cfg:
         _atomic_write(cfg_path, _dump_yaml(new_cfg))

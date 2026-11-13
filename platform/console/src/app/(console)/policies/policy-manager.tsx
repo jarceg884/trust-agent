@@ -111,6 +111,7 @@ const DESKTOP_GROUPS: { group: string; hint: string; options: { key: string; lab
       { key: "voice", label: "Voice", hint: "Modo voz", def: false },
       { key: "terminal", label: "Advanced · Terminal", hint: "Paneles de terminal y modo de aprobación (/approvals) del escritorio. Los comandos del agente se conceden en CLI & Agente → Terminal / shell", def: false },
       { key: "plugins", label: "Plugins & MCP", hint: "Extensiones, temas del Marketplace e instalación por enlace", def: false },
+      { key: "updates", label: "Actualizaciones", hint: "El escritorio busca e instala la versión que publica tu proveedor (Ajustes → Acerca de). Nunca se actualiza fuera de la gobernanza", def: true },
     ],
   },
 ];
