@@ -24,6 +24,7 @@ from .errors import ApiError, new_request_id, request_id_var
 from .governance.bundle import bundle_router, public_router as governance_public_router
 from .governance.router import router as governance_router
 from .policy_bundles.router import router as policy_bundles_router
+from .profile_marketplace.router import router as profile_marketplace_router  # spec 045
 from .jobs.router import router as jobs_router
 from .models.provider_router import router as model_providers_router  # spec 036
 from .models.router import router as models_router
@@ -120,6 +121,7 @@ def create_app() -> FastAPI:
     app.include_router(provider_router)  # spec 025 (super-user del proveedor)
     app.include_router(governance_router)
     app.include_router(policy_bundles_router)
+    app.include_router(profile_marketplace_router)  # spec 045: Agentes = marketplace de perfiles
     app.include_router(bundle_router)
     app.include_router(governance_public_router)
     app.include_router(org_router)

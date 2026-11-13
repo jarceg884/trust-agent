@@ -1,0 +1,31 @@
+{
+  "profiles": [
+    {
+      "key": "analyst",
+      "name": "Analyst",
+      "name_es": "Analista",
+      "description": "Research and data analysis: cited findings, spreadsheets and decision-ready reports.",
+      "description_es": "Investigaci\u00f3n y an\u00e1lisis de datos: hallazgos citados, hojas de c\u00e1lculo e informes para decidir.",
+      "archive": "analyst.tar.gz",
+      "export_sha256": "9a5eeeb7eddca7aecd3d180627b2eb4b8002d9050c59e12e4510932c7df8586a"
+    },
+    {
+      "key": "coder",
+      "name": "Coder",
+      "name_es": "Desarrollador",
+      "description": "Software development: code changes, debugging, tests and reviews inside the repo.",
+      "description_es": "Desarrollo de software: cambios de c\u00f3digo, depuraci\u00f3n, pruebas y revisiones en el repositorio.",
+      "archive": "coder.tar.gz",
+      "export_sha256": "600f37a3ca1c56baa4902881f89b7a406a9c41565db87a11478b2b4b634a62d9"
+    },
+    {
+      "key": "ops",
+      "name": "Ops",
+      "name_es": "Operaciones",
+      "description": "IT operations: incident triage, health checks, log analysis and operational reports.",
+      "description_es": "Operaciones de TI: triage de incidentes, salud de servicios, an\u00e1lisis de logs e informes.",
+      "archive": "ops.tar.gz",
+      "export_sha256": "19ebd0c95de7476f0443d8a966a254cc247d807fd7e6a020334787573f58561f"
+    }
+  ]
+}

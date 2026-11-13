@@ -17,9 +17,11 @@ import json
 import pytest
 
 from conftest import (
+    DEVICE_ALICE,
     TENANT_A,
     TENANT_B,
     TEST_DB,
+    USER_ALICE,
     _admin,
 )
 from test_hermes_download import (
@@ -253,3 +255,87 @@ def test_installer_isolation_per_tenant(client, artifacts_dir):
     c = _ip_client(client, "198.51.100.118")
     assert c.get("/download/tenant-a/installer/windows").status_code == 404
     assert c.get("/download/tenant-b/installer/windows").status_code == 200
+
+
+# --- Public edge (console :3100, 2026-11-12) ------------------------------------
+# A governed desktop outside the LAN asks for updates through the console's public edge,
+# so the API sees http://127.0.0.1:8000: the advertised download URL must be the public
+# origin (TRUST_PUBLIC_API_BASE_URL), never the edge's loopback upstream.
+
+def test_update_check_download_url_is_the_public_origin(client, artifacts_dir, monkeypatch):
+    from app.config import get_settings
+    from app.devices.tokens import issue_device_token
+
+    version = _plugin_version()
+    _bake_build(artifacts_dir, "tenant-a", version, {"windows": b"MSIX-PAYLOAD"})
+    manifest_file = artifacts_dir / "tenant-a" / version / "installer-manifest.json"
+    manifest = json.loads(manifest_file.read_text())
+    manifest["git_rev"] = "rev-published"
+    manifest_file.write_text(json.dumps(manifest))
+
+    def update_check():
+        token = issue_device_token(
+            get_settings(), device_id=DEVICE_ALICE, user_id=USER_ALICE, tenant_id=TENANT_A
+        )
+        r = client.get(
+            "/api/me/update-check",
+            params={"current_git_rev": "rev-installed", "platform": "windows"},
+            # Plugin path (same auth as the governance bundle): Bearer = device token.
+            headers={"Authorization": f"Bearer {token}", "X-Device-Token": token},
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["update_available"] is True
+        return r.json()["download_url"]
+
+    # Direct access (default): the origin the desktop used.
+    assert update_check() == f"{str(client.base_url).rstrip('/')}/download/tenant-a/installer/windows"
+
+    monkeypatch.setenv("TRUST_PUBLIC_API_BASE_URL", "http://203.0.113.10:3100")
+    get_settings.cache_clear()
+    assert update_check() == "http://203.0.113.10:3100/download/tenant-a/installer/windows"
+
+
+
+def test_update_check_offers_the_universal_build_to_every_tenant(client, artifacts_dir):
+    """A tenant without its own build is served the universal MSIX: its update check must read
+    that same manifest (it never offered anything before), comparing by commit identity."""
+    from app.config import get_settings
+    from app.devices.tokens import issue_device_token
+
+    version = _plugin_version()
+    _bake_build(artifacts_dir, "_universal", version, {"windows": b"UNIVERSAL-MSIX"})
+    manifest_file = artifacts_dir / "_universal" / version / "installer-manifest.json"
+    manifest = json.loads(manifest_file.read_text())
+    manifest["git_rev"] = "1f751d5c2451aa00bb11cc22dd33ee44ff556677"
+    manifest_file.write_text(json.dumps(manifest))
+
+    def update_check(current: str) -> dict:
+        token = issue_device_token(
+            get_settings(), device_id=DEVICE_ALICE, user_id=USER_ALICE, tenant_id=TENANT_A
+        )
+        r = client.get(
+            "/api/me/update-check",
+            params={"current_git_rev": current, "platform": "windows"},
+            headers={"Authorization": f"Bearer {token}", "X-Device-Token": token},
+        )
+        assert r.status_code == 200, r.text
+        return r.json()
+
+    older = update_check("c895221")
+    assert older["update_available"] is True
+    assert older["published_version"] == version
+    assert older["download_url"].endswith("/download/tenant-a/installer/windows")
+    assert older["sha256"] == hashlib.sha256(b"UNIVERSAL-MSIX").hexdigest()
+    # The desktop sends a 7-char stamp; the manifest keeps the full commit: same build.
+    assert update_check("1f751d5")["update_available"] is False
+    assert update_check("1F751D5C2451")["update_available"] is False
+
+
+def test_same_build_needs_a_real_prefix():
+    from app.download.installers import same_build
+
+    assert same_build("1f751d5c2451aa00", "1f751d5")
+    assert not same_build("1f751d5c2451aa00", "1f75")  # too short to identify a build
+    assert not same_build("1f751d5c2451aa00", "")
+    assert not same_build("", "1f751d5")
+    assert same_build("rev-a", "rev-a")

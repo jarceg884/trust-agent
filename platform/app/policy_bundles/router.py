@@ -8,7 +8,9 @@ Cada política contiene:
                        bundle firmado y prevalecen sobre SOUL.md/perfiles.
   • ``models``       — modelos a los que la política da acceso.
   • ``default_model``— modelo por defecto de la política.
-  • ``agents``       — agentes compartidos incluidos en la política.
+  • ``profiles``     — perfiles del marketplace ``[{profile_id, model}]`` y
+                       ``default_profile_id`` (spec 045, D-045-04).
+  • ``agents``       — agentes compartidos (en desuso desde spec 045, D-045-08).
   • ``department_id``/``user_id`` — asignación única (departamento o persona).
 """
 import json
@@ -21,6 +23,7 @@ from sqlalchemy.engine import Connection
 from ..audit import service as audit
 from ..auth.service import Principal, get_principal, get_tx, require_mfa
 from ..errors import not_found, optional_uuid, permission_denied, require_uuid, validation_failed
+from ..profile_marketplace.service import validate_policy_profiles
 
 router = APIRouter(prefix="/api/policy-bundles", dependencies=[Depends(require_mfa)])
 
@@ -38,6 +41,7 @@ class BundleBody(BaseModel):
     agents: list[str] = []
     department_id: str | None = None
     user_id: str | None = None
+    default_profile_id: str | None = None
 
 
 def _require_admin(principal: Principal) -> None:
@@ -45,31 +49,19 @@ def _require_admin(principal: Principal) -> None:
         raise permission_denied("Only organization administrators manage policies.")
 
 
-def _validate_profiles(body: BundleBody) -> None:
-    """Spec 044: los perfiles de la política son ``{name, model}`` y el modelo
-    debe estar entre los que la propia política concede.
+def _validate_profiles(conn: Connection, body: BundleBody) -> None:
+    """Spec 045 (D-045-04): los perfiles de la política vienen del marketplace —
+    ``[{profile_id, model}]`` más ``default_profile_id`` — y el modelo de cada uno
+    debe estar entre los que la propia política concede (regla de spec 044).
 
     Un perfil que nombre un modelo fuera de ``models`` es un hueco de
     gobernanza: el empleado entraría por el perfil a un modelo que la política
     no le da. La validación vive en el servidor porque el bundle viaja firmado
-    — cualquier cliente que escriba la política pasa por aquí."""
-    seen: set[str] = set()
-    for entry in body.profiles:
-        if not isinstance(entry, dict):
-            raise validation_failed("Cada perfil debe ser un objeto {name, model}.")
-        name = str(entry.get("name") or "").strip()
-        model = str(entry.get("model") or "").strip()
-        if not name or not model:
-            raise validation_failed("Cada perfil necesita nombre y modelo.")
-        if name.lower() in seen:
-            raise validation_failed(f"Perfil duplicado: '{name}'.")
-        seen.add(name.lower())
-        if body.models and model not in body.models:
-            raise validation_failed(
-                f"El perfil '{name}' usa el modelo '{model}', que no está entre "
-                "los modelos de esta política. Márcalo en la sección Modelos y "
-                "vuelve a guardar."
-            )
+    — cualquier cliente que escriba la política pasa por aquí. Normaliza el
+    body en sitio (solo ``profile_id`` y ``model`` se persisten)."""
+    body.profiles, body.default_profile_id = validate_policy_profiles(
+        conn, body.profiles, body.default_profile_id, body.models
+    )
 
 
 def _row(row) -> dict:
@@ -85,6 +77,7 @@ def _row(row) -> dict:
         "models": row["models"] or [],
         "default_model": row["default_model"],
         "agents": row["agents"] or [],
+        "default_profile_id": str(row["default_profile_id"]) if row["default_profile_id"] else None,
         "department_id": str(row["department_id"]) if row["department_id"] else None,
         "user_id": str(row["user_id"]) if row["user_id"] else None,
         "created_at": row["created_at"].isoformat() if row["created_at"] else None,
@@ -103,7 +96,7 @@ def _scope(body: BundleBody, principal: Principal) -> tuple[str | None, str | No
 
 
 _COLUMNS = (
-    "id, name, description, desktop, credentials, global_prompt, profiles, "
+    "id, name, description, desktop, credentials, global_prompt, profiles, default_profile_id, "
     "models, default_model, agents, contracts, department_id, user_id, created_at, updated_at"
 )
 
@@ -127,15 +120,16 @@ def create_bundle(
     conn: Connection = Depends(get_tx),
 ):
     _require_admin(principal)
-    _validate_profiles(body)
+    _validate_profiles(conn, body)
     dep, usr = _scope(body, principal)
     row = conn.execute(
         text(
             "INSERT INTO policy_bundles"
             f" (tenant_id, name, description, desktop, credentials, global_prompt,"
-            f"  profiles, contracts, models, default_model, agents, department_id, user_id, created_by)"
+            f"  profiles, default_profile_id, contracts, models, default_model, agents,"
+            f"  department_id, user_id, created_by)"
             f" VALUES (CAST(:t AS uuid), :name, :desc, CAST(:desktop AS jsonb),"
-            f"  CAST(:creds AS jsonb), :prompt, CAST(:profiles AS jsonb),"
+            f"  CAST(:creds AS jsonb), :prompt, CAST(:profiles AS jsonb), CAST(:default_profile AS uuid),"
             f"  CAST(:contracts AS jsonb), CAST(:models AS jsonb), :default_model, CAST(:agents AS jsonb),"
             f"  CAST(:dep AS uuid), CAST(:usr AS uuid), CAST(:by AS uuid))"
             f" RETURNING {_COLUMNS}"
@@ -148,6 +142,7 @@ def create_bundle(
             "creds": json.dumps(body.credentials),
             "prompt": body.global_prompt,
             "profiles": json.dumps(body.profiles),
+            "default_profile": body.default_profile_id,
             "contracts": json.dumps(body.contracts),
             "models": json.dumps(body.models),
             "default_model": body.default_model,
@@ -179,13 +174,14 @@ def update_bundle(
 ):
     _require_admin(principal)
     bundle_id = require_uuid(bundle_id, "bundle_id")
-    _validate_profiles(body)
+    _validate_profiles(conn, body)
     dep, usr = _scope(body, principal)
     row = conn.execute(
         text(
             "UPDATE policy_bundles SET name=:name, description=:desc,"
             " desktop=CAST(:desktop AS jsonb), credentials=CAST(:creds AS jsonb),"
             " global_prompt=:prompt, profiles=CAST(:profiles AS jsonb),"
+            " default_profile_id=CAST(:default_profile AS uuid),"
             " contracts=CAST(:contracts AS jsonb),"
             " models=CAST(:models AS jsonb), default_model=:default_model,"
             " agents=CAST(:agents AS jsonb), department_id=CAST(:dep AS uuid),"
@@ -201,6 +197,7 @@ def update_bundle(
             "creds": json.dumps(body.credentials),
             "prompt": body.global_prompt,
             "profiles": json.dumps(body.profiles),
+            "default_profile": body.default_profile_id,
             "contracts": json.dumps(body.contracts),
             "models": json.dumps(body.models),
             "default_model": body.default_model,
@@ -289,7 +286,8 @@ def effective_bundle_for_user(conn: Connection, user_id: str) -> dict | None:
         row = conn.execute(
             text(
                 f"SELECT b.id, b.name, b.description, b.desktop, b.credentials, b.global_prompt,"
-                f" b.profiles, b.contracts, b.models, b.default_model, b.agents, b.department_id, b.user_id,"
+                f" b.profiles, b.default_profile_id, b.contracts, b.models, b.default_model, b.agents,"
+                f" b.department_id, b.user_id,"
                 f" b.created_at, b.updated_at FROM policy_bundles b"
                 f" JOIN users u ON u.department_id = b.department_id"
                 f" WHERE u.id = CAST(:u AS uuid)"

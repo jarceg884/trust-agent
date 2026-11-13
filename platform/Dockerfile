@@ -27,7 +27,10 @@ RUN pip install --no-cache-dir .
 
 # No root: la app SIEMPRE conecta como rol trust_app (sin BYPASSRLS);
 # el proceso tampoco necesita root dentro del contenedor.
-RUN useradd --system --no-create-home trust && chown -R trust:trust /opt/trust-agent
+# Spec 045: paquetes saneados del marketplace de perfiles (volumen con nombre: Docker
+# lo inicializa con este directorio y su dueño `trust` la primera vez).
+RUN mkdir -p /opt/trust-agent/agent-profiles \
+ && useradd --system --no-create-home trust && chown -R trust:trust /opt/trust-agent
 USER trust
 
 EXPOSE 8000

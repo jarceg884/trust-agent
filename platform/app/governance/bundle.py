@@ -29,6 +29,7 @@ La attestation auditable llega con el incremento 3 (REQ-GOH-012).
 from __future__ import annotations
 
 import logging
+import re
 
 import uuid
 from dataclasses import dataclass
@@ -37,6 +38,7 @@ from typing import Any
 
 import jwt
 from fastapi import APIRouter, Request
+from fastapi.responses import FileResponse
 from sqlalchemy import text
 
 from ..auth.service import (
@@ -50,10 +52,11 @@ from ..config import get_settings
 from ..db import get_engine, set_tenant
 from ..devices.gate import check_device_access
 from ..devices.tokens import verify_device_token
-from ..errors import ApiError, device_not_authorized, invalid_token
+from ..errors import ApiError, device_not_authorized, invalid_token, not_found
 from ..models import access as model_access
 from . import budgets as budgets_service
 from ..models import keys as keys_service
+from ..public_urls import public_api_base
 from . import jws_keys
 from .service import effective_policy
 
@@ -332,6 +335,35 @@ def clamp_tools_to_studio(
     return tools
 
 
+
+# Spec 045: the read-only loader an organization profile's skills need.
+PROFILE_SKILL_LOADER = "skill_view"
+
+
+def grant_profile_skills(
+    payload: dict, ui: dict, explicit: set[str], *, base_tools: list[str], skills: list[str]
+) -> None:
+    """The organization's profiles ARE the agent, and their skills are part of them (spec 045).
+
+    * ``skill_view`` (read-only) is granted even when the Policy Studio leaves the agent without
+      tools (``cli`` off) or without Capabilities — unless an explicit ``allowed_tools`` policy,
+      the admin's ceiling, leaves it out (deny-overrides);
+    * with Capabilities off and no explicit ``allowed_skills`` policy, the catalog is narrowed to
+      those profiles' skills (least privilege: the loader reaches nothing else);
+    * Capabilities on keeps the compiled ``allowed_skills`` as is.
+    """
+    if not skills:
+        return
+    tools = list(payload.get("allowed_tools") or [])
+    if PROFILE_SKILL_LOADER not in tools and (
+        "allowed_tools" not in explicit or PROFILE_SKILL_LOADER in base_tools
+    ):
+        tools.append(PROFILE_SKILL_LOADER)
+        payload["allowed_tools"] = tools
+    if ui.get("capabilities") is not True and "allowed_skills" not in explicit:
+        payload["allowed_skills"] = sorted(set(skills))
+
+
 def _explicit_policy_keys(
     conn, *, department_id: str | None, user_id: str
 ) -> set[str]:
@@ -477,7 +509,11 @@ def compile_bundle_payload(
     payload["product_name"] = str(_branding.get("product_name") or "Trust Agent")
     payload["tenant_name"] = principal.tenant_name or principal.tenant_slug
     payload["policy_credentials"] = (studio_bundle or {}).get("credentials") or {}
-    payload["policy_profiles"] = (studio_bundle or {}).get("profiles") or []
+    # Spec 045 (D-045-05): marketplace profiles resolved to what the device installs — active
+    # ones at their current version with the sha256 the package must match; one is the default.
+    from ..profile_marketplace.service import delivered_profiles
+
+    payload["policy_profiles"] = delivered_profiles(conn, studio_bundle)
     payload["policy_models"] = (studio_bundle or {}).get("models") or []
     payload["policy_default_model"] = (studio_bundle or {}).get("default_model")
     payload["policy_agents"] = (studio_bundle or {}).get("agents") or []
@@ -496,8 +532,9 @@ def compile_bundle_payload(
     explicit_keys = _explicit_policy_keys(
         conn, department_id=principal.department_id, user_id=principal.user_id,
     )
+    base_tools = list(payload.get("allowed_tools") or [])
     payload["allowed_tools"] = clamp_tools_to_studio(
-        payload.get("allowed_tools") or [],
+        base_tools,
         ui,
         explicit_ceiling="allowed_tools" in explicit_keys,
     )
@@ -513,6 +550,14 @@ def compile_bundle_payload(
     # After flattening: the implied keys override catalog DEFAULTS only
     # (explicit policies are left as the ceiling — see the function).
     apply_studio_implied_keys(payload, ui, explicit_keys)
+    # Spec 045: the profiles' skills load even when the agent has no other tools (after the
+    # catalog flattening above, which would otherwise reset allowed_skills).
+    from ..profile_marketplace.service import delivered_profile_skills
+
+    grant_profile_skills(
+        payload, ui, explicit_keys, base_tools=base_tools,
+        skills=delivered_profile_skills(conn, payload["policy_profiles"]),
+    )
     return payload
 
 
@@ -561,6 +606,46 @@ def governance_bundle(request: Request):
     }
 
 
+# --- Spec 045: paquete de un perfil del marketplace para ESTE dispositivo -----------------------
+
+_UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
+
+@bundle_router.get("/agent-profiles/{profile_id}/package")
+def agent_profile_package(profile_id: str, request: Request):
+    """GET /api/me/agent-profiles/{id}/package (spec 045 §5, D-045-05).
+
+    Same auth as the bundle (device token). Serves ONLY a profile that this device's current
+    delivery contains, at the version the bundle names — another tenant's id, an unassigned or
+    archived profile and a malformed id all look the same (404, no oracle). The device checks
+    the bytes against the sha256 of the SIGNED bundle, so the edge's plain HTTP cannot swap them.
+    """
+    from ..policy_bundles.router import effective_bundle_for_user
+    from ..profile_marketplace import storage as profile_storage
+    from ..profile_marketplace.service import delivered_profiles
+
+    auth = require_bundle_auth(request)
+    wanted = profile_id.lower() if _UUID_RE.match(profile_id or "") else None
+    entry = None
+    with get_engine().begin() as conn:
+        set_tenant(conn, auth.principal.tenant_id)
+        check_device_access(conn, auth.device_id, auth.principal)
+        if wanted is not None:
+            studio = effective_bundle_for_user(conn, auth.principal.user_id)
+            entry = next((p for p in delivered_profiles(conn, studio) if p["profile_id"] == wanted), None)
+    if entry is None:
+        raise not_found("Agent profile not found.")
+    path = profile_storage.path_for(entry["sha256"])
+    if not path.is_file():
+        raise not_found("Agent profile not found.")
+    return FileResponse(
+        path,
+        media_type="application/gzip",
+        filename=f"{entry['slug']}-v{entry['version']}.tar.gz",
+        headers={"ETag": f'"{entry["sha256"]}"', "Cache-Control": "no-store"},
+    )
+
+
 # --- Update gate (mandato Miller): el agente SOLO se actualiza por lo que
 # el PROVEEDOR publicó para este tenant — nunca upstream de Hermes --------
 
@@ -589,21 +674,22 @@ def update_check(
     slug = auth.principal.tenant_slug
     if platform not in installers_service.PLATFORMS:
         platform = "windows"
-    manifest_file = installers_service.current_installer_dir(slug) / "installer-manifest.json"
+    # The build the download route serves to this tenant: its own, else the universal MSIX
+    # (spec 045 follow-up: a tenant on the universal MSIX never saw its updates).
+    published = installers_service.published_build(slug, platform)
     base: dict = {
         "current_git_rev": current_git_rev or None,
         "platform": platform,
     }
-    if not manifest_file.is_file():
+    if published is None:
         return {
             **base, "update_available": False,
             "published_git_rev": None, "published_version": None,
             "download_url": None, "sha256": None, "size": None,
             "message": "Your provider has not published an installer build yet.",
         }
-    try:
-        manifest = _json.loads(manifest_file.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    manifest, info = published
+    if not manifest:
         return {
             **base, "update_available": False,
             "published_git_rev": None, "published_version": None,
@@ -611,12 +697,11 @@ def update_check(
             "message": "Installer manifest unreadable; treat as no update.",
         }
     published_git_rev = str(manifest.get("git_rev") or "") or None
-    info = installers_service.available_installers(slug).get(platform)
     update_available = bool(
-        published_git_rev and info
-        and published_git_rev != (current_git_rev or None)
+        published_git_rev
+        and not installers_service.same_build(published_git_rev, current_git_rev)
     )
-    url_base = str(request.base_url).rstrip("/")
+    url_base = public_api_base(request)
     return {
         **base,
         "update_available": update_available,

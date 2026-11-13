@@ -15,6 +15,8 @@
 import type { ComponentProps } from "react";
 import {
   Activity,
+  Archive,
+  ArchiveRestore,
   Bell,
   Bot,
   Building2,
@@ -32,6 +34,7 @@ import {
   Menu,
   Monitor,
   MonitorDown,
+  Package,
   Palette,
   Plus,
   RefreshCw,
@@ -39,7 +42,9 @@ import {
   ScrollText,
   Search,
   ShieldCheck,
+  Star,
   TriangleAlert,
+  Upload,
   Users,
   Wallet,
   X,
@@ -85,3 +90,9 @@ export const IconClock = (p: IconProps) => <Clock {...opts(p)} />;
 export const IconLogout = (p: IconProps) => <LogOut {...opts(p)} />;
 export const IconSearch = (p: IconProps) => <Search {...opts(p)} />;
 export const IconPulse = (p: IconProps) => <Activity {...opts(p)} />;
+// Spec 045 — marketplace de perfiles.
+export const IconUpload = (p: IconProps) => <Upload {...opts(p)} />;
+export const IconArchive = (p: IconProps) => <Archive {...opts(p)} />;
+export const IconRestore = (p: IconProps) => <ArchiveRestore {...opts(p)} />;
+export const IconStar = (p: IconProps) => <Star {...opts(p)} />;
+export const IconPackage = (p: IconProps) => <Package {...opts(p)} />;

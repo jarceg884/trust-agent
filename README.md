@@ -160,6 +160,32 @@ deriva solo de `TRUST_PUBLIC_BASE_URL`):
 | `TRUST_API_HOST` | `127.0.0.1` | `0.0.0.0` |
 | `TRUST_COOKIE_SECURE` | `false` | `false` por ahora (http); `true` con HTTPS |
 | `TRUST_LITELLM_PUBLIC_BASE_URL` | vacío | `http://TU-IP:4000` (URL pública del gateway para desktops) |
+| `TRUST_PUBLIC_API_BASE_URL` | vacío (origen del request) | `http://TU-IP:8000`, o `http://TU-IP:3100` con el edge público |
+
+### Un solo puerto público: el edge de la consola
+
+Si el firewall solo publica el puerto de la Admin Console (3100), la consola
+hace de edge del desktop: reenvía a loopback **solo** lo que un empleado y su
+desktop gobernado necesitan — `GET /download/{slug}/**` (página, MSIX con
+Range, certificado, `desktop-config`, CLI), la API del dispositivo
+(`enroll`, `enroll/exchange`, `token/refresh`, `attestation`,
+`/api/me/governance-bundle`, `device-heartbeat`, `update-check`) y la
+inferencia de LiteLLM bajo `/llm` (`chat/completions`, `completions`,
+`embeddings`, `models`). Todo lo demás responde 404: ni el admin API ni la UI
+de LiteLLM, ni la gestión de dispositivos quedan expuestos. La allowlist vive en
+`platform/console/src/lib/edge-routes.ts` (tests: `npm run test:edge`).
+
+```bash
+TRUST_DOWNLOAD_BASE_URL=http://TU-IP:3100
+TRUST_PUBLIC_API_BASE_URL=http://TU-IP:3100
+TRUST_LITELLM_PUBLIC_BASE_URL=http://TU-IP:3100/llm
+```
+
+El empleado activa con `Portal URL = http://TU-IP:3100`. La IP del cliente que
+ven los throttles y la auditoría es el peer TCP (`edge-client-address.cjs`,
+precargado por la imagen); detrás de un proxy inverso declara sus IPs en
+`TRUST_EDGE_TRUSTED_PROXIES`. Es HTTP sin TLS: tokens de activación y claves de
+modelo viajan en claro — para producción, dominio + TLS delante.
 
 Las URLs **internas** (`TRUST_API_BASE_URL`, `TRUST_KEYCLOAK_ADMIN_URL`)
 siguen apuntando a `127.0.0.1` — con host networking el stack siempre se
@@ -217,8 +243,9 @@ Flujo de activación: el admin del cliente crea un token one-time en
 y escribe su `config.yaml`, `SOUL.md`, skin y modelo **antes** de consumir el
 token. Para desktops remotos, `TRUST_LITELLM_PUBLIC_BASE_URL` debe ser la URL
 del gateway alcanzable desde la máquina del empleado (p. ej.
-`http://TU-IP:4000`). Si se deja vacía y el base URL interno es loopback, la
-API deriva el host de la petición.
+`http://TU-IP:4000`, o `http://TU-IP:3100/llm` con el edge de la consola). Si
+se deja vacía y el base URL interno es loopback, la API deriva el host de la
+petición.
 
 Detalle completo: `docs/generic-installer.md`.
 
