@@ -246,6 +246,22 @@ def _canonical_tar(slug: str, files: dict[str, tuple[bytes, int]]) -> bytes:
     return raw.getvalue()
 
 
+def _schedule_label(job: dict) -> str:
+    """Human label of a Hermes cron job's schedule (cron/jobs.py: ``schedule`` is a dict
+    ``{kind, expr, display, run_at}`` and ``schedule_display`` its rendered form)."""
+    display = job.get("schedule_display")
+    if isinstance(display, str) and display.strip():
+        return display.strip()
+    schedule = job.get("schedule")
+    if isinstance(schedule, dict):
+        for key in ("display", "expr", "run_at", "every"):
+            value = schedule.get(key)
+            if isinstance(value, (str, int)) and str(value).strip():
+                return str(value).strip()
+        return str(schedule.get("kind") or "")
+    return str(schedule or job.get("cron") or "")
+
+
 def sanitize_archive(
     data: bytes, *, slug_override: str | None = None, limits: Limits = DEFAULT_LIMITS
 ) -> SanitizedPackage:
@@ -418,7 +434,7 @@ def sanitize_archive(
             if isinstance(job, dict):
                 cron_jobs.append({
                     "name": str(job.get("name") or job.get("id") or "")[:120],
-                    "schedule": str(job.get("schedule") or job.get("cron") or "")[:120],
+                    "schedule": _schedule_label(job)[:120],
                 })
     manifest["cron_jobs"] = cron_jobs
 

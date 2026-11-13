@@ -564,3 +564,13 @@ def test_package_never_crosses_tenants(client, idp, alice_policy, admin_conn):
     finally:
         admin_conn.execute("DELETE FROM devices WHERE id = %s", (dave_device,))
 
+
+
+def test_cron_schedule_label_reads_hermes_job_shapes():
+    """The marketplace card shows what a Hermes cron job runs on (cron/jobs.py store shapes)."""
+    from app.profile_marketplace.sanitize import _schedule_label
+
+    assert _schedule_label({"schedule": {"kind": "cron", "expr": "0 9 * * *"}, "schedule_display": "0 9 * * *"}) == "0 9 * * *"
+    assert _schedule_label({"schedule": {"kind": "cron", "expr": "0 9 * * 1", "display": "every monday 9am"}}) == "every monday 9am"
+    assert _schedule_label({"schedule": {"kind": "once", "run_at": "2026-12-01T09:00:00Z"}}) == "2026-12-01T09:00:00Z"
+    assert _schedule_label({"schedule": "30m"}) == "30m"

@@ -682,6 +682,63 @@ def _live_profile_dirs(home: Path) -> list[Path]:
     return out
 
 
+def approved_models(payload: dict[str, Any]) -> list[str]:
+    """Modelos que la policy aprueba (``approved_models`` o, en bundles viejos, ``policy_models``)."""
+    approved = payload.get("approved_models") if isinstance(payload, dict) else None
+    if not isinstance(approved, list) or not approved:
+        approved = policy_contract.policy_value(payload, "policy_models") or []
+    return [str(m) for m in approved]
+
+
+def normalize_profile_config(cfg: dict[str, Any], model_pin: dict[str, Any], approved: list[str]) -> bool:
+    """P-26 sobre UN config de perfil (dict mutado in place); True si cambió.
+
+    - ``gateway.standalone`` fuera: el host multiplexa los perfiles.
+    - provider/base_url/api_key como el config principal; puertas alternativas cerradas.
+    - el modelo del perfil se conserva solo si está aprobado; si no, el default de la policy.
+    - el plugin de gobernanza habilitado (``plugins.disabled`` gana sobre enabled en el core).
+    Lo usan el sync de cada turno y la materialización de perfiles de la organización
+    (spec 045 §6), que lo aplica ANTES de que el perfil exista para Hermes."""
+    changed = False
+    gateway = cfg.get("gateway")
+    gateway = dict(gateway) if isinstance(gateway, dict) else {}
+    if gateway.get("standalone") is not None:
+        gateway.pop("standalone", None)
+        cfg["gateway"] = gateway
+        changed = True
+    if model_pin:
+        model = cfg.get("model")
+        model = dict(model) if isinstance(model, dict) else {}
+        for key, value in model_pin.items():
+            if key == "default":
+                continue  # el perfil puede usar OTRO modelo aprobado
+            if model.get(key) != value:
+                model[key] = value
+                changed = True
+        current = str(model.get("default") or "").strip()
+        if current and approved and current not in approved:
+            model["default"] = model_pin.get("default")
+            changed = True
+        elif not current and model_pin.get("default"):
+            model["default"] = model_pin["default"]
+            changed = True
+        cfg["model"] = model
+        for key, empty in (
+            ("fallback_providers", []), ("provider_routing", {}),
+            ("auxiliary", {}), ("local_runtime", {}), ("moa", {}),
+            ("providers", {}),
+        ):
+            if cfg.get(key) not in (None, empty):
+                cfg[key] = empty
+                changed = True
+    # La gobernanza del perfil ES este plugin: el manager de plugins de
+    # cada perfil (uno por home en el gateway multiplexado) solo lo carga
+    # si su config lo habilita, y ``plugins.disabled`` gana sobre enabled.
+    if _pin_governance_enabled(cfg):
+        changed = True
+    return changed
+
+
 def _normalize_profile_configs(payload: dict[str, Any], model_pin: dict[str, Any]) -> list[str]:
     """P-26 per profile: every LIVE named profile runs on the org's gateway.
 
@@ -702,9 +759,7 @@ def _normalize_profile_configs(payload: dict[str, Any], model_pin: dict[str, Any
     sincronizados para la línea de audit del sync."""
     if not isinstance(payload, dict):
         return []
-    approved = payload.get("approved_models")
-    if not isinstance(approved, list) or not approved:
-        approved = policy_contract.policy_value(payload, "policy_models") or []
+    approved = approved_models(payload)
     home = enroll.hermes_home()
     synced: list[str] = []
     for profile_dir in _live_profile_dirs(home):
@@ -718,44 +773,7 @@ def _normalize_profile_configs(payload: dict[str, Any], model_pin: dict[str, Any
         except (OSError, ValueError):
             continue
         cfg = loaded if isinstance(loaded, dict) else {}
-        changed = False
-        gateway = cfg.get("gateway")
-        gateway = dict(gateway) if isinstance(gateway, dict) else {}
-        if gateway.get("standalone") is not None:
-            gateway.pop("standalone", None)
-            cfg["gateway"] = gateway
-            changed = True
-        if model_pin:
-            model = cfg.get("model")
-            model = dict(model) if isinstance(model, dict) else {}
-            for key, value in model_pin.items():
-                if key == "default":
-                    continue  # el perfil puede usar OTRO modelo aprobado
-                if model.get(key) != value:
-                    model[key] = value
-                    changed = True
-            current = str(model.get("default") or "").strip()
-            if current and approved and current not in approved:
-                model["default"] = model_pin.get("default")
-                changed = True
-            elif not current and model_pin.get("default"):
-                model["default"] = model_pin["default"]
-                changed = True
-            cfg["model"] = model
-            for key, empty in (
-                ("fallback_providers", []), ("provider_routing", {}),
-                ("auxiliary", {}), ("local_runtime", {}), ("moa", {}),
-                ("providers", {}),
-            ):
-                if cfg.get(key) not in (None, empty):
-                    cfg[key] = empty
-                    changed = True
-        # La gobernanza del perfil ES este plugin: el manager de plugins de
-        # cada perfil (uno por home en el gateway multiplexado) solo lo carga
-        # si su config lo habilita, y ``plugins.disabled`` gana sobre enabled.
-        if _pin_governance_enabled(cfg):
-            changed = True
-        if not changed:
+        if not normalize_profile_config(cfg, model_pin, approved):
             continue
         try:
             tmp = path.with_suffix(path.suffix + ".tmp")
@@ -765,6 +783,31 @@ def _normalize_profile_configs(payload: dict[str, Any], model_pin: dict[str, Any
             continue
         synced.append(f"profile:{profile_dir.name}")
     return synced
+
+
+def managed_model_pin(payload: dict[str, Any]) -> dict[str, Any]:
+    """P-26: lo que el config local debe fijar del modelo — default de la policy, proveedor del
+    gateway de la organización y endpoint/clave del dispositivo (device-token.json)."""
+    allowed_providers = {
+        str(p).strip().lower()
+        for p in (policy_contract.policy_value(payload, "allowed_providers") or [])
+    }
+    policy_models = policy_contract.policy_value(payload, "policy_models") or []
+    default_model = payload.get("policy_default_model") or (
+        policy_models[0] if isinstance(policy_models, list) and policy_models else None
+    )
+    device = enroll.load_device_token() or {}
+    model_pin: dict[str, Any] = {}
+    if isinstance(default_model, str) and default_model.strip():
+        model_pin["default"] = default_model.strip()
+    if allowed_providers and "*" not in allowed_providers and "litellm_gateway" in allowed_providers:
+        model_pin["provider"] = "custom"
+        model_pin["fallback_providers"] = []
+    if isinstance(device.get("model_base_url"), str) and device["model_base_url"]:
+        model_pin["base_url"] = device["model_base_url"]
+    if isinstance(device.get("model_key"), str) and device["model_key"]:
+        model_pin["api_key"] = device["model_key"]
+    return model_pin
 
 
 def sync_managed_config(payload: dict[str, Any], *, force: bool = False) -> bool:
@@ -813,28 +856,10 @@ def sync_managed_config(payload: dict[str, Any], *, force: bool = False) -> bool
     # P-26: the organization owns provider, model and credentials. Pin the
     # local config to the signed policy every sync so editing config.yaml or
     # a stale profile cannot select another provider/model/endpoint.
-    allowed_providers = {
-        str(p).strip().lower()
-        for p in (policy_contract.policy_value(payload, "allowed_providers") or [])
-    }
-    policy_models = policy_contract.policy_value(payload, "policy_models") or []
-    default_model = payload.get("policy_default_model") or (
-        policy_models[0] if isinstance(policy_models, list) and policy_models else None
-    )
-    device = enroll.load_device_token() or {}
-    model_pin: dict[str, Any] = {}
+    model_pin = managed_model_pin(payload)
     ui_features = payload.get("ui_features") or {}
     webapp_pin = isinstance(ui_features, dict) and ui_features.get("web_access") is False
     voice_pin = isinstance(ui_features, dict) and ui_features.get("voice") is False
-    if isinstance(default_model, str) and default_model.strip():
-        model_pin["default"] = default_model.strip()
-    if allowed_providers and "*" not in allowed_providers and "litellm_gateway" in allowed_providers:
-        model_pin["provider"] = "custom"
-        model_pin["fallback_providers"] = []
-    if isinstance(device.get("model_base_url"), str) and device["model_base_url"]:
-        model_pin["base_url"] = device["model_base_url"]
-    if isinstance(device.get("model_key"), str) and device["model_key"]:
-        model_pin["api_key"] = device["model_key"]
 
     # REQ-PE-011: plataformas de mensajería bloqueadas → gateway.platforms.<plat>.enabled=false
     blocked_platforms = _blocked_messaging_platforms(payload)

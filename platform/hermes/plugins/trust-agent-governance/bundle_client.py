@@ -646,6 +646,15 @@ class BundleSyncer:
             return
 
         st.apply_bundle(payload)
+        # Spec 045 §6: con cada bundle VERIFICADO, los perfiles de la organización se materializan
+        # (instalar/actualizar/archivar/restaurar). Import perezoso: profile_delivery importa este
+        # módulo. Jamás tumba el sync: sin red se conserva lo instalado y se reintenta.
+        try:
+            from . import profile_delivery
+
+            profile_delivery.reconcile(payload, device)
+        except Exception as exc:  # noqa: BLE001
+            log_event("profiles_reconcile_error", detail=repr(exc)[:500])
 
     def _heartbeat_cycle(self, st, device: dict[str, str]) -> None:
         """POST heartbeat + propagación en vivo de policy (spec 027 §4)."""
