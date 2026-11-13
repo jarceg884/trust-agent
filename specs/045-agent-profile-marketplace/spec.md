@@ -131,6 +131,10 @@ Hallazgos de la verificación de la 0.7.0 sobre la app instalada y pedido del cl
   - El manifiesto universal lleva `git_rev`, el commit del `install-stamp.json` del propio MSIX, y el script de publicación se niega a publicar sin él.
   - La identidad se compara por prefijo de al menos 7 caracteres, porque el desktop envía el commit corto.
   - La superficie `updates` ya no está denegada por defecto: el updater gobernado solo ofrece el build que publicó el proveedor. Además, la Policy Studio tiene el switch «Actualizaciones» (encendido por defecto) para apagarla.
+  - **Token del updater (hallazgo sobre la 0.7.0 instalada):** el updater del desktop leía el `device_token` de `enrollment.json`, que es la copia de la activación y caduca, y por eso `update-check` respondía 401. Ahora lee el token vigente de `device-token.json`, el almacén canónico del plugin (P-26), que el plugin renueva al expirar. `enrollment.json` solo aporta el portal y la organización (`electron/updater/trust-enrollment.ts`). Comprobado en el equipo con la misma petición: con el token de `enrollment.json` da 401; con el de `device-token.json` da 200 y `update_available=true`.
+- **Binding del tenant en el MSIX universal.** El `bundle.json` empaquetado no lleva tenant: la organización y el portal solo existen en el equipo.
+  - `resolveTenantPortal` los toma, por este orden, de `enrollment.json`, del `bundle.json` de un build por tenant y de `org-code.txt` + `TRUST_AGENT_API` de la activación.
+  - El logo se pide siempre al portal del propio equipo (`/download/<org>/branding/logo/<variant>`) y no a la URL absoluta que anuncia `desktop-config`. Ejemplo real: el equipo piloto usa el portal privado `:8000` mientras el config anuncia el edge público.
 
 ## 8. Reemplazo de Agentes compartidos (D-045-08)
 
